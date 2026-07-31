@@ -18,12 +18,18 @@ import httpx
 
 from ..cache import Cache
 from ..models import Document
+from ..redact import RedactingError
 
 USER_AGENT = "corpus/0.1 (personal research tool; +https://github.com/)"
 
 
-class SourceError(RuntimeError):
-    pass
+class SourceError(RedactingError):
+    """A secondary source failed.
+
+    Redacting for the same reason as ProviderError: these messages interpolate
+    a user-supplied URL, and a feed or archive URL is a perfectly ordinary place
+    for someone to have embedded a token.
+    """
 
 
 class PaywallEncountered(SourceError):

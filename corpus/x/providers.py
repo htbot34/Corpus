@@ -21,17 +21,38 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from ..redact import RedactingError
+from ..redact import redact as _redact
+
 TWITTERAPI_IO_BASE = "https://api.twitterapi.io"
 
 # Raw page: (tweets, next_cursor, has_next_page)
 Page = tuple[list[dict[str, Any]], str | None, bool]
 
+__all__ = [
+    "Page",
+    "ProviderError",
+    "ScopeViolation",
+    "TwitterApiIoProvider",
+    "XProvider",
+    "get_provider",
+    "PROVIDERS",
+    "_redact",
+]
 
-class ProviderError(RuntimeError):
-    pass
+
+class ProviderError(RedactingError):
+    """A provider call failed.
+
+    Messages here routinely quote an upstream response body and an upstream URL,
+    either of which can contain the API key (a 4xx that echoes the request, a
+    base URL carrying the key as a query parameter). ``RedactingError`` masks
+    secrets at construction, so every ``raise ProviderError(...)`` in this file —
+    and any added later — is safe to print, log, or paste into a bug report.
+    """
 
 
-class ScopeViolation(RuntimeError):
+class ScopeViolation(RedactingError):
     """Raised when a request would require private data or authentication bypass."""
 
 
