@@ -1,0 +1,59 @@
+{
+  "tweets": [
+    {
+      "type": "tweet",
+      "id": "1700000000000000201",
+      "url": "https://x.com/criticfriend/status/1700000000000000201",
+      "text": "Paid work trials are a tax on candidates who already have jobs. They systematically favor the unemployed and the young.",
+      "source": "Twitter Web App",
+      "retweetCount": 0,
+      "replyCount": 1,
+      "likeCount": 8,
+      "quoteCount": 0,
+      "viewCount": 900,
+      "bookmarkCount": 1,
+      "createdAt": "Thu Jan 18 16:13:12 +0000 2024",
+      "lang": "en",
+      "isReply": false,
+      "conversationId": "1700000000000000201",
+      "author": {
+        "type": "user",
+        "userName": "criticfriend",
+        "id": "21700000000000000201",
+        "name": "criticfriend",
+        "isVerified": false,
+        "followers": 42000,
+        "following": 900
+      },
+      "entities": {}
+    },
+    {
+      "type": "tweet",
+      "id": "1700000000000000202",
+      "url": "https://x.com/vcpartner/status/1700000000000000202",
+      "text": "Founders should hire ahead of the curve. If you wait until you need the role filled you are already six months late.",
+      "source": "Twitter Web App",
+      "retweetCount": 0,
+      "replyCount": 1,
+      "likeCount": 8,
+      "quoteCount": 0,
+      "viewCount": 900,
+      "bookmarkCount": 1,
+      "createdAt": "Sat Jan 20 16:42:00 +0000 2024",
+      "lang": "en",
+      "isReply": false,
+      "conversationId": "1700000000000000202",
+      "author": {
+        "type": "user",
+        "userName": "vcpartner",
+        "id": "21700000000000000202",
+        "name": "vcpartner",
+        "isVerified": false,
+        "followers": 42000,
+        "following": 900
+      },
+      "entities": {}
+    }
+  ],
+  "status": "success"
+}

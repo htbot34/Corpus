@@ -1,0 +1,14 @@
+{
+  "status": "success",
+  "data": {
+    "userName": "testsubject",
+    "id": "1000000000000000001",
+    "name": "Test Subject",
+    "description": "Writes about hiring, evaluation, and organizations.",
+    "statusesCount": 4820,
+    "followers": 42000,
+    "following": 900,
+    "createdAt": "Mon Mar 03 12:00:00 +0000 2014",
+    "isBlueVerified": false
+  }
+}

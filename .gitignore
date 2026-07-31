@@ -1,0 +1,12 @@
+# runtime output — regenerate with `corpus run`
+out/
+
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

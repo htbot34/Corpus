@@ -1,0 +1,36 @@
+[project]
+name = "corpus"
+version = "0.1.0"
+description = "X-first author corpus analyzer: ingest, hydrate, and synthesize a person's public writing."
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "anthropic>=0.40",
+    # python-dotenv: the tool is configured entirely by env vars (X_API_KEY,
+    # X_PROVIDER, ANTHROPIC_API_KEY) and a local .env is the documented way to
+    # hold them. stdlib has no .env parser.
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+corpus = "corpus.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["corpus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Synthesis.voice.register is fixed by the output schema; the pydantic
+    # shadow warning is cosmetic and the field name is not ours to change.
+    'ignore:Field name "register".*:UserWarning',
+]
