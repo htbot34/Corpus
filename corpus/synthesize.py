@@ -22,11 +22,19 @@ from typing import Any, Callable
 from anthropic import AsyncAnthropic
 from pydantic import ValidationError
 
-from .budget import Budget, BudgetExceeded
+from .budget import (
+    Budget,
+    BudgetExceeded,
+    estimate_anthropic_call,
+    estimate_tokens,
+)
 from .models import Document, MapChunk, Synthesis
 
 MAP_MODEL = "claude-sonnet-5"
 REDUCE_MODEL = "claude-opus-5"
+
+MAP_MAX_TOKENS = 8_000
+REDUCE_MAX_TOKENS = 32_000
 
 CHUNK_TOKEN_TARGET = 30_000
 MAP_CONCURRENCY = 4
@@ -321,9 +329,10 @@ class SynthesisRun:
         }
 
 
-def _charge(budget: Budget, model: str, message: Any, note: str) -> None:
+def _charge(budget: Budget, model: str, message: Any, note: str) -> float:
+    """Record actual usage. Returns the cost, for reservation reconciliation."""
     usage = message.usage
-    budget.charge_anthropic(
+    return budget.charge_anthropic(
         model,
         input_tokens=getattr(usage, "input_tokens", 0) or 0,
         output_tokens=getattr(usage, "output_tokens", 0) or 0,
@@ -335,6 +344,25 @@ def _charge(budget: Budget, model: str, message: Any, note: str) -> None:
 
 def _text_of(message: Any) -> str:
     return "".join(b.text for b in message.content if getattr(b, "type", "") == "text")
+
+
+async def _count_input_tokens(client: Any, model: str, system: Any, messages: Any) -> int | None:
+    """Exact input-token count via the SDK, or None if unavailable.
+
+    Token counting is free and exact, which beats 4-chars-per-token by enough to
+    be worth one round trip before a call that can cost dollars. It is optional
+    on purpose: the stub client in tests has no such method, older SDKs did not
+    expose it, and a counting failure must degrade to the local estimate rather
+    than block a run that was going to succeed.
+    """
+    counter = getattr(getattr(client, "messages", None), "count_tokens", None)
+    if counter is None:
+        return None
+    try:
+        result = await counter(model=model, system=system, messages=messages)
+    except Exception:
+        return None
+    return getattr(result, "input_tokens", None)
 
 
 async def run_map(
@@ -357,40 +385,70 @@ async def run_map(
                 f"{docs[0].published_at.strftime('%Y-%m-%d')} to "
                 f"{docs[-1].published_at.strftime('%Y-%m-%d')}"
             )
+            system = [
+                {
+                    "type": "text",
+                    "text": MAP_SYSTEM,
+                    # Shared across every map call — cache it once.
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Slice {index + 1} of {len(chunks)} ({span}), "
+                        f"{len(docs)} documents.\n\n{body}"
+                    ),
+                }
+            ]
+
+            # Reserve before the call. Each of the MAP_CONCURRENCY slices in
+            # flight holds its own reservation, so four simultaneous calls
+            # cannot collectively overshoot — which is exactly what asyncio
+            # .gather + charge-on-return allowed before.
+            counted = await _count_input_tokens(client, MAP_MODEL, system, messages)
+            input_tokens = counted if counted is not None else estimate_tokens(
+                MAP_SYSTEM + str(messages)
+            )
+            estimate = estimate_anthropic_call(MAP_MODEL, input_tokens, MAP_MAX_TOKENS)
+
+            try:
+                reservation = budget.reserve(estimate, f"map slice {index + 1}")
+            except BudgetExceeded:
+                # Not a slice failure — the budget refused it. Let the caller
+                # report it as a budget stop, or the report blames the model.
+                raise
+
             try:
                 message = await client.messages.create(
                     model=MAP_MODEL,
-                    max_tokens=8000,
-                    system=[
-                        {
-                            "type": "text",
-                            "text": MAP_SYSTEM,
-                            # Shared across every map call — cache it once.
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
+                    max_tokens=MAP_MAX_TOKENS,
+                    system=system,
                     output_config={
                         "effort": effort,
                         "format": {"type": "json_schema", "schema": MAP_SCHEMA},
                     },
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Slice {index + 1} of {len(chunks)} ({span}), "
-                                f"{len(docs)} documents.\n\n{body}"
-                            ),
-                        }
-                    ],
+                    messages=messages,
                 )
             except BudgetExceeded:
+                reservation.settle()
                 raise
             except Exception as exc:  # one bad slice must not lose the others
+                reservation.settle()
                 failures += 1
                 log(f"  [map {index + 1}/{len(chunks)}] FAILED: {exc}")
                 return
 
-            _charge(budget, MAP_MODEL, message, note=f"map slice {index + 1} ({span})")
+            actual: float | None = None
+            try:
+                actual = _charge(
+                    budget, MAP_MODEL, message, note=f"map slice {index + 1} ({span})"
+                )
+            finally:
+                # Settle after charging: briefly counting both is conservative,
+                # counting neither is the overshoot this class exists to prevent.
+                reservation.settle(actual)
             if message.stop_reason == "refusal":
                 failures += 1
                 log(f"  [map {index + 1}/{len(chunks)}] refused by safety classifier")
@@ -469,24 +527,52 @@ async def run_reduce(
                 ),
             },
         ]
+        messages = [{"role": "user", "content": content}]
+
+        # The single largest exposure in the tool: claude-opus-5 at
+        # max_tokens=32_000 is ~$3.50 on a 10,000-post corpus. Charging after
+        # the fact means a $10 budget at $9.99 fires anyway and lands at $13.49.
+        # Reserve worst-case output; reconcile down when the real usage lands.
+        counted = await _count_input_tokens(client, REDUCE_MODEL, REDUCE_SYSTEM, messages)
+        input_tokens = counted if counted is not None else estimate_tokens(
+            REDUCE_SYSTEM + corpus
+        )
+        estimate = estimate_anthropic_call(REDUCE_MODEL, input_tokens, REDUCE_MAX_TOKENS)
+        log(
+            f"  [reduce] attempt {attempt}: ~{input_tokens:,} input tokens, "
+            f"reserving ${estimate:.4f} (worst case, {REDUCE_MAX_TOKENS:,} output)"
+        )
+
+        # Deliberately NOT caught: a refused reduce must stop the run, not be
+        # reported as a model failure. The corpus is already on disk.
+        reservation = budget.reserve(estimate, f"reduce attempt {attempt}")
+
         try:
             async with client.messages.stream(
                 model=REDUCE_MODEL,
-                max_tokens=32_000,
+                max_tokens=REDUCE_MAX_TOKENS,
                 system=REDUCE_SYSTEM,
                 output_config={
                     "effort": effort,
                     "format": {"type": "json_schema", "schema": REDUCE_SCHEMA},
                 },
-                messages=[{"role": "user", "content": content}],
+                messages=messages,
             ) as stream:
                 message = await stream.get_final_message()
         except BudgetExceeded:
+            reservation.settle()
             raise
         except Exception as exc:
+            reservation.settle()
             return None, "", f"reduce call failed: {exc}"
 
-        _charge(budget, REDUCE_MODEL, message, note=f"reduce attempt {attempt}")
+        actual: float | None = None
+        try:
+            actual = _charge(
+                budget, REDUCE_MODEL, message, note=f"reduce attempt {attempt}"
+            )
+        finally:
+            reservation.settle(actual)
         if message.stop_reason == "refusal":
             return None, "", "reduce refused by safety classifier"
 

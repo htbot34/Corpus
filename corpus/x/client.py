@@ -11,7 +11,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from ..budget import Budget
+from ..budget import (
+    Budget,
+    X_COST_PER_PROFILE,
+    X_MIN_CHARGE_PER_REQUEST,
+    estimate_x_batch_cost,
+    estimate_x_page_cost,
+)
 from ..cache import Cache
 from ..models import Document
 from .providers import Page, ProviderError, XProvider
@@ -155,6 +161,26 @@ class XClient:
         self.provider = provider
         self.cache = cache
         self.budget = budget
+        # Reservations need a page size, and the documented value of 20 is
+        # UNVERIFIED against the wire (docs/wire-contract.md). Rather than
+        # trusting it, seed with it and then use what the provider actually
+        # returns. A pessimistic estimate is not free: it refuses calls that
+        # would have fit, which on a small budget means refusing everything.
+        self._observed_page_sizes: list[int] = []
+
+    def _page_reservation(self) -> float:
+        """Worst-case cost of the next page, from observation where possible.
+
+        Deliberately the largest page seen rather than the mean: a reservation
+        that is usually right and occasionally low is a reservation that
+        occasionally overshoots, which is the bug being fixed.
+        """
+        if not self._observed_page_sizes:
+            return estimate_x_page_cost()
+        return estimate_x_page_cost(max(self._observed_page_sizes))
+
+    def _observe_page(self, count: int) -> None:
+        self._observed_page_sizes.append(count)
 
     # -- profile ----------------------------------------------------------
 
@@ -167,22 +193,44 @@ class XClient:
             raise ProviderError(
                 f"--offline: no cached profile for @{handle}. Run once online first."
             )
-        info = self.provider.user_info(handle)
-        self.budget.charge_x_profiles("user/info", 1, note=handle)
+        # Pre-flight: refuse the call rather than making it and reporting the
+        # overshoot afterwards.
+        with self.budget.reserved_for(
+            max(X_COST_PER_PROFILE, X_MIN_CHARGE_PER_REQUEST), "user/info"
+        ) as reservation:
+            info = self.provider.user_info(handle)
+            charge = self.budget.charge_x_profiles("user/info", 1, note=handle)
+            reservation.actual = charge.cost
         self.cache.put("x", key, info)
         return info
 
     # -- search / timeline ------------------------------------------------
 
     def advanced_search(self, query: str, cursor: str | None = None) -> Page:
-        tweets, next_cursor, has_next = self.provider.advanced_search(query, cursor)
-        self.budget.charge_x_tweets("tweet/advanced_search", len(tweets), note=query[:80])
+        # A page is billed per tweet returned, which we cannot know until it
+        # returns — so reserve a full page and reconcile down afterwards.
+        with self.budget.reserved_for(
+            self._page_reservation(), "tweet/advanced_search"
+        ) as reservation:
+            tweets, next_cursor, has_next = self.provider.advanced_search(query, cursor)
+            self._observe_page(len(tweets))
+            charge = self.budget.charge_x_tweets(
+                "tweet/advanced_search", len(tweets), note=query[:80]
+            )
+            reservation.actual = charge.cost
         self._cache_tweets(tweets)
         return tweets, next_cursor, has_next
 
     def last_tweets(self, handle: str, cursor: str | None = None) -> Page:
-        tweets, next_cursor, has_next = self.provider.last_tweets(handle, cursor)
-        self.budget.charge_x_tweets("user/last_tweets", len(tweets), note=handle)
+        with self.budget.reserved_for(
+            self._page_reservation(), "user/last_tweets"
+        ) as reservation:
+            tweets, next_cursor, has_next = self.provider.last_tweets(handle, cursor)
+            self._observe_page(len(tweets))
+            charge = self.budget.charge_x_tweets(
+                "user/last_tweets", len(tweets), note=handle
+            )
+            reservation.actual = charge.cost
         self._cache_tweets(tweets)
         return tweets, next_cursor, has_next
 
@@ -210,10 +258,16 @@ class XClient:
 
         for start in range(0, len(missing), 100):
             batch = missing[start : start + 100]
-            tweets = self.provider.tweets_by_ids(batch)
-            self.budget.charge_x_tweets(
-                "tweets (batch lookup)", len(tweets), note=f"hydrate x{len(batch)}"
-            )
+            # Reserve as though every id resolves; a deleted parent that comes
+            # back empty simply reconciles down.
+            with self.budget.reserved_for(
+                estimate_x_batch_cost(len(batch)), "tweets (batch lookup)"
+            ) as reservation:
+                tweets = self.provider.tweets_by_ids(batch)
+                charge = self.budget.charge_x_tweets(
+                    "tweets (batch lookup)", len(tweets), note=f"hydrate x{len(batch)}"
+                )
+                reservation.actual = charge.cost
             for raw in tweets:
                 tid = _tweet_id(raw)
                 if tid:

@@ -1,15 +1,48 @@
-"""Spend tracking with a hard stop.
+"""Spend tracking with a hard stop that is actually hard.
 
 Every billable call is recorded: endpoint, units, unit cost, running total.
 When the budget is exhausted the run stops and the partial corpus is still
 written — paid data is never thrown away.
+
+Reservations (why `charge()` alone is not a hard stop)
+-----------------------------------------------------
+`charge()` records a cost and *then* raises. By the time it raises, the call has
+already completed and the money is already gone. On a large reduce call —
+`claude-opus-5`, `max_tokens=32_000`, roughly $3.50 on a 10,000-post corpus —
+that means a $10.00 budget sitting at $9.99 fires anyway and lands at $13.49.
+A 35% overshoot on a flag documented as a hard stop.
+
+The map stage is structurally worse: `MAP_CONCURRENCY = 4` under
+`asyncio.gather`, each slice charging only after its call returns, so four calls
+can be in flight before any of them has charged anything.
+
+So: `reserve()` before the call, `settle()` after.
+
+    with budget.reserve(estimated, "reduce") as r:
+        message = await client.messages.create(...)
+        r.settle(budget.charge_anthropic(...))
+
+A reservation is counted against the limit for as long as it is outstanding, so
+four concurrent map slices hold four reservations and the fifth cannot start if
+the four together would overshoot. `charge()` keeps its post-hoc raise as a
+backstop — reservations are estimates, and an estimate that is too low must
+still stop the run, just later than we would like.
+
+Modes
+-----
+`strict` (default) refuses any call it cannot fully reserve. `advisory`
+reserves and reports but never blocks, preserving the original behaviour for
+anyone who would rather overshoot than stop early.
 """
 
 from __future__ import annotations
 
+import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Iterator
 
 # --------------------------------------------------------------------------
 # Price table
@@ -55,6 +88,16 @@ class BudgetExceeded(RuntimeError):
     """Raised when a charge would cross the hard limit."""
 
 
+STRICT = "strict"
+ADVISORY = "advisory"
+BUDGET_MODES = (STRICT, ADVISORY)
+
+# Reserved-vs-actual gap above which the estimator is considered wrong rather
+# than merely imprecise. Logged, never fatal: an estimator that stops runs is
+# worse than one that is quietly off by a quarter.
+OVERSHOOT_ALARM = 0.20
+
+
 @dataclass
 class Charge:
     category: str  # "x" | "anthropic"
@@ -66,12 +109,63 @@ class Charge:
 
 
 @dataclass
+class Reservation:
+    """A claim on budget held across an in-flight call.
+
+    Outstanding reservations count against the limit, which is what stops four
+    concurrent map slices from collectively overshooting: each holds its own
+    estimate for the duration of its call.
+    """
+
+    budget: "Budget"
+    endpoint: str
+    estimated: float
+    token: str
+    settled: bool = False
+    actual: float | None = None
+
+    def settle(self, actual: float | None = None) -> None:
+        """Release the reservation, reconciling against what was really spent.
+
+        Call this *after* charging, not before: between the charge and the
+        release both the real cost and the estimate count against the limit,
+        which errs toward stopping early. The other order errs toward
+        overshooting, which is the bug this class exists to fix.
+        """
+        if self.settled:
+            return
+        self.settled = True
+        self.actual = actual
+        self.budget._release(self.token)
+        if actual is None:
+            return
+        if self.estimated > 0 and actual > self.estimated * (1 + OVERSHOOT_ALARM):
+            self.budget.estimate_misses.append(
+                f"{self.endpoint}: reserved ${self.estimated:.4f}, actually spent "
+                f"${actual:.4f} ({actual / self.estimated - 1:+.0%}) — the "
+                f"estimator is wrong, not just imprecise"
+            )
+
+
+@dataclass
 class Budget:
     limit: float = 10.00
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     charges: list[Charge] = field(default_factory=list)
     cache: object | None = None  # corpus.cache.Cache, optional persistence
     stopped: bool = False
+    mode: str = STRICT
+    # Reservations held for in-flight calls, keyed by an opaque token.
+    _reservations: dict[str, float] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    estimate_misses: list[str] = field(default_factory=list)
+    refusals: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.mode not in BUDGET_MODES:
+            raise ValueError(
+                f"budget mode {self.mode!r} is not one of {BUDGET_MODES}"
+            )
 
     # -- totals -----------------------------------------------------------
 
@@ -182,8 +276,75 @@ class Budget:
             )
         return cost
 
+    # -- reservations -----------------------------------------------------
+
+    @property
+    def reserved(self) -> float:
+        """Total held by in-flight calls that have not yet charged."""
+        with self._lock:
+            return sum(self._reservations.values())
+
+    @property
+    def committed(self) -> float:
+        """Spent plus reserved: what the run is already on the hook for."""
+        return self.total + self.reserved
+
     def would_exceed(self, cost: float) -> bool:
-        return self.total + cost > self.limit
+        """Would spending `cost` cross the limit?
+
+        Reservation-aware: outstanding reservations count, so this answers
+        "given what is already in flight" rather than "given what has settled".
+        With no reservations outstanding it is identical to the original
+        total-based check.
+        """
+        return self.committed + cost > self.limit
+
+    def reserve(self, estimated_cost: float, endpoint: str) -> Reservation:
+        """Claim budget *before* making a call. Raises if it cannot be covered.
+
+        This is the actual hard stop. `charge()` raising afterwards is a
+        backstop for when the estimate was too low.
+        """
+        estimated_cost = max(0.0, float(estimated_cost))
+        with self._lock:
+            outstanding = sum(self._reservations.values())
+            if self.total + outstanding + estimated_cost > self.limit:
+                if self.mode == STRICT:
+                    self.stopped = True
+                    message = (
+                        f"pre-flight: {endpoint} needs ~${estimated_cost:.4f}, but "
+                        f"${self.total:.4f} is spent and ${outstanding:.4f} is "
+                        f"reserved by calls in flight, against a ${self.limit:.2f} "
+                        f"budget. Refusing the call rather than making it and "
+                        f"reporting the overshoot afterwards. "
+                        f"Use --budget-mode advisory to allow it."
+                    )
+                    self.refusals.append(f"{endpoint}: ~${estimated_cost:.4f}")
+                    raise BudgetExceeded(message)
+                self.refusals.append(
+                    f"{endpoint}: ~${estimated_cost:.4f} would exceed the budget "
+                    f"(advisory mode — allowed)"
+                )
+            token = uuid.uuid4().hex
+            self._reservations[token] = estimated_cost
+        return Reservation(self, endpoint, estimated_cost, token)
+
+    def _release(self, token: str) -> None:
+        with self._lock:
+            self._reservations.pop(token, None)
+
+    @contextmanager
+    def reserved_for(self, estimated_cost: float, endpoint: str) -> Iterator[Reservation]:
+        """`reserve` as a context manager: always releases, even on failure.
+
+        A call that raises must not leave its reservation held — that would
+        shrink the budget for the rest of the run every time something failed.
+        """
+        reservation = self.reserve(estimated_cost, endpoint)
+        try:
+            yield reservation
+        finally:
+            reservation.settle(reservation.actual)
 
     # -- reporting --------------------------------------------------------
 
@@ -198,6 +359,66 @@ class Budget:
         if self.stopped:
             lines.append("STOPPED EARLY: budget exhausted, results are partial.")
         return lines
+
+
+# --------------------------------------------------------------------------
+# Pre-flight estimators
+# --------------------------------------------------------------------------
+# These feed `reserve()`. They are allowed to be wrong; they are not allowed to
+# be optimistic, because an under-estimate is what lets an overshoot through.
+
+# A search or timeline page. twitterapi.io returns 20 per page in the documented
+# shape; UNVERIFIED against the wire (see docs/wire-contract.md), so it is named
+# here rather than buried as a literal.
+X_ASSUMED_PAGE_SIZE = 20
+
+# Local token estimate. The Anthropic SDK exposes count_tokens, which is exact
+# and free, and `estimate_anthropic_call` uses it when a real client is handed
+# in. This is the fallback for the offline path.
+#
+# ERROR BAR: ~4 chars/token holds to about +/-15% on English prose. It
+# under-counts on JSON (punctuation-dense, closer to 3 chars/token) and on
+# non-Latin scripts, both of which appear in a corpus of posts. So the caller
+# applies ESTIMATE_SAFETY_MARGIN on top, and any reservation that turns out
+# more than 20% low is recorded in Budget.estimate_misses.
+CHARS_PER_TOKEN_ESTIMATE = 4
+ESTIMATE_SAFETY_MARGIN = 1.25
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough local token count. Deliberately biased high — see the error bar."""
+    return int(len(text) / CHARS_PER_TOKEN_ESTIMATE * ESTIMATE_SAFETY_MARGIN) + 1
+
+
+def estimate_x_page_cost(page_size: int = X_ASSUMED_PAGE_SIZE) -> float:
+    """Worst-case cost of one search/timeline page."""
+    return max(page_size * X_COST_PER_TWEET, X_MIN_CHARGE_PER_REQUEST)
+
+
+def estimate_x_batch_cost(id_count: int) -> float:
+    """Worst-case cost of one batch hydration call: every id resolves."""
+    return max(id_count * X_COST_PER_TWEET, X_MIN_CHARGE_PER_REQUEST)
+
+
+def estimate_anthropic_call(
+    model: str,
+    input_tokens: int,
+    max_output_tokens: int,
+    cache_read_tokens: int = 0,
+) -> float:
+    """Worst-case cost of one model call, for reservation purposes.
+
+    `max_output_tokens` is charged in full: the whole point of a reservation is
+    that we do not know how much the model will actually emit, and the budget
+    must hold even if it emits the maximum. Reconciliation afterwards gives the
+    difference back.
+    """
+    in_rate, out_rate = model_rates(model)
+    return (
+        input_tokens * in_rate / 1_000_000
+        + max_output_tokens * out_rate / 1_000_000
+        + cache_read_tokens * in_rate * CACHE_READ_MULTIPLIER / 1_000_000
+    )
 
 
 def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:

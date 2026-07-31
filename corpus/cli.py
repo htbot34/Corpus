@@ -22,7 +22,14 @@ from typing import Any
 import typer
 from dotenv import load_dotenv
 
-from .budget import Budget, BudgetExceeded, estimate_anthropic_cost, estimate_x_cost
+from .budget import (
+    BUDGET_MODES,
+    STRICT,
+    Budget,
+    BudgetExceeded,
+    estimate_anthropic_cost,
+    estimate_x_cost,
+)
 from .cache import Cache, DEFAULT_TTL_SECONDS
 from .models import Document, Synthesis
 from .render import render_report
@@ -112,6 +119,14 @@ def run(
     max_posts: int = typer.Option(3000, "--max-posts"),
     since: str | None = typer.Option(None, "--since", help="YYYY-MM-DD floor."),
     budget_limit: float = typer.Option(10.00, "--budget", help="Hard stop, in dollars."),
+    budget_mode: str = typer.Option(
+        STRICT,
+        "--budget-mode",
+        help=(
+            "strict: refuse any call that cannot be fully reserved (default). "
+            "advisory: reserve and report, but never block."
+        ),
+    ),
     window_days: int = typer.Option(30, "--window-days"),
     empty_window_tolerance: int = typer.Option(3, "--empty-window-tolerance"),
     max_pages: int = typer.Option(20, "--max-pages", help="Cursor pages per window."),
@@ -147,10 +162,14 @@ def run(
         refresh=refresh,
         offline=offline,
     )
-    budget = Budget(limit=budget_limit, cache=cache)
+    if budget_mode not in BUDGET_MODES:
+        echo(f"ERROR: --budget-mode must be one of {', '.join(BUDGET_MODES)}")
+        raise typer.Exit(code=2)
+    budget = Budget(limit=budget_limit, cache=cache, mode=budget_mode)
 
     echo(f"corpus run @{handle} (run {budget.run_id})")
-    echo(f"  budget ${budget_limit:.2f} · max-posts {max_posts} · window {window_days}d"
+    echo(f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
+         f"· window {window_days}d"
          + (f" · since {since}" if since else "")
          + (" · OFFLINE" if offline else ""))
     echo("")

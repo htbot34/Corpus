@@ -207,12 +207,66 @@ def test_truncated_window_re_covers_rather_than_skipping(tmp_path):
 
 def test_budget_stop_preserves_partial_results(tmp_path):
     provider = FakeProvider(page_size=2)
-    client = build(provider, tmp_path, limit=0.0006)  # ~4 tweet-reads
+    client = build(provider, tmp_path, limit=0.003)
     tweets, stats = ingest_timeline(
-        client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
+        client,
+        "testsubject",
+        since=SINCE,
+        until=NOW,
+        empty_window_tolerance=GAP_TOLERANT,
+        log=lambda _: None,
     )
     assert "budget" in stats.stop_reason
     assert tweets, "paid data must survive a budget stop"
+
+
+def test_budget_is_never_exceeded_during_ingestion(tmp_path):
+    """Phase 2.1: the stop is pre-flight, so the limit is a ceiling not a trigger.
+
+    Before reservations, ingestion charged after each page returned and raised
+    only once the total had already crossed the limit — so the limit was the
+    point at which we noticed, not the point at which we stopped.
+    """
+    provider = FakeProvider(page_size=2)
+    client = build(provider, tmp_path, limit=0.003)
+    tweets, stats = ingest_timeline(
+        client,
+        "testsubject",
+        since=SINCE,
+        until=NOW,
+        empty_window_tolerance=GAP_TOLERANT,
+        log=lambda _: None,
+    )
+    assert client.budget.total <= 0.003, (
+        f"spent ${client.budget.total:.5f} against a $0.003 budget"
+    )
+    assert tweets and "budget" in stats.stop_reason
+
+
+def test_budget_too_small_for_one_call_refuses_before_spending(tmp_path):
+    """A budget below one worst-case page buys nothing, and says so."""
+    provider = FakeProvider(page_size=2)
+    client = build(provider, tmp_path, limit=0.0006)
+    tweets, stats = ingest_timeline(
+        client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
+    )
+    assert tweets == []
+    assert client.budget.total == 0.0, "refused calls must not be billed"
+    assert "pre-flight" in stats.stop_reason
+    # The message has to tell the user what to do about it.
+    assert "--budget-mode advisory" in stats.stop_reason
+
+
+def test_advisory_mode_allows_what_strict_refuses(tmp_path):
+    """--budget-mode advisory preserves the original charge-then-notice behaviour."""
+    cache = Cache(path=tmp_path / "c.db")
+    budget = Budget(limit=0.0006, cache=cache, mode="advisory")
+    client = XClient(FakeProvider(page_size=2), cache, budget)
+    tweets, _ = ingest_timeline(
+        client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
+    )
+    assert tweets, "advisory mode must not refuse the call"
+    assert budget.refusals, "but it must still record that the budget was blown"
 
 
 def test_results_are_newest_first(tmp_path):
