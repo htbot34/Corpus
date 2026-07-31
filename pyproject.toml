@@ -7,7 +7,17 @@ dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
     "pydantic>=2.7",
-    "anthropic>=0.40",
+    # anthropic: the floor is the version actually verified to work, not the
+    # oldest that might. synthesize.py passes output_config={"effort","format"}
+    # — the GA structured-outputs surface — to messages.create and
+    # messages.stream, and uses messages.count_tokens for budget reservations
+    # (Phase 2.1). The previous floor of >=0.40 predated all of that by roughly
+    # eighty minor versions; pip resolving to latest was the only reason it
+    # worked, and any resolution near the floor would have died on an
+    # unexpected-kwarg TypeError at the first synthesis call. Verified working:
+    # 0.120.2. tests/test_sdk_contract.py introspects the installed signature so
+    # this cannot silently rot again.
+    "anthropic>=0.120.2",
     # python-dotenv: the tool is configured entirely by env vars (X_API_KEY,
     # X_PROVIDER, ANTHROPIC_API_KEY) and a local .env is the documented way to
     # hold them. stdlib has no .env parser.
