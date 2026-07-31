@@ -272,10 +272,29 @@ thread stitching, context hydration, every signal function, and the full map-red
 path against a stubbed model client (`tests/fake_anthropic.py`) so prompts can be
 iterated on without paying per attempt.
 
-> **Fixture provenance.** The fixtures in `tests/fixtures/` are **synthetic** — written
-> from twitterapi.io's documented response shapes, not captured from the wire, because
-> the machine this was built on had no network route to the provider. Regenerate them
-> from real data with `python tests/fixtures/_generate.py` as a starting point, or
-> better: run `corpus run --x <handle> --max-posts 50 --budget 0.10 --skip-synthesis`
-> and copy the cached raw payloads over them. If the real shapes differ,
-> `normalize_tweet` in `corpus/x/client.py` is the only place that needs to change.
+> **Fixture provenance.** Mixed, and [`docs/wire-contract.md`](docs/wire-contract.md)
+> says exactly which is which.
+>
+> `user_info.json` matches a **confirmed** live response (2026-07-31): envelope
+> `{status, msg, data}`, the real key set, and `createdAt` in the actual ISO-8601
+> six-digit-microsecond form (`2010-08-27T20:13:59.000000Z`) rather than the legacy
+> `Mon Mar 03 12:00:00 +0000 2014` shape the first draft assumed. Values are still
+> synthetic; the shape is not.
+>
+> The three **tweet-endpoint** fixtures are still synthetic — written from
+> twitterapi.io's documented shapes, not captured from the wire, because this
+> environment has no `X_API_KEY` and no network route to `api.twitterapi.io`. The
+> 83-test baseline therefore proved the logic self-consistent against assumed
+> payloads, and proved nothing about whether those payloads are real.
+>
+> To fix that, capture and diff:
+>
+> ```bash
+> corpus run --x <handle> --max-posts 50 --budget 0.15 --skip-synthesis --capture-raw captures/
+> python scripts/verify_contract.py     # ~$0.01, monthly drift check
+> ```
+>
+> `corpus/x/contract.py` states every field name and nesting the code depends on;
+> `tests/test_wire_contract.py` checks the fixtures against it offline on every run.
+> If the real shapes differ, `normalize_tweet` in `corpus/x/client.py` and
+> `_tweets_from`/`_cursor_from` in `corpus/x/providers.py` are the designed seams.

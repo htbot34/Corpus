@@ -1,14 +1,37 @@
 {
   "status": "success",
+  "msg": "success",
   "data": {
-    "userName": "testsubject",
     "id": "1000000000000000001",
     "name": "Test Subject",
+    "userName": "testsubject",
+    "location": "",
+    "url": null,
     "description": "Writes about hiring, evaluation, and organizations.",
-    "statusesCount": 4820,
+    "entities": {
+      "description": {
+        "urls": []
+      },
+      "url": {
+        "urls": []
+      }
+    },
+    "protected": false,
+    "isVerified": false,
+    "isBlueVerified": false,
+    "verifiedType": null,
     "followers": 42000,
     "following": 900,
-    "createdAt": "Mon Mar 03 12:00:00 +0000 2014",
-    "isBlueVerified": false
+    "favouritesCount": 15340,
+    "statusesCount": 4820,
+    "mediaCount": 210,
+    "createdAt": "2014-03-03T12:00:00.000000Z",
+    "coverPicture": "",
+    "profilePicture": "",
+    "canDm": false,
+    "affiliatesHighlightedLabel": {},
+    "isAutomated": false,
+    "automatedBy": null,
+    "pinnedTweetIds": []
   }
 }

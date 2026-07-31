@@ -502,20 +502,50 @@ def main() -> None:
     (HERE / "batch_tweets_response.json").write_text(
         json.dumps({"tweets": parents[:2], "status": "success"}, indent=2), encoding="utf-8"
     )
+    # user_info is the ONE endpoint whose shape is confirmed against the live
+    # API (2026-07-31, GET /twitter/user/info?userName=paulg). Values below are
+    # still synthetic; the key set, the envelope, and the timestamp format are
+    # not. Two things this corrected that the documented-shape guess got wrong:
+    #
+    #   - "msg" is present in the envelope. The old fixture omitted it.
+    #   - createdAt is ISO 8601 with six-digit microseconds and a Z suffix,
+    #     not the legacy "Mon Mar 03 12:00:00 +0000 2014" form. parse_created_at
+    #     only survives it via its fromisoformat fallback — see Phase 2.6.
+    #
+    # Field order matches the live response. Note the British "favouritesCount".
     (HERE / "user_info.json").write_text(
         json.dumps(
             {
                 "status": "success",
+                "msg": "success",
                 "data": {
-                    "userName": HANDLE,
                     "id": AUTHOR_ID,
                     "name": "Test Subject",
+                    "userName": HANDLE,
+                    "location": "",
+                    "url": None,
                     "description": "Writes about hiring, evaluation, and organizations.",
-                    "statusesCount": 4820,
+                    "entities": {
+                        "description": {"urls": []},
+                        "url": {"urls": []},
+                    },
+                    "protected": False,
+                    "isVerified": False,
+                    "isBlueVerified": False,
+                    "verifiedType": None,
                     "followers": 42000,
                     "following": 900,
-                    "createdAt": "Mon Mar 03 12:00:00 +0000 2014",
-                    "isBlueVerified": False,
+                    "favouritesCount": 15340,
+                    "statusesCount": 4820,
+                    "mediaCount": 210,
+                    "createdAt": "2014-03-03T12:00:00.000000Z",
+                    "coverPicture": "",
+                    "profilePicture": "",
+                    "canDm": False,
+                    "affiliatesHighlightedLabel": {},
+                    "isAutomated": False,
+                    "automatedBy": None,
+                    "pinnedTweetIds": [],
                 },
             },
             indent=2,
