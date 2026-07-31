@@ -84,6 +84,18 @@ def render_report(
         )
     if ingest.get("stop_reason"):
         caveats.append(f"- Ingestion stopped because: {ingest['stop_reason']}")
+    # Phase 2.6: a skipped document is a hole in the corpus, so it belongs in
+    # the caveat block rather than only in signals.json.
+    dropped = int(ingest.get("timestamp_errors", 0) or 0)
+    dropped += int(run_meta.get("hydration", {}).get("timestamp_errors", 0) or 0)
+    if dropped:
+        samples = ingest.get("timestamp_error_samples", [])[:3]
+        caveats.append(
+            f"- **{dropped} document(s) were skipped because their timestamp could "
+            "not be parsed.** They are missing from the corpus and from every "
+            "count below."
+            + (f" Examples: {'; '.join(samples)}" if samples else "")
+        )
     hyd = run_meta.get("hydration", {})
     if hyd.get("context_unavailable"):
         caveats.append(

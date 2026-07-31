@@ -18,7 +18,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..models import Document, Thread
-from .client import XClient, _author_handle, _first, _tweet_id, normalize_tweet
+from .client import (
+    TimestampParseError,
+    XClient,
+    _author_handle,
+    _first,
+    _tweet_id,
+    normalize_tweet,
+)
 
 UNAVAILABLE = "[unavailable]"
 
@@ -34,6 +41,7 @@ class HydrationStats:
     quotes_inline: int = 0
     parents_fetched: int = 0
     media_only: int = 0
+    timestamp_errors: int = 0  # documents dropped for an unparseable timestamp
     reposts_dropped: int = 0
     replies_dropped: int = 0
     output_documents: int = 0
@@ -207,7 +215,11 @@ def hydrate_context(
             doc.context_url = None
             stats.context_unavailable += 1
         else:
-            parent = normalize_tweet(raw)
+            # A parent's timestamp is never used for pagination, cadence, or
+            # ordering — only its body, author, and URL matter here. Falling
+            # back to the child's date keeps the context rather than trading a
+            # real quality loss for no correctness gain.
+            parent = normalize_tweet(raw, timestamp_fallback=doc.published_at)
             doc.context = parent.body.strip() or UNAVAILABLE
             doc.context_author = parent.author_handle or _author_handle(raw) or None
             doc.context_url = parent.url
@@ -222,7 +234,7 @@ def hydrate_context(
         if not is_quote:
             qid = quoted_id(doc)
             if qid and qid in lookup:
-                q = normalize_tweet(lookup[qid])
+                q = normalize_tweet(lookup[qid], timestamp_fallback=doc.published_at)
                 if q.body.strip():
                     doc.context = (
                         f"{doc.context}\n\n[they also quoted @{q.author_handle}]: {q.body.strip()}"
@@ -268,10 +280,24 @@ def hydrate(
     log: Callable[[str], None] = print,
 ) -> tuple[list[Document], HydrationStats]:
     """Full pipeline: normalize -> stitch -> hydrate context -> classify -> filter."""
-    docs = [normalize_tweet(raw) for raw in raw_tweets]
+    # ingest_timeline already skips unparseable timestamps, but hydrate() also
+    # runs over cached corpora written before that guard existed, and over
+    # --offline input this process never fetched. One malformed document must
+    # not cost the other 9,999.
+    docs = []
+    timestamp_errors = 0
+    for raw in raw_tweets:
+        try:
+            docs.append(normalize_tweet(raw))
+        except TimestampParseError as exc:
+            timestamp_errors += 1
+            log(f"  [timestamp] dropping {_tweet_id(raw) or '<no id>'}: {exc}")
     docs = [d for d in docs if d.source_id]
 
     stitched, stats = stitch_threads(docs, author_handle)
+    stats.timestamp_errors = timestamp_errors
+    if timestamp_errors:
+        log(f"  {timestamp_errors} document(s) dropped: unparseable timestamp")
     log(
         f"  stitched {stats.threads_stitched} threads "
         f"({stats.thread_parts_absorbed} parts absorbed)"

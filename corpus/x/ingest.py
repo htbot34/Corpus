@@ -28,13 +28,24 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..budget import BudgetExceeded
-from .client import XClient, _tweet_id, parse_created_at
+from .client import TimestampParseError, XClient, _tweet_id, parse_created_at
+from .validate import validate_handle
 
 # X launched 2006-03-21; nothing exists before this.
 PLATFORM_EPOCH = int(datetime(2006, 3, 21, tzinfo=timezone.utc).timestamp())
 
 # Above this, the window logic is suspect rather than merely inefficient.
 DEDUPE_ALARM_RATE = 0.25
+
+
+class IngestCorruption(RuntimeError):
+    """An impossible result that means the walk can no longer be trusted.
+
+    Distinct from a provider error or a budget stop: those are expected
+    conditions with partial results worth keeping. This one means a core
+    assumption failed, and continuing spends money on data that cannot be
+    reasoned about.
+    """
 
 
 @dataclass
@@ -48,6 +59,8 @@ class IngestStats:
     max_consecutive_empty: int = 0
     empty_window_ranges: list[tuple[str, str]] = field(default_factory=list)
     cursor_repeat_breaks: int = 0  # failure mode 1, caught
+    timestamp_errors: int = 0  # documents skipped for an unparseable timestamp
+    timestamp_error_samples: list[str] = field(default_factory=list)
     stop_reason: str = ""
     integrity_warning: str = ""
 
@@ -67,6 +80,8 @@ class IngestStats:
             "max_consecutive_empty": self.max_consecutive_empty,
             "empty_window_ranges": self.empty_window_ranges,
             "cursor_repeat_breaks": self.cursor_repeat_breaks,
+            "timestamp_errors": self.timestamp_errors,
+            "timestamp_error_samples": self.timestamp_error_samples,
             "stop_reason": self.stop_reason,
             "integrity_warning": self.integrity_warning,
         }
@@ -95,7 +110,9 @@ def ingest_timeline(
     `empty_window_tolerance` consecutive empty windows exceeded.
     Returns (raw tweets newest-first, stats).
     """
-    handle = handle.lstrip("@")
+    # Validated again here, not only at the CLI: this is a public function and
+    # the handle goes straight into a query string below.
+    handle = validate_handle(handle)
     stats = IngestStats()
     seen: dict[str, dict[str, Any]] = {}
 
@@ -143,11 +160,24 @@ def ingest_timeline(
                     tid = _tweet_id(raw)
                     if not tid:
                         continue
-                    ts = int(
-                        parse_created_at(
-                            raw.get("createdAt") or raw.get("created_at") or raw.get("timestamp")
-                        ).timestamp()
-                    )
+                    # A malformed timestamp must not kill the run, and must not
+                    # be allowed to poison window_earliest either — the old
+                    # silent now() default made the walk advance one second per
+                    # window while paying full price for every page.
+                    try:
+                        ts = int(
+                            parse_created_at(
+                                raw.get("createdAt")
+                                or raw.get("created_at")
+                                or raw.get("timestamp")
+                            ).timestamp()
+                        )
+                    except TimestampParseError as exc:
+                        stats.timestamp_errors += 1
+                        if len(stats.timestamp_error_samples) < 5:
+                            stats.timestamp_error_samples.append(f"{tid}: {exc.value!r}")
+                        log(f"  [timestamp] skipping {tid}: {exc}")
+                        continue
                     window_earliest = ts if window_earliest is None else min(window_earliest, ts)
                     if tid in seen:
                         stats.duplicates += 1
@@ -205,6 +235,20 @@ def ingest_timeline(
                 f"(total {len(seen)}, ${client.budget.total:.4f})"
             )
 
+            # A tweet older than the window's own ceiling is impossible: the
+            # query bounded it. If this fires, either the provider ignored
+            # until_time: or a timestamp is being misparsed — and both of those
+            # corrupt the walk in ways that cost money quietly. Fail loudly.
+            if window_earliest is not None and window_earliest > until_ts:
+                raise IngestCorruption(
+                    f"window {_iso(since_ts)}..{_iso(until_ts)} returned a tweet "
+                    f"dated {_iso(window_earliest)} ({window_earliest}), which is "
+                    f"later than the window's own until_time ({until_ts}). Either "
+                    f"until_time: was not honoured or timestamps are being "
+                    f"misparsed; continuing would walk backwards by seconds while "
+                    f"paying full price per page."
+                )
+
             # Where the next window ends.
             #
             # If we walked this window to its end, everything down to since_ts is
@@ -237,14 +281,28 @@ def ingest_timeline(
         )
         log(f"  [WARNING] {stats.integrity_warning}")
 
-    ordered = sorted(
-        seen.values(),
-        key=lambda r: parse_created_at(
-            r.get("createdAt") or r.get("created_at") or r.get("timestamp")
-        ),
-        reverse=True,
-    )
+    ordered = _newest_first(seen.values())
     return ordered[:max_posts], stats
+
+
+def _sort_key(raw: dict[str, Any]) -> datetime:
+    """Sort key that cannot raise.
+
+    Anything reaching here already parsed once during the walk, so a failure is
+    not expected — but sorting is not the place to discover it, and a crash
+    while ordering results would throw away a corpus that was already paid for.
+    Unparseable entries sort to the epoch, i.e. last in a newest-first list.
+    """
+    try:
+        return parse_created_at(
+            raw.get("createdAt") or raw.get("created_at") or raw.get("timestamp")
+        )
+    except TimestampParseError:
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+
+
+def _newest_first(raws: Any) -> list[dict[str, Any]]:
+    return sorted(raws, key=_sort_key, reverse=True)
 
 
 def ingest_recent(
@@ -260,7 +318,7 @@ def ingest_recent(
     Cheaper and simpler than search for a shallow pull; cursor pagination is
     reliable here because it never reaches the historical index.
     """
-    handle = handle.lstrip("@")
+    handle = validate_handle(handle)
     stats = IngestStats()
     seen: dict[str, dict[str, Any]] = {}
     cursor: str | None = None
@@ -289,11 +347,4 @@ def ingest_recent(
 
     stats.unique = len(seen)
     stats.stop_reason = stats.stop_reason or "completed"
-    ordered = sorted(
-        seen.values(),
-        key=lambda r: parse_created_at(
-            r.get("createdAt") or r.get("created_at") or r.get("timestamp")
-        ),
-        reverse=True,
-    )
-    return ordered[:max_posts], stats
+    return _newest_first(seen.values())[:max_posts], stats

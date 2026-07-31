@@ -39,6 +39,7 @@ from .x.client import XClient
 from .x.hydrate import hydrate
 from .x.ingest import ingest_timeline
 from .x.providers import ProviderError, get_provider
+from .x.validate import InvalidHandle, validate_handle
 from .x.signals import compute_signals
 
 app = typer.Typer(
@@ -152,10 +153,23 @@ def run(
     ),
 ) -> None:
     """Ingest, hydrate, and synthesize one person's public writing."""
-    handle = x.lstrip("@")
-    since_dt = (
-        datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc) if since else None
-    )
+    # Validate at the boundary, where the error can name the input and the user
+    # can still fix it. An unvalidated handle does not fail downstream — it
+    # silently changes what the search query means.
+    try:
+        handle = validate_handle(x)
+    except InvalidHandle as exc:
+        echo(f"ERROR: {exc}")
+        raise typer.Exit(code=2)
+    try:
+        since_dt = (
+            datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if since
+            else None
+        )
+    except ValueError:
+        echo(f"ERROR: --since {since!r} is not a date. Expected YYYY-MM-DD.")
+        raise typer.Exit(code=2)
 
     cache = Cache(
         ttl_seconds=cache_ttl_days * 24 * 3600 if cache_ttl_days else DEFAULT_TTL_SECONDS,

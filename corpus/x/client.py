@@ -35,22 +35,86 @@ def _first(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+class TimestampParseError(ValueError):
+    """A timestamp could not be parsed.
+
+    Raised rather than defaulting, because the default was the bug. See
+    `parse_created_at`.
+    """
+
+    def __init__(self, value: Any) -> None:
+        super().__init__(
+            f"could not parse timestamp {value!r}. Accepted formats: "
+            f"{', '.join(TIMESTAMP_FORMATS)}, ISO 8601, or a unix epoch number."
+        )
+        self.value = value
+
+
+# Confirmed formats, most specific first.
+#
+#   "2010-08-27T20:13:59.000000Z" — what the live API actually returns
+#                                   (confirmed 2026-07-31, see
+#                                   docs/wire-contract.md)
+#   "Mon Mar 03 12:00:00 +0000 2014" — the legacy X form, still accepted
+#
+# The ISO form with six-digit microseconds does not match any strptime pattern
+# below and is handled by the fromisoformat branch. It is listed first anyway
+# because it is what actually arrives, and a reader should not have to infer
+# that from the fallback.
+TIMESTAMP_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S.%f%z",
+    "%a %b %d %H:%M:%S %z %Y",
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%d %H:%M:%S%z",
+)
+
+
 def parse_created_at(value: Any) -> datetime:
-    """Parse the several timestamp formats seen in the wild, UTC-normalized."""
+    """Parse a provider timestamp, UTC-normalized. Raises on failure.
+
+    This function used to return `datetime.now()` when every parse attempt
+    failed, which was a silent data-corruption path in the function that drives
+    pagination.
+
+    The chain: timestamps feed `window_earliest` (ingest.py), and the next
+    window ends at `window_earliest - 1`. If the timestamps in a window fail to
+    parse, `window_earliest` becomes "now", so the walk advances by one second
+    per window instead of ~30 days — burning money on full-price pages while
+    making no measurable progress, for as long as the budget lasts. The budget
+    guard was the only thing that would ever stop it, and before Phase 2.1 that
+    guard did not stop anything either.
+
+    So: raise. `ingest_timeline` catches this per document, skips it, counts it,
+    and continues — one malformed tweet must not kill a run, and it must not be
+    allowed to corrupt the walk either.
+    """
+    if isinstance(value, bool):
+        # bool is an int subclass; a boolean timestamp is a shape error, not
+        # epoch 0 or 1.
+        raise TimestampParseError(value)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise TimestampParseError(value) from exc
     if not isinstance(value, str) or not value.strip():
-        return datetime.now(tz=timezone.utc)
+        raise TimestampParseError(value)
+
     text = value.strip()
-    for fmt in ("%a %b %d %H:%M:%S %z %Y", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z"):
+    for fmt in TIMESTAMP_FORMATS:
         try:
             return datetime.strptime(text, fmt).astimezone(timezone.utc)
         except ValueError:
             continue
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return datetime.now(tz=timezone.utc)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise TimestampParseError(value) from exc
+    if parsed.tzinfo is None:
+        # A naive timestamp from a provider is UTC by convention; assuming
+        # local time would silently shift every post by the runner's offset.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _author_handle(raw: dict[str, Any]) -> str:
@@ -109,8 +173,18 @@ def _expand_links(text: str, raw: dict[str, Any]) -> tuple[str, list[str]]:
     return text, outbound
 
 
-def normalize_tweet(raw: dict[str, Any]) -> Document:
-    """One provider tweet dict -> one Document (pre-hydration)."""
+def normalize_tweet(
+    raw: dict[str, Any], *, timestamp_fallback: datetime | None = None
+) -> Document:
+    """One provider tweet dict -> one Document (pre-hydration).
+
+    Raises TimestampParseError if the timestamp is unparseable, unless
+    `timestamp_fallback` is given. The fallback exists for one specific case:
+    hydrating a *parent* tweet, where the timestamp is never used for
+    pagination, cadence, or ordering — only the body, author, and URL are. Losing
+    a reply's context because its parent had a malformed date would trade a real
+    quality loss for no correctness gain.
+    """
     text = str(_first(raw, "text", "full_text", "fullText", default="") or "")
     retweeted = raw.get("retweeted_tweet") or raw.get("retweetedTweet")
     quoted = raw.get("quoted_tweet") or raw.get("quotedTweet")
@@ -139,12 +213,21 @@ def normalize_tweet(raw: dict[str, Any]) -> Document:
         "views": int(_first(raw, "viewCount", "view_count", "views", default=0) or 0),
     }
 
+    try:
+        published_at = parse_created_at(
+            _first(raw, "createdAt", "created_at", "timestamp")
+        )
+    except TimestampParseError:
+        if timestamp_fallback is None:
+            raise
+        published_at = timestamp_fallback
+
     return Document(
         source="x",
         source_id=_tweet_id(raw),
         url=_tweet_url(raw),
         author_handle=_author_handle(raw),
-        published_at=parse_created_at(_first(raw, "createdAt", "created_at", "timestamp")),
+        published_at=published_at,
         kind=kind,  # type: ignore[arg-type]
         body=body,
         engagement=engagement,

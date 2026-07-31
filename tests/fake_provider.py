@@ -24,12 +24,23 @@ def load(name: str) -> Any:
     return json.loads((FIXTURES / name).read_text())
 
 
+# A tweet whose timestamp the *provider* cannot read. Real providers do not
+# validate their own payloads — they hand the malformed record over and the
+# client discovers it. Sorting these to the newest end and serving them in every
+# window models that faithfully, and lets tests drive a bad timestamp all the
+# way into ingest.py where Phase 2.6 has to cope with it.
+UNPARSEABLE_TS = -1
+
+
 def tweet_ts(raw: dict[str, Any]) -> int:
-    return int(
-        datetime.strptime(raw["createdAt"], "%a %b %d %H:%M:%S %z %Y")
-        .astimezone(timezone.utc)
-        .timestamp()
-    )
+    try:
+        return int(
+            datetime.strptime(raw["createdAt"], "%a %b %d %H:%M:%S %z %Y")
+            .astimezone(timezone.utc)
+            .timestamp()
+        )
+    except (ValueError, KeyError, TypeError):
+        return UNPARSEABLE_TS
 
 
 class FakeProvider:
@@ -77,8 +88,14 @@ class FakeProvider:
         if window not in self._windows_seen:
             self._windows_seen.append(window)
 
+        # Malformed records are returned in every window: the provider has no
+        # idea they are malformed, which is precisely the situation under test.
         in_range = sorted(
-            (t for t in self.subject if since_ts <= tweet_ts(t) < until_ts),
+            (
+                t
+                for t in self.subject
+                if tweet_ts(t) == UNPARSEABLE_TS or since_ts <= tweet_ts(t) < until_ts
+            ),
             key=tweet_ts,
             reverse=True,
         )
