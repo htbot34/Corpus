@@ -82,6 +82,45 @@ def render_report(
             f"- {ingest['cursor_repeat_breaks']} window(s) hit the duplicate-cursor "
             "regression and were cut short; deep history may be thinner than it looks."
         )
+    # Phase 2.3: a run cut short by the tolerance rule may be missing years.
+    # That belongs at the top of the caveat block in bold, not buried in
+    # stop_reason where a reader has to know what it means.
+    if ingest.get("stopped_on_tolerance"):
+        last = ingest.get("last_date_reached") or "unknown"
+        if ingest.get("probe_confirmed_end"):
+            # A probe swept a further twelve months and found nothing. Still
+            # worth stating plainly — but this is evidence, not a guess, and
+            # crying wolf here would devalue the warning below.
+            caveats.append(
+                f"- Ingestion reached **{last}** and stopped there. A "
+                f"12-month probe below that date returned nothing, so this is "
+                f"most likely the full public history rather than a truncation."
+            )
+        else:
+            caveats.append(
+                f"- **HISTORY MAY BE INCOMPLETE.** Ingestion stopped on the "
+                f"consecutive-empty-window rule at **{last}**, not because the "
+                f"account ran out of posts. Anything published before {last} is "
+                f"absent from this report. Re-run with a larger "
+                f"`--empty-window-tolerance` or `--window-days` to reach further "
+                f"back."
+            )
+    # Ingested-vs-total, so "400 of 53,901" is visible at a glance.
+    total_known = ingest.get("public_post_count")
+    share = ingest.get("ingested_share")
+    if total_known and share is not None:
+        emphasis = "**" if share < 0.5 else ""
+        caveats.append(
+            f"- {emphasis}Ingested {ingest.get('unique', len(docs)):,} of "
+            f"{total_known:,} public posts ({share:.1%}){emphasis}"
+        )
+    if ingest.get("hiatus_probes"):
+        productive = ingest.get("hiatus_probes_productive", 0)
+        caveats.append(
+            f"- {ingest['hiatus_probes']} wide probe(s) ran after hitting the "
+            f"empty-window tolerance; {productive} found further history and "
+            f"resumed the walk."
+        )
     if ingest.get("stop_reason"):
         caveats.append(f"- Ingestion stopped because: {ingest['stop_reason']}")
     # Phase 2.6: a skipped document is a hole in the corpus, so it belongs in

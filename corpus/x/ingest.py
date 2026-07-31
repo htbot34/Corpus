@@ -37,6 +37,23 @@ PLATFORM_EPOCH = int(datetime(2006, 3, 21, tzinfo=timezone.utc).timestamp())
 # Above this, the window logic is suspect rather than merely inefficient.
 DEDUPE_ALARM_RATE = 0.25
 
+# Consecutive empty windows before the walk gives up.
+#
+# Was 3, which at the default 30-day window means any real silence longer than
+# 90 days ends ingestion and discards everything older. That is the wrong
+# default for the actual targets: founders and writers go quiet for a quarter
+# routinely. An unnecessary empty window costs about $0.0002; a truncated
+# history costs the entire analysis.
+DEFAULT_EMPTY_WINDOW_TOLERANCE = 8
+
+# How far back the adaptive probe looks when the tolerance is reached.
+#
+# Rather than guessing whether the silence is real, spend roughly one more call
+# to find out: sweep the next twelve months in a single window. Anything found
+# means the silence was not the end of history and normal windowing resumes
+# from there. Nothing found turns a guess into evidence.
+HIATUS_PROBE_DAYS = 365
+
 
 class IngestCorruption(RuntimeError):
     """An impossible result that means the walk can no longer be trusted.
@@ -61,8 +78,29 @@ class IngestStats:
     cursor_repeat_breaks: int = 0  # failure mode 1, caught
     timestamp_errors: int = 0  # documents skipped for an unparseable timestamp
     timestamp_error_samples: list[str] = field(default_factory=list)
+    hiatus_probes: int = 0
+    hiatus_probes_productive: int = 0
+    probe_recovered_ranges: list[tuple[str, str]] = field(default_factory=list)
+    stopped_on_tolerance: bool = False
+    # True when the final stop was preceded by a wide probe that found nothing.
+    # That is the difference between "we gave up" and "we checked", and it is
+    # what the report needs in order to be honest in both directions.
+    probe_confirmed_end: bool = False
+    last_date_reached: str = ""
+    public_post_count: int | None = None  # statusesCount, for ingested-vs-total
     stop_reason: str = ""
     integrity_warning: str = ""
+
+    @property
+    def ingested_share(self) -> float | None:
+        """Ingested count as a fraction of the profile's public post count.
+
+        Surfaced so that "400 of 53,901" is obvious at a glance rather than
+        something a reader has to infer from stop_reason.
+        """
+        if not self.public_post_count:
+            return None
+        return round(self.unique / self.public_post_count, 4)
 
     @property
     def dedupe_rate(self) -> float:
@@ -82,6 +120,14 @@ class IngestStats:
             "cursor_repeat_breaks": self.cursor_repeat_breaks,
             "timestamp_errors": self.timestamp_errors,
             "timestamp_error_samples": self.timestamp_error_samples,
+            "hiatus_probes": self.hiatus_probes,
+            "hiatus_probes_productive": self.hiatus_probes_productive,
+            "probe_recovered_ranges": self.probe_recovered_ranges,
+            "stopped_on_tolerance": self.stopped_on_tolerance,
+            "probe_confirmed_end": self.probe_confirmed_end,
+            "last_date_reached": self.last_date_reached,
+            "public_post_count": self.public_post_count,
+            "ingested_share": self.ingested_share,
             "stop_reason": self.stop_reason,
             "integrity_warning": self.integrity_warning,
         }
@@ -99,9 +145,11 @@ def ingest_timeline(
     until: datetime | None = None,
     max_posts: int = 3000,
     window_days: int = 30,
-    empty_window_tolerance: int = 3,
+    empty_window_tolerance: int = DEFAULT_EMPTY_WINDOW_TOLERANCE,
     max_pages: int = 20,
     include_replies: bool = True,
+    probe_enabled: bool = True,
+    public_post_count: int | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[list[dict[str, Any]], IngestStats]:
     """Walk a handle's history backwards in fixed windows.
@@ -113,7 +161,7 @@ def ingest_timeline(
     # Validated again here, not only at the CLI: this is a public function and
     # the handle goes straight into a query string below.
     handle = validate_handle(handle)
-    stats = IngestStats()
+    stats = IngestStats(public_post_count=public_post_count)
     seen: dict[str, dict[str, Any]] = {}
 
     until_ts = int((until or datetime.now(tz=timezone.utc)).timestamp())
@@ -221,10 +269,80 @@ def ingest_timeline(
                     f"({consecutive_empty}/{empty_window_tolerance} consecutive)"
                 )
                 if consecutive_empty >= empty_window_tolerance:
+                    # Before giving up, spend roughly one more call to find out
+                    # whether the silence is real. A lying empty window and a
+                    # genuine hiatus are indistinguishable one window at a time
+                    # — but not across a year at once.
+                    probe_until = since_ts
+                    probe_since = max(floor_ts, probe_until - HIATUS_PROBE_DAYS * 24 * 3600)
+                    probed_ok = False
+                    if probe_since < probe_until and probe_enabled:
+                        stats.hiatus_probes += 1
+                        log(
+                            f"  [probe] {empty_window_tolerance} empty windows — "
+                            f"sweeping {_iso(probe_since)}..{_iso(probe_until)} "
+                            f"({HIATUS_PROBE_DAYS}d) before concluding the history ends here"
+                        )
+                        probe_query = f"from:{handle} since_time:{probe_since} until_time:{probe_until}"
+                        if not include_replies:
+                            probe_query += " -filter:replies"
+                        probe_tweets, _pc, _ph = client.advanced_search(probe_query, None)
+                        stats.pages += 1
+                        stats.fetched += len(probe_tweets)
+                        probe_latest: int | None = None
+                        for raw in probe_tweets:
+                            tid = _tweet_id(raw)
+                            if not tid:
+                                continue
+                            try:
+                                ts = int(
+                                    parse_created_at(
+                                        raw.get("createdAt")
+                                        or raw.get("created_at")
+                                        or raw.get("timestamp")
+                                    ).timestamp()
+                                )
+                            except TimestampParseError as exc:
+                                stats.timestamp_errors += 1
+                                if len(stats.timestamp_error_samples) < 5:
+                                    stats.timestamp_error_samples.append(
+                                        f"{tid}: {exc.value!r}"
+                                    )
+                                continue
+                            probe_latest = ts if probe_latest is None else max(probe_latest, ts)
+                            if tid not in seen:
+                                seen[tid] = raw
+
+                        if probe_latest is not None:
+                            probed_ok = True
+                            stats.hiatus_probes_productive += 1
+                            stats.probe_recovered_ranges.append(
+                                (_iso(probe_since), _iso(probe_until))
+                            )
+                            log(
+                                f"  [probe] found posts as recent as {_iso(probe_latest)} — "
+                                f"the silence was not the end of history; resuming"
+                            )
+                            consecutive_empty = 0
+                            # Resume normal windowing just below the newest post
+                            # the probe found, so the region between it and the
+                            # probe ceiling is not re-walked.
+                            until_ts = min(probe_latest + 1, probe_until)
+                            continue
+
                     stats.stop_reason = (
                         f"{consecutive_empty} consecutive empty windows "
                         f"(--empty-window-tolerance {empty_window_tolerance})"
+                        + (
+                            f", and a {HIATUS_PROBE_DAYS}-day probe back to "
+                            f"{_iso(probe_since)} found nothing"
+                            if stats.hiatus_probes and not probed_ok
+                            else ""
+                        )
                     )
+                    stats.stopped_on_tolerance = True
+                    stats.probe_confirmed_end = bool(stats.hiatus_probes) and not probed_ok
+                    stats.last_date_reached = _iso(until_ts)
                     break
                 until_ts = since_ts
                 continue
@@ -319,7 +437,7 @@ def ingest_recent(
     reliable here because it never reaches the historical index.
     """
     handle = validate_handle(handle)
-    stats = IngestStats()
+    stats = IngestStats(public_post_count=public_post_count)
     seen: dict[str, dict[str, Any]] = {}
     cursor: str | None = None
     try:

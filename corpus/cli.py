@@ -37,7 +37,7 @@ from .synthesize import synthesize
 from .x.capture import RawCapture
 from .x.client import XClient
 from .x.hydrate import hydrate
-from .x.ingest import ingest_timeline
+from .x.ingest import DEFAULT_EMPTY_WINDOW_TOLERANCE, ingest_timeline
 from .x.providers import ProviderError, get_provider
 from .x.validate import InvalidHandle, validate_handle
 from .x.signals import compute_signals
@@ -129,7 +129,19 @@ def run(
         ),
     ),
     window_days: int = typer.Option(30, "--window-days"),
-    empty_window_tolerance: int = typer.Option(3, "--empty-window-tolerance"),
+    empty_window_tolerance: int = typer.Option(
+        DEFAULT_EMPTY_WINDOW_TOLERANCE,
+        "--empty-window-tolerance",
+        help=(
+            "Consecutive empty windows before giving up. On reaching it, one wide "
+            "probe checks whether the silence is real before stopping."
+        ),
+    ),
+    hiatus_probe: bool = typer.Option(
+        True,
+        "--hiatus-probe/--no-hiatus-probe",
+        help="Sweep 12 months in one call before concluding history has ended.",
+    ),
     max_pages: int = typer.Option(20, "--max-pages", help="Cursor pages per window."),
     include_reposts: bool = typer.Option(False, "--include-reposts"),
     replies: bool = typer.Option(True, "--replies/--no-replies"),
@@ -254,6 +266,10 @@ def run(
             empty_window_tolerance=empty_window_tolerance,
             max_pages=max_pages,
             include_replies=replies,
+            probe_enabled=hiatus_probe,
+            # statusesCount from the profile, so the report can say
+            # "400 of 53,901" instead of leaving it to be inferred.
+            public_post_count=public_posts or None,
             log=echo,
         )
         cache.put("x", f"corpus:{handle.lower()}", raw_tweets)
@@ -265,7 +281,15 @@ def run(
     ingest_meta = (
         ingest_stats.as_dict() if not offline else {"stop_reason": "loaded from cache (--offline)"}
     )
-    echo(f"  {len(raw_tweets)} unique posts · ${budget.total:.4f} spent")
+    share = ingest_meta.get("ingested_share")
+    total_known = ingest_meta.get("public_post_count")
+    if share is not None and total_known:
+        echo(
+            f"  {len(raw_tweets)} unique posts of {total_known:,} public "
+            f"({share:.1%}) · ${budget.total:.4f} spent"
+        )
+    else:
+        echo(f"  {len(raw_tweets)} unique posts · ${budget.total:.4f} spent")
     echo("")
 
     if not raw_tweets:

@@ -43,12 +43,12 @@ def test_ingests_full_corpus(tmp_path):
     assert stats.unique == len(tweets)
 
 
-def test_long_hiatus_truncates_history_at_the_default_tolerance(tmp_path):
-    """A real silence longer than tolerance x window ends the walk.
+def test_long_hiatus_truncates_when_the_tolerance_is_set_low(tmp_path):
+    """The documented tradeoff of failure mode 2, still true at a low tolerance.
 
-    This is the documented tradeoff of failure mode 2: we cannot tell a lying
-    empty window from a genuinely silent one, so a 160-day hiatus at 30-day
-    windows and tolerance 3 stops ingestion. It must be recorded in
+    A lying empty window is indistinguishable from a genuinely silent one, so a
+    160-day hiatus at 30-day windows and tolerance 3 ends the walk. The probe is
+    disabled here to isolate the tolerance rule itself. It must be recorded in
     stop_reason, not silently swallowed — the report surfaces it as a caveat.
     """
     provider = FakeProvider()
@@ -60,11 +60,33 @@ def test_long_hiatus_truncates_history_at_the_default_tolerance(tmp_path):
         until=NOW,
         window_days=30,
         empty_window_tolerance=3,
+        probe_enabled=False,
         log=lambda _: None,
     )
     assert "consecutive empty windows" in stats.stop_reason
     assert 0 < len(tweets) < len(load("tweets.json")), "the recent side is still collected"
     assert stats.empty_window_ranges
+    # Phase 2.3: a truncated run must say so loudly enough for the report.
+    assert stats.stopped_on_tolerance
+    assert stats.last_date_reached
+
+
+def test_default_tolerance_crosses_the_160_day_hiatus(tmp_path):
+    """Phase 2.3: the old default of 3 truncated the corpus on a real silence.
+
+    Founders and writers go quiet for a quarter routinely, and 30-day windows at
+    tolerance 3 gives up after 90 days. The fixture's deliberate 160-day gap is
+    exactly that case, and at the new defaults the whole history is collected.
+    """
+    provider = FakeProvider()
+    client = build(provider, tmp_path)
+    tweets, stats = ingest_timeline(
+        client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
+    )
+    assert len(tweets) == len(load("tweets.json")), (
+        f"lost {len(load('tweets.json')) - len(tweets)} posts to the hiatus"
+    )
+    assert not stats.stopped_on_tolerance
 
 
 def test_uses_since_time_not_since(tmp_path):
