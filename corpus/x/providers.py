@@ -23,6 +23,7 @@ import httpx
 
 from ..redact import RedactingError
 from ..redact import redact as _redact
+from .capture import RawCapture
 
 TWITTERAPI_IO_BASE = "https://api.twitterapi.io"
 
@@ -32,6 +33,7 @@ Page = tuple[list[dict[str, Any]], str | None, bool]
 __all__ = [
     "Page",
     "ProviderError",
+    "RawCapture",
     "ScopeViolation",
     "TwitterApiIoProvider",
     "XProvider",
@@ -88,8 +90,14 @@ class TwitterApiIoProvider:
         base_url: str | None = None,
         timeout: float = 45.0,
         max_retries: int = 4,
+        capture: RawCapture | None = None,
     ) -> None:
+        self.capture = capture
         self.api_key = api_key or os.environ.get("X_API_KEY", "")
+        if capture is not None:
+            # Explicit-key construction bypasses the environment, so tell the
+            # capture directly rather than hoping os.environ agrees.
+            capture.add_secret(self.api_key)
         if not self.api_key:
             raise ProviderError(
                 "X_API_KEY is not set. Get a key at https://twitterapi.io and put it "
@@ -115,6 +123,19 @@ class TwitterApiIoProvider:
                 last_exc = exc
                 time.sleep(2**attempt)
                 continue
+            # Capture before anything reads the payload, including the status
+            # checks below: a 4xx body is often the most informative capture
+            # there is, and it is exactly what gets lost when a run aborts.
+            if self.capture is not None:
+                self.capture.record(
+                    method="GET",
+                    url=str(resp.request.url),
+                    path=path,
+                    params=params,
+                    status_code=resp.status_code,
+                    headers=dict(resp.headers),
+                    body_bytes=resp.content,
+                )
             if resp.status_code == 429 or resp.status_code >= 500:
                 # Rate limit / upstream wobble: back off and retry.
                 last_exc = ProviderError(f"{resp.status_code} from {path}: {resp.text[:200]}")

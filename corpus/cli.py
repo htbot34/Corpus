@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from .cache import Cache, DEFAULT_TTL_SECONDS
 from .models import Document, Synthesis
 from .render import render_report
 from .synthesize import synthesize
+from .x.capture import RawCapture
 from .x.client import XClient
 from .x.hydrate import hydrate
 from .x.ingest import ingest_timeline
@@ -46,6 +48,48 @@ load_dotenv()
 
 def echo(msg: str = "") -> None:
     typer.echo(msg)
+
+
+@dataclass
+class _GlobalOptions:
+    """Options that apply to every command, set by the app callback below."""
+
+    capture_raw: Path | None = None
+
+
+_GLOBALS = _GlobalOptions()
+
+
+@app.callback()
+def _main(
+    capture_raw: Path | None = typer.Option(
+        None,
+        "--capture-raw",
+        metavar="DIR",
+        help=(
+            "Dump every raw provider response to DIR verbatim, one JSON file per "
+            "call, before any normalization. For verifying the wire contract."
+        ),
+    ),
+) -> None:
+    """Global options."""
+    _GLOBALS.capture_raw = capture_raw
+
+
+def _make_capture(local: Path | None = None) -> RawCapture | None:
+    """Resolve --capture-raw from either position.
+
+    It is documented as a global flag, but `corpus run ... --capture-raw DIR`
+    reads more naturally and is what anyone actually types, so `run` accepts it
+    too. A flag that only works in one of the two obvious positions is a flag
+    people give up on.
+    """
+    directory = local or _GLOBALS.capture_raw
+    if directory is None:
+        return None
+    capture = RawCapture(directory, log=echo)
+    echo(f"  [capture] raw responses -> {capture.directory}")
+    return capture
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -85,6 +129,12 @@ def run(
     map_effort: str = typer.Option("medium", "--map-effort", help="low|medium|high|xhigh|max"),
     reduce_effort: str = typer.Option("high", "--reduce-effort"),
     cache_ttl_days: int = typer.Option(7, "--cache-ttl-days"),
+    capture_raw: Path | None = typer.Option(
+        None,
+        "--capture-raw",
+        metavar="DIR",
+        help="Dump every raw provider response to DIR verbatim, before normalization.",
+    ),
 ) -> None:
     """Ingest, hydrate, and synthesize one person's public writing."""
     handle = x.lstrip("@")
@@ -120,7 +170,7 @@ def run(
         echo(f"  loaded {len(raw_tweets)} cached raw posts")
     else:
         try:
-            provider = get_provider()
+            provider = get_provider(capture=_make_capture(capture_raw))
         except (ProviderError, NotImplementedError) as exc:
             echo(f"ERROR: {exc}")
             raise typer.Exit(code=2)

@@ -1,6 +1,10 @@
 # runtime output — regenerate with `corpus run`
 out/
 
+# raw wire captures (`--capture-raw`). Real post content and real ids; the
+# scrubbed subset that belongs in the repo lives in tests/fixtures/.
+captures/
+
 # secrets
 .env
 
