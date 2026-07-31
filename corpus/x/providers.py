@@ -16,8 +16,11 @@ above this file knows which provider is in use.
 from __future__ import annotations
 
 import os
+import random
 import time
-from typing import Any, Protocol, runtime_checkable
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import httpx
 
@@ -41,6 +44,129 @@ __all__ = [
     "PROVIDERS",
     "_redact",
 ]
+
+
+# -- retry policy ----------------------------------------------------------
+# Five attempts, full jitter, no single sleep over a minute, and the server's
+# own instruction wins whenever it gives one.
+
+MAX_ATTEMPTS = 5
+MAX_SLEEP_SECONDS = 60.0
+BASE_BACKOFF_SECONDS = 1.0
+
+# Headers a provider may use to say when to come back. Checked in this order.
+RETRY_AFTER_HEADERS = ("retry-after",)
+RATE_LIMIT_RESET_HEADERS = (
+    "x-rate-limit-reset",
+    "x-ratelimit-reset",
+    "ratelimit-reset",
+)
+
+# Phrases that mean "your balance is gone", as opposed to "slow down". A spent
+# balance does not clear by waiting, so it must fail fast with a message that
+# says what to do.
+_QUOTA_EXHAUSTED_MARKERS = (
+    "insufficient",
+    "balance",
+    "credit",
+    "quota exceeded",
+    "out of credits",
+    "payment required",
+    "top up",
+    "recharge",
+)
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff with full jitter, capped.
+
+    Full jitter (uniform over [0, backoff]) rather than a fixed 2**attempt:
+    with MAP_CONCURRENCY parallel callers, undithered backoff makes every
+    retry fire at the same instant, so the thundering herd that caused the
+    rate limit reconvenes precisely when the window reopens.
+    """
+    ceiling = min(BASE_BACKOFF_SECONDS * (2**attempt), MAX_SLEEP_SECONDS)
+    return random.uniform(0.0, ceiling)
+
+
+def _server_directed_delay(resp: httpx.Response) -> float | None:
+    """Seconds to wait according to the response, or None if it does not say.
+
+    Retry-After is either a delay in seconds or an HTTP date. Rate-limit reset
+    headers are a unix timestamp. Both shapes appear in the wild; which one
+    twitterapi.io actually sends is UNVERIFIED (docs/wire-contract.md), so all
+    of them are handled rather than guessed at.
+    """
+    for name in RETRY_AFTER_HEADERS:
+        raw = resp.headers.get(name)
+        if not raw:
+            continue
+        try:
+            return max(0.0, float(raw.strip()))
+        except ValueError:
+            pass
+        try:
+            when = parsedate_to_datetime(raw.strip())
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(tz=timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            pass
+
+    for name in RATE_LIMIT_RESET_HEADERS:
+        raw = resp.headers.get(name)
+        if not raw:
+            continue
+        try:
+            reset = float(raw.strip())
+        except ValueError:
+            continue
+        # A small number is a delta; a large one is an absolute unix time.
+        # 10^6 seconds is ~11 days as a delta and 1970 as a timestamp, so the
+        # split is unambiguous either way.
+        delta = reset if reset < 1_000_000 else reset - datetime.now(tz=timezone.utc).timestamp()
+        return max(0.0, delta)
+    return None
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """How long to wait before retrying this response.
+
+    The server's instruction wins when there is one — it knows when the window
+    actually reopens and we are guessing. Jitter is still added on top so that
+    concurrent callers handed the same Retry-After do not all wake together.
+    """
+    directed = _server_directed_delay(resp)
+    if directed is None:
+        return _backoff_delay(attempt)
+    jitter = random.uniform(0.0, min(1.0, directed * 0.1))
+    return min(directed + jitter, MAX_SLEEP_SECONDS)
+
+
+def _is_quota_exhausted(resp: httpx.Response) -> bool:
+    """Distinguish a spent balance from ordinary rate limiting."""
+    body = (resp.text or "")[:500].lower()
+    return any(marker in body for marker in _QUOTA_EXHAUSTED_MARKERS)
+
+
+def _is_retryable_transport_error(exc: Exception) -> bool:
+    """Is this transport failure worth trying again?
+
+    Timeouts and dropped connections are flakes. A proxy refusing CONNECT, or
+    an unresolvable host, will fail identically every time — retrying only adds
+    the backoff total to how long the user waits for the same error.
+    """
+    if isinstance(exc, httpx.ProxyError):
+        return False
+    if isinstance(exc, httpx.UnsupportedProtocol):
+        return False
+    if isinstance(exc, httpx.ConnectError):
+        text = str(exc).lower()
+        return not any(
+            marker in text
+            for marker in ("name or service not known", "nodename nor servname", "403")
+        )
+    return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
 
 
 class ProviderError(RedactingError):
@@ -89,10 +215,18 @@ class TwitterApiIoProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         timeout: float = 45.0,
-        max_retries: int = 4,
+        max_retries: int = MAX_ATTEMPTS,
         capture: RawCapture | None = None,
+        log: Callable[[str], None] = lambda _msg: None,
     ) -> None:
         self.capture = capture
+        # Every retry is logged with its attempt number and reason; silent
+        # retries are how a run appears to hang. Wrapped in _redact because
+        # these lines interpolate exception strings, and an httpx error carries
+        # the request URL — which is one proxy misconfiguration away from
+        # carrying the key.
+        self._log_sink = log
+        self.log = lambda msg: self._log_sink(_redact(msg))
         self.api_key = api_key or os.environ.get("X_API_KEY", "")
         if capture is not None:
             # Explicit-key construction bypasses the environment, so tell the
@@ -119,9 +253,22 @@ class TwitterApiIoProvider:
         for attempt in range(self.max_retries):
             try:
                 resp = self.client.get(path, params=params)
-            except httpx.HTTPError as exc:  # network flake
+            except httpx.HTTPError as exc:
+                # Not every transport error is a flake. A proxy policy denial,
+                # a DNS failure, or an unreachable host will fail identically
+                # five times in a row, so retrying just adds 30s to the error.
+                if not _is_retryable_transport_error(exc):
+                    raise ProviderError(
+                        f"{path}: {type(exc).__name__}: {exc}. This is not a "
+                        f"transient failure — not retrying."
+                    ) from exc
                 last_exc = exc
-                time.sleep(2**attempt)
+                delay = _backoff_delay(attempt)
+                self.log(
+                    f"  [retry {attempt + 1}/{self.max_retries}] {path}: "
+                    f"{type(exc).__name__}: {exc} — sleeping {delay:.1f}s"
+                )
+                time.sleep(delay)
                 continue
             # Capture before anything reads the payload, including the status
             # checks below: a 4xx body is often the most informative capture
@@ -137,9 +284,24 @@ class TwitterApiIoProvider:
                     body_bytes=resp.content,
                 )
             if resp.status_code == 429 or resp.status_code >= 500:
-                # Rate limit / upstream wobble: back off and retry.
+                # A 429 is not always retryable. Rate limiting clears on its
+                # own; a spent balance does not, and burning five attempts on it
+                # just delays a message the user needs immediately.
+                if resp.status_code == 429 and _is_quota_exhausted(resp):
+                    raise ProviderError(
+                        f"429 from {path}, and the response says the account "
+                        f"balance is exhausted rather than merely rate-limited. "
+                        f"Retrying will not help — top up at https://twitterapi.io. "
+                        f"Response: {resp.text[:200]}"
+                    )
                 last_exc = ProviderError(f"{resp.status_code} from {path}: {resp.text[:200]}")
-                time.sleep(2**attempt)
+                delay = _retry_delay(resp, attempt)
+                self.log(
+                    f"  [retry {attempt + 1}/{self.max_retries}] {path}: "
+                    f"HTTP {resp.status_code} — sleeping {delay:.1f}s"
+                    + (" (server-directed)" if _server_directed_delay(resp) is not None else "")
+                )
+                time.sleep(delay)
                 continue
             if resp.status_code == 401 or resp.status_code == 403:
                 raise ProviderError(

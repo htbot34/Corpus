@@ -203,7 +203,7 @@ def run(
         echo(f"  loaded {len(raw_tweets)} cached raw posts")
     else:
         try:
-            provider = get_provider(capture=_make_capture(capture_raw))
+            provider = get_provider(capture=_make_capture(capture_raw), log=echo)
         except (ProviderError, NotImplementedError) as exc:
             echo(f"ERROR: {exc}")
             raise typer.Exit(code=2)
