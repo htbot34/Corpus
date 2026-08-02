@@ -38,6 +38,7 @@ from .manifest import RunManifest
 from .models import Document, Synthesis
 from .render import render_report
 from .synthesize import MAP_MODEL, REDUCE_MODEL, synthesize
+from .tiers import THIN_BELOW
 from .x.capture import RawCapture
 from .x.client import XClient
 from .x.hydrate import hydrate
@@ -345,6 +346,20 @@ def run(
         echo(f"    total:                  ~${x_cost + llm_cost:.3f} of ${budget_limit:.2f} budget")
         if x_cost + llm_cost > budget_limit:
             warn("the estimate exceeds the budget; the run will stop early")
+        if target and target < THIN_BELOW and not skip_synthesis:
+            echo("")
+            warn(
+                f"~{target} posts is under the {THIN_BELOW}-document floor, so this will "
+                "be a THIN corpus: inferred positions, blind spots, and view changes are "
+                "all suppressed and the report shows stated positions only."
+            )
+            echo("  Secondary sources merge into the same corpus and cost nothing —")
+            echo("  they are plain HTTP, not a metered API:")
+            echo(f"    corpus run --x {handle} --substack DOMAIN")
+            echo(f"    corpus run --x {handle} --rss URL          # repeatable")
+            echo(f"    corpus run --x {handle} --url URL          # repeatable")
+            echo("  Or reach further back: raise --max-posts, drop --since, or raise")
+            echo("  --empty-window-tolerance.")
         echo("")
 
         if dry_run:
@@ -543,6 +558,7 @@ def run(
         run_meta["corrected_counts"] = result.corrected_counts
         run_meta["filter"] = result.filter_stats.as_dict() if result.filter_stats else {}
         run_meta["analyzed_documents"] = result.analyzed_documents
+        run_meta["corpus_tier"] = result.tier.name if result.tier else ""
         run_meta["budget_stopped"] = budget.stopped
         if synthesis is not None:
             _write_json(out_dir / "synthesis.json", synthesis.model_dump())
@@ -813,6 +829,7 @@ def resynth(
         "structured_output": result.structured_output,
         "filter": result.filter_stats.as_dict() if result.filter_stats else {},
         "analyzed_documents": result.analyzed_documents,
+        "corpus_tier": result.tier.name if result.tier else "",
         "budget_stopped": budget.stopped,
     }
 

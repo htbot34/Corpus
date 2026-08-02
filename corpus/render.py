@@ -22,6 +22,7 @@ from typing import Any
 
 from .models import Document, Synthesis
 from .synthesize import EVIDENCE_CAP
+from .tiers import THIN_BELOW, THIN_REMEDY, TierRules, classify_corpus
 
 ROLE_LABELS = {
     "load_bearing": "load-bearing",
@@ -49,6 +50,28 @@ def _cite(ids: list[str], links: dict[str, Document]) -> str:
     return ", ".join(out) if out else "_no source_"
 
 
+def _tier_for(synthesis: Synthesis | None, run_meta: dict[str, Any]) -> TierRules | None:
+    """The tier this report was produced under.
+
+    `run_meta` is authoritative. `coverage.total_documents` is the fallback,
+    because `--render-only` can meet a directory whose run_meta.json is missing
+    — and that field holds the same post-filter count Python classified on, so
+    the fallback reproduces the original tier rather than guessing at one.
+    """
+    analyzed = run_meta.get("analyzed_documents")
+    if analyzed is None and synthesis is not None:
+        analyzed = synthesis.coverage.total_documents
+    if not analyzed:
+        return None
+    rules = classify_corpus(int(analyzed))
+    recorded = run_meta.get("corpus_tier")
+    if recorded and recorded != rules.name:
+        # Only reachable if run_meta and coverage disagree, which means one of
+        # them was edited. Trust what the run recorded.
+        return None
+    return rules
+
+
 def _callout(lines: list[str]) -> str:
     return "\n".join(f"> {line}" for line in lines)
 
@@ -73,18 +96,48 @@ def render_report(
 
     # ---- coverage caveats, up top where they cannot be missed -------------
     caveats: list[str] = ["**Coverage and caveats**", ""]
+    tier = _tier_for(synthesis, run_meta)
     cov = synthesis.coverage if synthesis else None
     if cov:
         caveats.append(f"- Date range: {cov.date_range or signals.get('date_range', 'unknown')}")
         caveats.append(
             f"- Documents analyzed: {cov.total_documents or len(docs)} of {len(docs)} in corpus"
         )
-        caveats.append(f"- Model-assessed confidence: **{cov.confidence}**")
+        # At a tier that forces confidence, calling it "model-assessed" would be
+        # a lie: the model's own assessment is the thing that was overridden.
+        # Checked against the value rather than assumed from the tier, because
+        # `--render-only` can meet a synthesis.json that never went through
+        # `enforce_signal_counts` — and a label that claims code set a number
+        # code did not set is the same kind of lie in the other direction.
+        forced = (
+            tier is not None
+            and tier.forced_confidence is not None
+            and cov.confidence == tier.forced_confidence
+        )
+        label = (
+            "Confidence (set in code, not by the model)" if forced else "Model-assessed confidence"
+        )
+        caveats.append(f"- {label}: **{cov.confidence}**")
         for gap in cov.gaps:
             caveats.append(f"- Gap: {gap}")
     else:
         caveats.append(f"- Date range: {signals.get('date_range', 'unknown')}")
         caveats.append(f"- Documents ingested: {len(docs)}")
+
+    if tier is not None:
+        if tier.suppresses_inference:
+            caveats.append(
+                f"- **Corpus tier: {tier.name} ({tier.document_count} documents). "
+                "Inference is switched off** — see the note below the summary."
+            )
+        elif tier.min_chain_documents > 1:
+            caveats.append(
+                f"- Corpus tier: {tier.name} ({tier.document_count} documents). Every "
+                f"inference below rests on at least {tier.min_chain_documents} distinct "
+                "documents, a stricter bar than a larger corpus would need."
+            )
+        else:
+            caveats.append(f"- Corpus tier: {tier.name} ({tier.document_count} documents).")
 
     filt = run_meta.get("filter") or {}
     if filt.get("dropped"):
@@ -223,6 +276,31 @@ def render_report(
     out.append(synthesis.summary)
     out.append("")
 
+    if tier is not None and tier.suppresses_inference:
+        out.append("## This corpus is too small for inference")
+        out.append("")
+        out.append(
+            f"Only **{tier.document_count} documents** survived filtering, under the "
+            f"{THIN_BELOW}-document floor. At that size there is no way to tell a "
+            "position someone holds from a thing they happened to say once, so "
+            "everything inferential has been switched off rather than guessed at:"
+        )
+        out.append("")
+        out.append("- **Inferred positions** on every axis are suppressed. Only `stated` is shown.")
+        out.append("- **Blind spots** are empty — a blind spot is a pattern, and there is no")
+        out.append("  run of behaviour here to establish one.")
+        out.append("- **What moved** is empty — a change of view needs enough before and after")
+        out.append("  to tell them apart.")
+        out.append("- **Confidence** is set to `low` in code, not assessed by the model.")
+        out.append("")
+        out.append(
+            "This is a limit of the corpus, not of the subject. What is below is still "
+            "sourced and still true; there is simply less of it."
+        )
+        out.append("")
+        out.append(f"**To get the full analysis:** {THIN_REMEDY}")
+        out.append("")
+
     # ---- core model, the centrepiece -------------------------------------
     out.append("## The generating model")
     out.append("")
@@ -266,7 +344,13 @@ def render_report(
         if value:
             out.append(f"**{label}.** {value}")
             out.append("")
-    if reasoning.blind_spots:
+    if tier is not None and not tier.allow_blind_spots:
+        out.append(
+            f"_Blind spots not assessed: {tier.document_count} documents cannot establish "
+            "a pattern someone does not see in themselves._"
+        )
+        out.append("")
+    elif reasoning.blind_spots:
         out.append("**Blind spots** _(inferred — the basis is the evidence)_")
         out.append("")
         for spot in reasoning.blind_spots:
@@ -312,7 +396,13 @@ def render_report(
     out.append("## What moved")
     out.append("")
     if not synthesis.evolution:
-        out.append("_No view changed inside this corpus. Not manufactured._")
+        if tier is not None and not tier.allow_evolution:
+            out.append(
+                f"_Not assessed: {tier.document_count} documents cannot separate a before "
+                "from an after. This is the corpus size, not a finding about the subject._"
+            )
+        else:
+            out.append("_No view changed inside this corpus. Not manufactured._")
         out.append("")
     for evo in synthesis.evolution:
         out.append(f"### {evo.topic}")
