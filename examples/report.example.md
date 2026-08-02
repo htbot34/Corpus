@@ -15,7 +15,7 @@ Regenerate a real one with:  corpus run --x <handle>
 
 # @testsubject (STUB MODEL OUTPUT — not real analysis) — how they think
 
-_Generated 2026-08-02 22:55 UTC · 16 documents · 2024-01-08 to 2024-08-16_
+_Generated 2026-08-02 22:58 UTC · 16 documents · 2024-01-08 to 2024-08-16_
 
 > **Coverage and caveats**
 > 

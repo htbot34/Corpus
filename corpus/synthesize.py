@@ -517,7 +517,7 @@ async def run_map(
     chunks: list[list[Document]],
     budget: Budget,
     *,
-    axes: list[AxisSpec],
+    axes: list[AxisSpec] | None = None,
     model: str = MAP_MODEL,
     effort: str = "medium",
     completed: dict[int, dict[str, Any]] | None = None,
@@ -534,7 +534,7 @@ async def run_map(
     semaphore = asyncio.Semaphore(MAP_CONCURRENCY)
     results: list[dict[str, Any] | None] = [None] * len(chunks)
     failures = 0
-    system_prompt = build_map_system(axes)
+    system_prompt = build_map_system(axes if axes is not None else load_axes())
     already = completed or {}
     for index, payload in already.items():
         if 0 <= index < len(chunks):
@@ -674,14 +674,14 @@ async def run_reduce(
     highlights: list[Document],
     budget: Budget,
     *,
-    axes: list[AxisSpec],
+    axes: list[AxisSpec] | None = None,
     model: str = REDUCE_MODEL,
     effort: str = "high",
     log: Callable[[str], None] = print,
 ) -> tuple[Synthesis | None, str, str, bool]:
     """Returns (synthesis, raw_output, error, used_structured_output)."""
     corpus = _corpus_block(map_outputs, signals, highlights)
-    system_prompt = build_reduce_system(axes)
+    system_prompt = build_reduce_system(axes if axes is not None else load_axes())
     attempt_note = ""
     structured = True
 
@@ -1108,9 +1108,7 @@ async def synthesize(
             run.dropped_findings = prune_unsourced(synthesis, valid_ids, selected_axes)
             for note in run.dropped_findings:
                 log(f"  [unsourced] {note}")
-            run.corrected_counts = enforce_signal_counts(
-                synthesis, signals, run.analyzed_documents
-            )
+            run.corrected_counts = enforce_signal_counts(synthesis, signals, run.analyzed_documents)
             for note in run.corrected_counts:
                 log(f"  [counts] {note}")
             run.synthesis = synthesis

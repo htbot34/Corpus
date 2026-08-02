@@ -23,6 +23,7 @@ from typing import Any
 import typer
 from dotenv import load_dotenv
 
+from .axes import AxisError, select_axes
 from .budget import (
     BUDGET_MODES,
     STRICT,
@@ -34,7 +35,6 @@ from .budget import (
 from .cache import DEFAULT_TTL_SECONDS, Cache
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
-from .axes import AxisError, select_axes
 from .models import Document, Synthesis
 from .render import render_report
 from .synthesize import MAP_MODEL, REDUCE_MODEL, synthesize

@@ -189,8 +189,15 @@ def test_cut_sections_are_gone(client):
         budget_lines=[],
         run_meta={},
     )
-    for heading in ("## Themes", "## Hooks", "## Performance gap", "## Network",
-                    "## Reading diet", "## Voice", "## Positions"):
+    for heading in (
+        "## Themes",
+        "## Hooks",
+        "## Performance gap",
+        "## Network",
+        "## Reading diet",
+        "## Voice",
+        "## Positions",
+    ):
         assert heading not in report
 
 

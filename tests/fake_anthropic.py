@@ -130,8 +130,7 @@ class FakeAnthropic:
                 "core_model": [
                     {
                         "belief": (
-                            "Process quality is measurable and most people "
-                            "refuse to measure it"
+                            "Process quality is measurable and most people refuse to measure it"
                         ),
                         "role": "load_bearing",
                         "generates": [

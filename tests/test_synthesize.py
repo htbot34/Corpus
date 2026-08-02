@@ -101,9 +101,7 @@ def test_chunks_are_chronological_and_bounded():
         for i in range(60)
     ]
     for i, d in enumerate(docs):
-        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(
-            day=1 + (i % 28)
-        )
+        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(day=1 + (i % 28))
     chunks = chunk_documents(docs)
     assert len(chunks) > 1
     flat = [d for c in chunks for d in c]
@@ -200,9 +198,7 @@ def test_prune_drops_beliefs_citing_ids_not_in_the_corpus():
 def test_prune_drops_reasoning_moves_with_a_bogus_example_id():
     synthesis = fresh_synthesis()
     prune_unsourced(synthesis, {"111", "222"}, AXES)
-    assert [m.move for m in synthesis.reasoning.moves] == [
-        "concedes the strongest objection first"
-    ]
+    assert [m.move for m in synthesis.reasoning.moves] == ["concedes the strongest objection first"]
 
 
 def test_everything_is_dropped_when_nothing_is_sourceable():
@@ -306,9 +302,7 @@ def test_every_requested_axis_appears_even_if_the_model_forgot_it():
 
 def test_axes_outside_the_requested_set_are_dropped():
     synthesis = fresh_synthesis()
-    synthesis.axes.append(
-        Axis(axis="astrology", signal="strong", stated="x", evidence_ids=["111"])
-    )
+    synthesis.axes.append(Axis(axis="astrology", signal="strong", stated="x", evidence_ids=["111"]))
     notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
     assert "astrology" not in [a.axis for a in synthesis.axes]
     assert any("not among the requested axes" in n for n in notes)
@@ -374,9 +368,7 @@ def test_select_highlights_dedupes_and_orders():
 
 def run_synth(client, docs, signals, budget, **kw):
     kw.setdefault("axes", AXES)
-    return asyncio.run(
-        synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw)
-    )
+    return asyncio.run(synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw))
 
 
 def test_end_to_end_map_reduce(client, cache):

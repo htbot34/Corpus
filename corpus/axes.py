@@ -87,8 +87,7 @@ def select_axes(selection: str | None, path: Path | None = None) -> list[AxisSpe
 
     if unknown:
         raise AxisError(
-            f"unknown axis {', '.join(repr(u) for u in unknown)}. "
-            f"Valid axes: {', '.join(by_name)}"
+            f"unknown axis {', '.join(repr(u) for u in unknown)}. Valid axes: {', '.join(by_name)}"
         )
     if not chosen:
         raise AxisError("--axes was given but selected nothing")

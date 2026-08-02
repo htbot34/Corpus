@@ -240,8 +240,7 @@ def render_report(
         out.append(f"### {belief.belief}")
         out.append("")
         out.append(
-            f"_{ROLE_LABELS.get(belief.role, belief.role)}_ · "
-            f"{_cite(belief.evidence_ids, links)}"
+            f"_{ROLE_LABELS.get(belief.role, belief.role)}_ · {_cite(belief.evidence_ids, links)}"
         )
         out.append("")
         for downstream in belief.generates:
