@@ -1,113 +1,122 @@
 <!--
 GENERATED EXAMPLE — the synthesis content below came from a STUB model client
 (tests/fake_anthropic.py), not from a real Anthropic call. It exists to show the
-finished report shape: caveat callout, ranked themes, hyperlinked claims,
-computed-signals appendix, spend footer.
+finished report shape: caveat callout, the generating model, the reasoning
+machinery, the two inference tiers held apart, no-signal axes reported rather
+than hidden, computed-signals appendix, spend footer.
 
 Everything OUTSIDE the model-authored fields is real: the corpus, the signals,
-the hydration stats, the id-checking, and the count corrections all ran through
-the actual pipeline over tests/fixtures/.
+the hydration stats, the low-signal filter, the id-checking, the inference-chain
+enforcement, and the count corrections all ran through the actual pipeline over
+tests/fixtures/.
 
 Regenerate a real one with:  corpus run --x <handle>
 -->
 
-# @testsubject (STUB MODEL OUTPUT — not real analysis) — corpus synthesis
+# @testsubject (STUB MODEL OUTPUT — not real analysis) — how they think
 
-_Generated 2026-07-31 19:40 UTC · 16 documents · 2024-01-08 to 2024-08-16_
+_Generated 2026-08-02 22:55 UTC · 16 documents · 2024-01-08 to 2024-08-16_
 
 > **Coverage and caveats**
 > 
 > - Date range: 2024-01-08 to 2024-08-16
-> - Documents synthesized: 16
-> - Kinds included: original, thread, reply, quote
+> - Documents analyzed: 15 of 16 in corpus
 > - Model-assessed confidence: **medium**
-> - Ingestion stopped because: loaded from cache (--offline)
+> - Ingestion stopped because: fixture corpus (offline)
 > - 1 reply parents / quote targets were deleted or unavailable; those documents carry `[unavailable]` context.
-> - Dropped as unsourced: theme 'invented theme' dropped: no valid evidence ids
+> - Dropped in enforcement: core_model 'invented belief' dropped: no valid evidence ids
+> - Dropped in enforcement: reasoning move 'invented move' dropped: example id not in corpus
+> - Dropped in enforcement: blind spot 'hand-waved blind spot' dropped: basis is not a chain
+> - Dropped in enforcement: axis 'epistemics': inference dropped, reasoning was not a chain
+> - Dropped in enforcement: axis 'politics_and_ideology' was not returned; recorded as no signal
+> - …and 2 further finding(s) dropped; see run metadata.
+> - 1 model-stated count(s) were overwritten with the values computed in Python; signals.json is authoritative.
 
 ## Summary
 
-One. Two. Three.
+One. Two. Three. Four.
 
-## Themes
+## The generating model
 
-### hiring process design — 40.0% of corpus (6 posts, declining)
+The beliefs below are ordered by how much else hangs off them. `generates` is what follows if the belief is held.
 
-First seen 2024-01-08 · last seen 2024-07-01
+### Process quality is measurable and most people refuse to measure it
 
-Evidence: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
+_load-bearing_ · [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
-## Positions
+- → hostility to interview puzzles
+- → preference for work trials
 
-- **Hire when the pain is specific, not ahead of the curve**
-  - Confidence: `stated` · Source: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
+## How they reason
 
-## Evolution
+**Moves they make**
+
+- concedes the strongest objection first — [2024-08-16](https://x.com/testsubject/status/1700000000000000170)
+
+**What counts as evidence.** Numbers they gathered themselves.
+
+**Under disagreement.** Grants the point, then narrows it.
+
+**What makes them update.** Someone shows them a measurement they cannot dispute.
+
+**Blind spots** _(inferred — the basis is the evidence)_
+
+- **Treats their own sample as representative**
+  - Basis: They twice answer institutional-authority claims with a counterexample from their own hiring data rather than disputing the study, which places the burden of proof on the institution rather than on the dissenter.
+  - Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
+
+## Where they land
+
+Every requested axis appears here. `no signal` means the corpus contains nothing bearing on it — that is a finding, not a gap in the analysis.
+
+### institutions and authority — strong signal
+
+**Stated.** Credentials are a lazy proxy for competence.
+
+**Inferred** _(medium confidence)_**.** They treat institutional legitimacy as earned per-claim.
+
+_Chain:_ They twice answer institutional-authority claims with a counterexample from their own hiring data rather than disputing the study, which places the burden of proof on the institution rather than on the dissenter.
+
+Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
+
+### epistemics — weak signal
+
+**Stated.** Prefers measurement to intuition.
+
+Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
+
+**No signal:** politics and ideology, defense intel natsec, technology and ai, economics and markets. Nothing in this corpus locates them on these axes.
+
+## What moved
 
 ### work trials
 
 - **Earlier:** two days is enough
 - **Later:** two days measures sprinting
 - **Inflection:** 2024-06-15
-- Evidence: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
+- Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
-## Performance gap
+## Unresolved
 
-- **Posts most about:** hiring
-- **Gets most traction on:** RTO criticism
-- **Interpretation:** The audience wants the fight, not the method.
-- Evidence: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
+- How to price work trials fairly _(returned to 2×)_ — [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
-## How they argue
+## How to misread this
 
-- concedes the strongest objection first
-
-**Under disagreement:** Grants the point, then narrows it.
-
-Evidence: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
-
-## Network
-
-| Handle | Exchanges | Relationship | Evidence |
-| --- | ---: | --- | --- |
-| [@criticfriend](https://x.com/criticfriend) | 2 | sparring partner | [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110) |
-
-## Reading diet
-
-| Domain | Shares | What it suggests |
-| --- | ---: | --- |
-| arxiv.org | 2 | reads papers |
-
-## Open loops
-
-- How to price work trials fairly _(returned to 2×)_ — [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
-
-## Voice
-
-**Register:** declarative, numbers-forward
-
-**Hobbyhorses:** rubrics
-
-**Tells:** 'completely backwards'
-
-## Hooks
-
-- **"You said two-day trials measure sprinting, not judgment"**
-  - Anchor: https://x.com/testsubject/status/1700000000000000160
-  - Why: quotes their own reversal
-
-## Avoid
-
-- **hiring ahead of the curve** — called it completely backwards [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2024-01-11](https://x.com/testsubject/status/1700000000000000110)
+- **That they are anti-credential in general**
+  - Why that is wrong: They defend credentials where the measurement is real.
+  - Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
 ---
 
 ## Computed signals (Python, not the model)
 
+_Inputs to the analysis above, not findings in themselves. Every number here is arithmetic done in code._
+
 - Cadence: 2.0 posts/month mean, 0.0 median across 3 active months (5 silent)
 - Longest hiatus: 160 days (2024-01-31 → 2024-07-09); 2 gaps of 14+ days total
 - Kind mix: original 50%, reply 31%, media_only 6%, quote 6%, thread 6%
-- Register: reply 33.2 words/post; original 22.5 words/post; media_only 1.0 words/post; quote 25.0 words/post; thread 125.0 words/post
+- Most-replied handles: @criticfriend (2), @ghostaccount (1), @bigcoexec (1), @engmanager (1), @vcpartner (1)
+- Most-linked domains: arxiv.org (2), increment.com (1), nature.com (1)
 - Vocabulary drift (TF-IDF against their own corpus):
   - **2024-H1**: hiring
   - **2024-H2**: evaluation
@@ -117,8 +126,8 @@ Evidence: [2024-01-08](https://x.com/testsubject/status/1700000000000000101), [2
 ## Spend
 
 ```
-X data (twitterapi.io): $0.0000
-Anthropic tokens:       $0.0175
+X data (twitterapi.io): $0.0024
+Anthropic tokens:       $0.0181
 --------------------------------------
-Total:                  $0.0175 of $10.00 budget
+Total:                  $0.0205 of $10.00 budget
 ```

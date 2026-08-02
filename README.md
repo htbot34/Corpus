@@ -1,8 +1,12 @@
 # corpus
 
 Ingests a person's entire public X history, hydrates it into readable context, and
-produces a sourced synthesis of what they actually think, how they argue, and how
-their views have moved.
+reconstructs **how they think** — the load-bearing beliefs that generate their
+positions, the moves they make when they argue, and where they land on worldview
+axes even when they never say so directly.
+
+It is not a topic summary. A report that tells you what someone posts about is a
+report you could have written from their profile page.
 
 X is the primary and usually only source. Substack, RSS, and single web pages are
 optional bolt-ons that merge into the same corpus, never the focus.
@@ -30,7 +34,7 @@ cp .env.example .env    # then fill in the two keys
 | `X_API_KEY` | yes | twitterapi.io key, sent as the `X-API-Key` header. New keys get ~$1 trial credit, enough for ~6,000 posts. |
 | `X_PROVIDER` | no | Provider selector. Defaults to `twitterapi_io`. |
 | `X_BASE_URL` | no | Override the provider base URL (proxy, testing). |
-| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-sonnet-5`) and reduce (`claude-opus-5`) passes. |
+| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes. |
 | `CORPUS_CACHE_DB` | no | SQLite cache path. Defaults to `~/.corpus/cache.db`. |
 
 ---
@@ -42,8 +46,10 @@ corpus run --x paulg
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
 corpus run --x someone --dry-run
 corpus run --x someone --also-substack example.com
-corpus run --x paulg --resume out/paulg/2026-07-31   # pick up where a dead run stopped
-corpus resynth out/paulg/2026-07-31     # re-run synthesis on cached corpus, no fetch
+corpus run --x paulg --axes politics_and_ideology,defense_intel_natsec
+corpus run --x paulg --resume out/paulg/2026-08-02   # pick up where a dead run stopped
+corpus resynth out/paulg/2026-08-02                  # re-synthesize, no X fetch
+corpus resynth out/paulg/2026-08-02 --render-only    # re-render only, zero API calls
 corpus cache stats
 corpus cache clear --keep-permanent
 corpus cache vacuum
@@ -68,7 +74,11 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--refresh` / `--offline` | off | Bypass the cache / run from cache only. |
 | `--dry-run` | off | Print the estimate and stop before any paid fetch. |
 | `--resume PATH` | unset | Continue a previous run from its `run.json`. |
-| `--map-effort` / `--reduce-effort` | medium / high | Map is extraction, not deep reasoning, so it runs a notch lower. |
+| `--axes a,b,c` | all | Which worldview axes to place the subject on. Names come from `corpus/profiles.yaml`; an unknown name is an error, not a silent drop. |
+| `--map-model` / `--reduce-model` | haiku-4.5 / opus-5 | Map is extraction; reduce is judgment. Do not downgrade reduce. |
+| `--map-effort` / `--reduce-effort` | medium / high | Only sent to models that implement `effort` — Haiku rejects it outright. |
+| `--no-filter` | off | Keep low-signal documents (bare acks, link-only posts, short fragments). |
+| `--render-only` | off | `resynth` only. Rebuild `report.md` from an existing `synthesis.json`. No API calls, no spend. |
 | `--log-format` | text | `text` or `json` (one object per line). |
 | `--verbose` / `--quiet` | off | Add phase and elapsed time / warnings and errors only. |
 | `--capture-raw DIR` | unset | Dump every raw provider response verbatim, before normalization. |
@@ -114,8 +124,9 @@ Two independent meters: X data and Anthropic tokens. Both are tracked per call i
 | Tweet read (twitterapi.io) | $0.15 / 1,000 |
 | Profile read (twitterapi.io) | $0.18 / 1,000 |
 | Minimum charge per request | $0.00015 |
+| `claude-haiku-4-5-20251001` (map) | $1 / $5 per MTok |
+| `claude-opus-5` (reduce) | $5 / $25 per MTok |
 | `claude-sonnet-5` | $2 / $10 per MTok (introductory, through 2026-08-31; $3 / $15 after) |
-| `claude-opus-5` | $5 / $25 per MTok |
 | Prompt cache write / read | 1.25× / 0.10× the input rate |
 
 Sonnet 5 introductory pricing is date-aware in code, so the printed spend matches the
@@ -124,20 +135,39 @@ invoice instead of being conveniently vague.
 ### Worked examples
 
 Assumes ~50% of posts are replies or quotes needing one extra read to hydrate the
-parent, ~120 tokens per document, ~30k-token map chunks, and one reduce call.
+parent, ~120 tokens per document, ~30k-token map chunks, and one reduce call whose
+output allowance covers thinking (the reduce model thinks by default, and thinking bills
+as output). These are the numbers `--dry-run` prints, computed from the price table above.
 
 | Posts | Tweet reads | X data | Map chunks | Anthropic | **Total** |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 500 | 750 | $0.11 | 2 | $0.33 | **~$0.44** |
-| 3,000 | 4,500 | $0.68 | 12 | $1.16 | **~$1.83** |
-| 10,000 | 15,000 | $2.25 | 40 | $3.47 | **~$5.72** |
+| 500 | 750 | $0.11 | 2 | $0.36 | **~$0.47** |
+| 1,000 | 1,500 | $0.23 | 4 | $0.45 | **~$0.67** |
+| 3,000 | 4,500 | $0.68 | 12 | $0.81 | **~$1.48** |
+| 10,000 | 15,000 | $2.25 | 40 | $2.07 | **~$4.32** |
 
-Two things move these numbers most: hydration ratio (a reply-heavy account costs more
-because every reply needs its parent) and `--reduce-effort` (the reduce call is a small
-fraction of tokens but the most expensive per token).
+This estimate is not the reservation. `--dry-run` answers "what will this run cost";
+`Budget.reserve` answers "can this specific call be covered right now" and charges the
+full `max_tokens` because a reservation that guesses low is not a ceiling. The reduce
+call therefore reserves ~$0.80 regardless of what it ends up using, which is why budgets
+under about a dollar refuse synthesis in strict mode.
+
+Three things move these numbers most: hydration ratio (a reply-heavy account costs more
+because every reply needs its parent), `--reduce-effort` (the reduce call is a small
+fraction of tokens but the most expensive per token), and the map model — map is the
+bulk of the tokens, which is why it runs on Haiku.
 
 The default `--budget 10.00` comfortably covers a 10,000-post run. `--dry-run` prints
 the estimate for a specific target after one profile lookup (~$0.0002).
+
+### Where the cost was taken out
+
+- **Constrained decoding restored.** The reduce schema is 3,251 bytes, under the grammar
+  limit the old 4,826-byte schema blew through — see the third regression below. The
+  fallback stays, because the limit is not ours to control.
+- **Haiku on map.** Map is extraction, and extraction does not need judgment.
+- **Low-signal filter.** Documents that cannot carry an argument never reach a billed
+  token.
 
 ### The budget is enforced before the call, not after
 
@@ -216,22 +246,35 @@ performance issues. Simplify your tool schemas.
 ```
 
 Bisected field by field, 9 of the reduce schema's 13 top-level fields (3,522 bytes) are
-accepted and 10 (3,809) are not. The full schema is 4,826. The map schema, at 951 bytes,
-is unaffected — which is why the map stage always worked and only the reduce failed.
+accepted and 10 (3,809) are not. The schema at the time was 4,826. The map schema, at
+951 bytes, is unaffected — which is why the map stage always worked and only the reduce
+failed.
 
-The reduce now asks for constrained decoding and, if the schema is refused, retries
-without it and puts the schema in the prompt instead. That retry is free, because the API
-refuses the schema before generating anything, so it does not consume one of the two
-billed validation attempts. The real guarantee was never the grammar: every reduce output
-is validated against the pydantic model regardless, and a failure retries once with the
+The reduce asks for constrained decoding and, if the schema is refused, retries without
+it and puts the schema in the prompt instead. That retry is free, because the API refuses
+the schema before generating anything, so it does not consume one of the two billed
+validation attempts. The real guarantee was never the grammar: every reduce output is
+validated against the pydantic model regardless, and a failure retries once with the
 error appended. When the fallback fires, the run says so and `report.md` records it.
+
+**The cognition-first schema is 3,251 bytes and fits**, so constrained decoding is the
+normal path again and the grammar physically cannot emit the markdown fences that used to
+cost a full billed generation. `tests/test_schema_size.py` fails the build at 3,400 so a
+future field addition breaks a test rather than quietly costing money in production.
+
+The fallback stays anyway, and this is the interesting part: it is now the path nothing
+in normal operation exercises. The size limit belongs to the provider, and the next field
+added could put us back over it — in production, after ingestion has been paid for. Its
+tests in `tests/test_synthesize.py` are therefore the only thing keeping it honest, and
+`_strip_code_fences()` runs before every validation regardless, because a model asked for
+JSON in a prompt is exactly the one that wraps it in backticks.
 
 ---
 
 ## Pipeline
 
 ```
-ingest → hydrate → signals → map → reduce → render
+ingest → hydrate → signals → filter → map → reduce → render
 ```
 
 **Hydration is the quality lever**, and the reason this is not a profile summarizer:
@@ -259,18 +302,65 @@ per-kind engagement baselines and outliers, register split, and TF-IDF vocabular
 per 6-month bucket against the person's own corpus. It is injected into the reduce
 prompt as ground truth.
 
-### The synthesis rules are enforced, not just requested
+### The low-signal filter is structural, never topical
 
-The system prompt states the rules; `synthesize.py` then makes two of them true in code:
+Before synthesis, pure Python drops documents that cannot carry cognition: bare
+acknowledgements, link-only posts with no commentary, and very short standalone fragments
+with no parent. A short post *with* context is never dropped — "Completely backwards." is
+two words and, given its parent, one of the most revealing documents in any corpus.
+Threads are never dropped.
+
+Nothing is ever filtered by subject matter. That someone treats hobby minutiae with the
+same analytic seriousness as politics is itself a cognitive tell, and a topic filter would
+delete the evidence for it. The drop count and reasons land in the report's coverage
+block; `--no-filter` disables it.
+
+### Two inference tiers, always held apart
+
+The report makes claims the subject never made — that is the point — but it never blurs
+them together.
+
+- **`stated`** is what they actually said. It traces to real document ids or it is
+  dropped, the same rule the tool has always enforced.
+- **`inferred`** is what follows from it. It requires a `reasoning` chain from specific
+  posts to the conclusion, plus a `confidence` value.
+
+**The reasoning is the evidence for the inference.** An inferred conclusion whose chain is
+missing, too short to be a chain, or a restatement of its own conclusion is deleted in
+`prune_unsourced()`, exactly as an unsourced claim is — and the stated tier survives on
+its own sourcing rather than being collateral damage.
+
+### `signal: "none"` is a result, not a gap
+
+Every requested axis appears in the report. An axis the corpus cannot speak to reports
+`no signal` and cites nothing; if the model writes content there anyway, the content is
+cleared and the clearing is logged. An axis claiming signal without valid evidence ids is
+demoted to `none`.
+
+A confabulated axis is worse than an absent one, because it is indistinguishable from a
+real finding.
+
+### The rest of the rules are enforced, not just requested
+
+The system prompt states the rules; `synthesize.py` then makes them true in code:
 
 - **Every `evidence_ids` entry is checked against the real corpus.** Findings citing an
   id that does not exist are dropped, and the drops appear in the report.
+- **Evidence is capped at three ids per claim**, so the report reads as analysis with
+  citations rather than a citation dump with commentary.
 - **Every count with a counterpart in `signals.json` is overwritten** with the computed
-  value. Theme post counts are left alone — those are inherently model-assigned.
+  value.
 
-Reduce output is validated against a pydantic model. On failure it retries once with
-the validation error appended; on a second failure it dumps the raw output to
-`reduce_raw_output.txt` and exits non-zero.
+Reduce output has its markdown fences stripped, then is validated against a pydantic
+model. On failure it retries once with the validation error appended; on a second failure
+it dumps the raw output to `reduce_raw_output.txt` and exits non-zero.
+
+### Configurable axes
+
+`corpus/profiles.yaml` defines the worldview axes and, for each, a `probe` injected
+verbatim into the reduce prompt. `--axes politics_and_ideology,defense_intel_natsec`
+restricts a run. Nothing is hardcoded, and an unknown axis name is an error listing the
+valid ones — a typo must not silently produce a report that looks complete.
 
 ---
 
@@ -280,13 +370,21 @@ Written to `out/{handle}/{YYYY-MM-DD}/`:
 
 | File | Contents |
 | --- | --- |
-| `report.md` | Themes ranked by corpus share, every claim hyperlinked to its source post, coverage caveats in a callout at the top, spend summary at the bottom. |
+| `report.md` | The generating model, the reasoning machinery, the axes (including the silent ones), what moved, what is unresolved, and how to misread it. Every claim hyperlinked to its source post, coverage caveats in a callout at the top, spend summary at the bottom. |
 | `synthesis.json` | The validated schema, for piping into downstream drafting. |
 | `corpus.json` | Every hydrated `Document`. |
 | `signals.json` | The computed metrics. |
 
+Plus `run.json` (resume state) and `run_meta.json` (what the enforcement dropped and why).
+
 `corpus.json` and `signals.json` are written **before** synthesis runs, so a synthesis
 failure never costs you the data you paid for.
+
+`corpus resynth <dir> --render-only` rebuilds `report.md` from an existing
+`synthesis.json` with **zero API calls**, so iterating on the report's shape is free. A
+`synthesis.json` written by the pre-cognition schema cannot be re-rendered — it lacks
+fields the new report needs — and gets a migration message pointing at plain
+`corpus resynth`, which regenerates it from the unchanged `corpus.json` with no X spend.
 
 ---
 
@@ -323,7 +421,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-394 tests, all offline. The suite covers both provider regressions (via
+430 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so

@@ -388,3 +388,129 @@ error" is weak evidence where every reader has a fallback:
 - The deleted-or-protected-parent response is still unverified. (The batch
   ceiling was measured on 2026-08-02: 50.)
 - Estimator accuracy has no live data yet.
+
+---
+
+## 2026-08-02 — Cognition-first report
+
+Layered on top of everything above; none of the production-hardening pass was
+re-derived or undone. The report used to catalogue what someone posts about. It
+now reconstructs how they think: the load-bearing beliefs that generate their
+positions, how they reason, and where they land on worldview axes even when
+they never say so directly. Every section that did not answer "how does this
+mind work" is gone.
+
+### Schema
+
+New `Synthesis`, seven analytic fields plus coverage: `core_model` (the
+centrepiece — load-bearing beliefs, each with `generates` naming the surface
+positions that follow), `reasoning` (moves, what counts as evidence, behaviour
+under disagreement, what triggers an update, blind spots), `axes`, `evolution`,
+`open_questions`, `misreadings`, `coverage`.
+
+**Cut:** `performance_gap` (engagement is reach, not cognition), `hooks`
+(outreach, wrong purpose), `themes` (topic selection is signal; ten headers with
+eight links each is not), `network` and `reading_diet` as tables (the
+interpretation belongs inside the analysis), `voice.register` (sentence length
+is decoration).
+
+`signals.py` is unchanged and still computes all of it. Those metrics became
+inputs to the analysis instead of output sections.
+
+### The grammar limit, from the other direction
+
+Phase 4 found the reduce schema was 4,826 bytes against a live-bisected ceiling
+between 3,522 (accepted) and 3,809 (rejected), and fixed it by degrading to
+prompt-guided JSON rather than shaving the schema. That call was right: the
+limit is the provider's, not ours.
+
+The cognition-first schema is **3,251 bytes** and fits, so constrained decoding
+is the normal path again — and a grammar physically cannot emit the markdown
+fence that used to cost a full billed generation.
+
+That inverts one test. `test_reduce_schema_size_is_recorded_against_the_measured_limit`
+asserted the schema was still *above* the rejection band, and its own docstring
+named this as the thing to watch for: "if REDUCE_SCHEMA ever drops below that
+band, constrained decoding starts working again and the fallback stops being
+exercised — worth noticing, because the fallback is then untested in
+production." It is replaced by `tests/test_schema_size.py`, which fails at 3,400.
+
+**The fallback stays, and its tests matter more now, not less.** It is the path
+nothing in normal operation exercises, so the three tests covering it are the
+only thing keeping it honest. `_strip_code_fences()` was added in front of every
+`model_validate_json` for the same reason: a model asked for JSON in a prompt is
+exactly the one that wraps it in backticks.
+
+### Two inference tiers, both enforced
+
+`stated` keeps the existing sourcing rule. `inferred` requires a `reasoning`
+chain from specific posts to the conclusion, plus a `confidence`. **The
+reasoning is the evidence for the inference:** a chain that is missing, too
+short, or a restatement of its own conclusion is dropped in `prune_unsourced()`,
+exactly as an unsourced claim is — while the stated tier survives on its own
+sourcing. Same rule applies to `blind_spots.basis`.
+
+`signal: "none"` is a required, expected output. Every requested axis appears;
+one the corpus cannot speak to says so and cites nothing. Content written onto a
+no-signal axis is cleared and the clearing is logged; an axis claiming signal
+without valid evidence ids is demoted. Evidence is capped at three ids per
+claim, in code and again at render time.
+
+### Configurable axes
+
+New `corpus/profiles.yaml` and `--axes a,b,c`. Six defaults:
+`politics_and_ideology`, `institutions_and_authority`, `defense_intel_natsec`,
+`technology_and_ai`, `economics_and_markets`, `epistemics`. Each carries a
+`probe` injected verbatim into the reduce prompt. An unknown axis name is an
+error listing the valid ones, checked at the same CLI boundary as the handle —
+before anything is spent.
+
+### Cost
+
+The pre-flight estimator now projects **$0.670** at 1,000 posts ($0.225 X data +
+$0.445 Anthropic), down from $0.820 on the old model mix.
+
+- **Haiku on map.** `MAP_MODEL` is `claude-haiku-4-5-20251001`; reduce stays on
+  `claude-opus-5`. Both configurable via `--map-model` / `--reduce-model`.
+- **`effort` is now opt-in by model.** Haiku 4.5 rejects the parameter outright,
+  so sending it blindly — as the code did — would have 400'd every map slice the
+  moment the map model changed. `supports_effort()` gates it.
+- **Low-signal filter** (`corpus/prefilter.py`, pure Python, no API cost). Drops
+  bare acknowledgements, link-only posts with no commentary, and short
+  standalone fragments with no context. Never filters by subject: that someone
+  treats hobby minutiae with the same analytic seriousness as politics is itself
+  a cognitive tell. Threads and short-posts-with-context are never dropped. Drop
+  count and reasons land in the report's coverage block. `--no-filter` disables.
+
+The estimator's docstring now states what it is not: `estimate_anthropic_cost`
+answers "what will this run cost", `Budget.reserve` answers "can this call be
+covered right now" and charges the full `max_tokens`. Conflating them is how a
+ceiling turns back into a tripwire.
+
+### Free iteration and migration
+
+- `corpus resynth <dir> --render-only` rebuilds `report.md` from an existing
+  `synthesis.json` with zero API calls.
+- `run` and `resynth` write `run_meta.json`, so `--render-only` reproduces the
+  caveat block without re-deriving anything.
+- `corpus.json` is unchanged, so `corpus resynth` works on any existing corpus
+  directory with no migration. Only `--render-only` can meet an old
+  `synthesis.json`, and it names the offending fields and the command that fixes
+  it rather than raising.
+
+### Housekeeping
+
+- Test suite 399 → 430. Still all offline.
+- `pyyaml` added with a justifying comment; `types-PyYAML` added to the dev group
+  because `mypy --strict` reports a missing stub for `import yaml` on a clean
+  machine — which is the machine CI runs on.
+- `filterwarnings = ["error"]`: the suppression for `voice.register` shadowing a
+  pydantic attribute went away with the field.
+- `examples/report.example.md` regenerated in the new shape.
+
+### Not changed, deliberately
+
+`ingest.py`'s window-completion logic, for the same reason Phase 2 left it
+alone. The reservation machinery, the retry policy, the manifest, the wire
+contract, and `BATCH_LOOKUP_MAX = 50` are all untouched — this pass is the
+report, not the pipeline underneath it.
