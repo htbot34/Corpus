@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS entries_source_idx ON entries(source);
 
+CREATE TABLE IF NOT EXISTS estimates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    run_id      TEXT NOT NULL,
+    handle      TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    estimated   REAL NOT NULL,
+    actual      REAL NOT NULL,
+    posts_estimated INTEGER NOT NULL DEFAULT 0,
+    posts_actual    INTEGER NOT NULL DEFAULT 0,
+    note        TEXT
+);
+
 CREATE TABLE IF NOT EXISTS spend (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -192,6 +205,40 @@ class Cache:
                 (time.time(), run_id, category, endpoint, units, unit_cost, cost, note),
             )
             self.conn.commit()
+
+    def log_estimate(
+        self,
+        run_id: str,
+        handle: str,
+        category: str,
+        estimated: float,
+        actual: float,
+        posts_estimated: int = 0,
+        posts_actual: int = 0,
+        note: str = "",
+    ) -> None:
+        """Record what a run was predicted to cost against what it did cost.
+
+        An estimator nobody checks is decoration, so every run leaves a row here
+        whether or not anyone looks.
+        """
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO estimates (ts, run_id, handle, category, estimated, actual, "
+                "posts_estimated, posts_actual, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    time.time(), run_id, handle, category, estimated, actual,
+                    posts_estimated, posts_actual, note,
+                ),
+            )
+            self.conn.commit()
+
+    def estimate_log(self, limit: int = 200) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                "SELECT * FROM estimates ORDER BY ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+        )
 
     def spend_log(self, limit: int = 200) -> list[sqlite3.Row]:
         return list(

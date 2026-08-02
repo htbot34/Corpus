@@ -286,6 +286,8 @@ def run(
     manifest.run_id = budget.run_id
 
     # ---- estimate + confirm ---------------------------------------------
+    estimated_total: float | None = None
+    estimated_posts: int = 0
     raw_tweets: list[dict[str, Any]] = []
     client: XClient | None = None
     profile: dict[str, Any] = {}
@@ -321,6 +323,8 @@ def run(
         x_cost = estimate_x_cost(target)
         llm_cost = 0.0 if skip_synthesis else estimate_anthropic_cost(target)
 
+        estimated_total = x_cost + llm_cost
+        estimated_posts = target
         echo(f"  @{handle}: {public_posts or 'unknown'} public posts on file")
         echo(f"  estimate: ~{target} posts")
         echo(f"    X data (twitterapi.io): ~${x_cost:.3f}")
@@ -549,6 +553,29 @@ def run(
     )
     (out_dir / "report.md").write_text(report, encoding="utf-8")
 
+    # ---- estimate accuracy (3.6) ----------------------------------------
+    # An estimator nobody checks is decoration, so every run leaves a row —
+    # whether or not anyone runs `corpus budget accuracy` afterwards.
+    if not offline and estimated_total is not None:
+        cache.log_estimate(
+            run_id=budget.run_id,
+            handle=handle,
+            category="total",
+            estimated=estimated_total,
+            actual=budget.this_attempt,
+            posts_estimated=estimated_posts or 0,
+            posts_actual=len(raw_tweets),
+            note="skip-synthesis" if skip_synthesis else "",
+        )
+        if estimated_total > 0:
+            err = budget.this_attempt / estimated_total - 1
+            echo(
+                f"  estimate ${estimated_total:.4f} vs actual "
+                f"${budget.this_attempt:.4f} ({err:+.0%})"
+            )
+    for note in budget.estimate_misses:
+        warn(note)
+
     echo("Spend:")
     for line in budget.summary_lines():
         echo(f"  {line}")
@@ -757,6 +784,52 @@ def budget_log(limit: int = typer.Option(50, "--limit")) -> None:
     echo("")
     for row in cache.spend_totals():
         echo(f"total {row['category']:<10} ${row['total']:.4f} across {row['calls']} calls")
+    cache.close()
+
+
+@budget_app.command("accuracy")
+def budget_accuracy(limit: int = typer.Option(50, "--limit")) -> None:
+    """How wrong --dry-run has been, historically.
+
+    Reports signed error so a systematic bias is visible: an estimator that is
+    consistently 30% low is a different problem from one that is noisy, and
+    only the first one will surprise you at the top of a budget.
+    """
+    cache = Cache()
+    rows = cache.estimate_log(limit=limit)
+    if not rows:
+        echo("no estimates recorded yet — run `corpus run` at least once")
+        cache.close()
+        return
+
+    echo(f"{'when':<17} {'handle':<16} {'est':>9} {'actual':>9} {'error':>8} {'posts':>13}")
+    echo("-" * 78)
+    errors: list[float] = []
+    for row in rows:
+        when = datetime.fromtimestamp(row["ts"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        est, actual = row["estimated"], row["actual"]
+        err = (actual / est - 1) if est else 0.0
+        errors.append(err)
+        posts = f"{row['posts_actual']}/{row['posts_estimated']}"
+        echo(
+            f"{when:<17} {row['handle'][:16]:<16} ${est:>8.4f} ${actual:>8.4f} "
+            f"{err:>+7.0%} {posts:>13}"
+        )
+
+    echo("")
+    mean = sum(errors) / len(errors)
+    absolute = sum(abs(e) for e in errors) / len(errors)
+    worst = max(errors, key=abs)
+    echo(f"runs:          {len(errors)}")
+    echo(f"mean error:    {mean:+.1%}  (bias: estimates run "
+         f"{'low' if mean > 0 else 'high'})")
+    echo(f"mean |error|:  {absolute:.1%}  (spread, regardless of direction)")
+    echo(f"worst:         {worst:+.0%}")
+    if absolute > 0.30:
+        echo("")
+        echo("The estimator is off by more than 30% on average. The assumptions")
+        echo("live in estimate_x_cost/estimate_anthropic_cost in corpus/budget.py:")
+        echo("hydration ratio, tokens per document, and map chunk size.")
     cache.close()
 
 
