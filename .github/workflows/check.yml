@@ -54,7 +54,10 @@ jobs:
       - name: Install
         run: |
           uv venv
-          uv pip install -e . pytest pytest-cov ruff mypy
+          # types-PyYAML is not optional: without it `mypy --strict` fails on
+          # `import yaml` in corpus/axes.py. A clean machine is exactly what CI
+          # is, so the stub has to be installed here, not only in the dev group.
+          uv pip install -e . pytest pytest-cov ruff mypy types-PyYAML
 
       - name: Lint
         run: .venv/bin/ruff check corpus tests scripts

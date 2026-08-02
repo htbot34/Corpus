@@ -24,7 +24,7 @@ help:
 
 install:
 	uv venv
-	uv pip install -e . pytest pytest-cov ruff mypy
+	uv pip install -e . pytest pytest-cov ruff mypy types-PyYAML
 
 # The gate. Ordered cheapest-first so an obvious failure surfaces in seconds
 # rather than after the full test run.
