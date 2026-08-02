@@ -163,6 +163,7 @@ def test_report_survives_a_failed_synthesis(client):
 
 
 def test_empty_evolution_says_so_rather_than_inventing_one(client):
+    """On a corpus big enough to have found one, empty means empty."""
     docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
     synthesis = _synthesis([d.source_id for d in docs[:2]])
     synthesis.evolution = []
@@ -172,9 +173,27 @@ def test_empty_evolution_says_so_rather_than_inventing_one(client):
         docs=docs,
         signals=compute_signals(docs),
         budget_lines=[],
-        run_meta={},
+        run_meta={"analyzed_documents": 400, "corpus_tier": "rich"},
     )
     assert "No view changed inside this corpus. Not manufactured." in report
+
+
+def test_empty_evolution_on_a_thin_corpus_says_it_was_not_assessed(client):
+    """ "Nothing found" and "we did not look" are different claims, and only one
+    of them is true here."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    synthesis = _synthesis([d.source_id for d in docs[:2]])
+    synthesis.evolution = []
+    report = render_report(
+        handle="testsubject",
+        synthesis=synthesis,
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={"analyzed_documents": 12, "corpus_tier": "thin"},
+    )
+    assert "Not assessed" in report
+    assert "Not manufactured" not in report
 
 
 def test_cut_sections_are_gone(client):

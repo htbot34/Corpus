@@ -30,6 +30,7 @@ from corpus.synthesize import (
     supports_effort,
     synthesize,
 )
+from corpus.tiers import classify_corpus
 from corpus.x.hydrate import hydrate
 from corpus.x.signals import compute_signals
 
@@ -309,7 +310,7 @@ def test_axes_outside_the_requested_set_are_dropped():
 
 
 def test_reduce_prompt_names_the_selected_axes_and_the_none_rule():
-    prompt = build_reduce_system(AXES)
+    prompt = build_reduce_system(AXES, classify_corpus(400))
     assert "defense_intel_natsec" in prompt
     assert "technology_and_ai" not in prompt, "unselected axes must not leak in"
     assert '`signal: "none"` is a required, valid, expected output' in prompt
