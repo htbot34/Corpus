@@ -87,7 +87,16 @@ class Thread(BaseModel):
 # Synthesis output schema (validated against the reduce-stage model output)
 # --------------------------------------------------------------------------
 
-BeliefRole = Literal["load_bearing", "derived", "held_lightly"]
+# "unclassified" is a value only Python ever writes. It is deliberately absent
+# from REDUCE_SCHEMA's enum, so grammar-constrained decoding physically cannot
+# produce it — the model has three roles in its vocabulary and this fourth one
+# means "code cleared this because the corpus could not support the claim".
+#
+# It is not the same as "held_lightly": that asserts they voice the view but do
+# not defend it, which is itself a claim about the belief. On a thin corpus we
+# do not know that either, and forcing it would trade one confabulation for
+# another.
+BeliefRole = Literal["load_bearing", "derived", "held_lightly", "unclassified"]
 SignalStrength = Literal["strong", "weak", "none"]
 Confidence = Literal["high", "medium", "low"]
 
@@ -98,6 +107,12 @@ class CoreBelief(BaseModel):
     `generates` is what makes this different from a list of opinions: it names
     the surface positions that fall out of the belief, so the report shows a
     tree rather than a pile.
+
+    Both `role` and `generates` are claims about the belief's *place* in the
+    model, not about the belief itself. The belief is sourced; where it sits is
+    inferred. A corpus too thin to support that inference gets `role:
+    "unclassified"` and an empty `generates` — the beliefs survive, the
+    structure does not.
     """
 
     belief: str

@@ -858,10 +858,32 @@ def prune_unsourced(
     kept_beliefs = []
     for belief in synthesis.core_model:
         belief.evidence_ids = clean(belief.evidence_ids)
-        if belief.evidence_ids:
-            kept_beliefs.append(belief)
-        else:
+        if not belief.evidence_ids:
             notes.append(f"core_model '{belief.belief[:60]}' dropped: no valid evidence ids")
+            continue
+        # The belief is a sourced claim and survives. `role` and `generates`
+        # are claims about where it sits relative to the other beliefs, which
+        # is an inference — so the tier cut runs through the entry rather than
+        # around it.
+        if not rules.allow_belief_structure:
+            if belief.generates or belief.role != "unclassified":
+                notes.append(
+                    f"core_model '{belief.belief[:50]}': structure cleared, {rules.name} "
+                    f"corpus ({rules.document_count} documents) cannot place a belief"
+                )
+            belief.generates = []
+            belief.role = "unclassified"
+        elif belief.role == "unclassified":
+            # Not in the wire schema's enum, so constrained decoding cannot
+            # produce it — only the prompt-guided fallback path can. Treat it
+            # as an unmade decision rather than letting the model opt out of
+            # one the corpus is big enough to support.
+            notes.append(
+                f"core_model '{belief.belief[:50]}': role 'unclassified' is not the "
+                "model's to assign; recorded as derived"
+            )
+            belief.role = "derived"
+        kept_beliefs.append(belief)
     synthesis.core_model = kept_beliefs
 
     kept_moves = []

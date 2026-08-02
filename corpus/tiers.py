@@ -17,7 +17,10 @@ not have:
 
 - **thin**, under 40 documents. Not enough to distinguish a position someone
   holds from a thing they happened to say once. Stated positions survive;
-  everything inferential is suppressed.
+  everything inferential is suppressed. That cut runs *through* `core_model`
+  rather than around it: the beliefs are sourced and stay, while `role` and
+  `generates` — claims about where each belief sits relative to the others —
+  are cleared.
 - **moderate**, 40 to 149. Enough for inference, not enough for a single
   striking post to be treated as a pattern — so an inference has to rest on
   three distinct documents instead of one.
@@ -55,6 +58,11 @@ class TierRules:
     allow_blind_spots: bool
     #: A change of view needs enough before and after to tell them apart.
     allow_evolution: bool
+    #: May `core_model[].role` and `.generates` be trusted? The belief itself is
+    #: a sourced claim; where it sits in the model is an inference, and the two
+    #: are separable. When False the beliefs survive and the structure is
+    #: cleared to `role: "unclassified"` with an empty `generates`.
+    allow_belief_structure: bool
     #: When set, `coverage.confidence` is overwritten with this.
     forced_confidence: Literal["high", "medium", "low"] | None
 
@@ -70,6 +78,7 @@ THIN = TierRules(
     min_chain_documents=1,  # unused while inference is off; kept honest anyway
     allow_blind_spots=False,
     allow_evolution=False,
+    allow_belief_structure=False,
     forced_confidence="low",
 )
 
@@ -83,6 +92,7 @@ MODERATE = TierRules(
     min_chain_documents=3,
     allow_blind_spots=True,
     allow_evolution=True,
+    allow_belief_structure=True,
     forced_confidence=None,
 )
 
@@ -93,6 +103,7 @@ RICH = TierRules(
     min_chain_documents=1,
     allow_blind_spots=True,
     allow_evolution=True,
+    allow_belief_structure=True,
     forced_confidence=None,
 )
 
@@ -118,6 +129,7 @@ def classify_corpus(document_count: int) -> TierRules:
         min_chain_documents=base.min_chain_documents,
         allow_blind_spots=base.allow_blind_spots,
         allow_evolution=base.allow_evolution,
+        allow_belief_structure=base.allow_belief_structure,
         forced_confidence=base.forced_confidence,
     )
 
@@ -144,8 +156,13 @@ happened to say once. So:
   pattern, and there is not enough here to establish one.
 - Return `evolution` as an **empty list**. A change of view needs enough before
   and after to distinguish, and this corpus does not have it.
-- `core_model` and `axes[].stated` are still expected — those are sourced
-  claims, not inferences.
+- `core_model` beliefs are still expected — a belief traced to real posts is a
+  sourced claim. But leave `generates` as an **empty list** on every one of
+  them, and do not agonise over `role`: both describe where a belief sits
+  relative to the others, which is an inference about structure, and this
+  corpus cannot support it. `role` will be overwritten with "unclassified"
+  whatever you put there.
+- `axes[].stated` is still expected, sourced as always.
 
 Anything inferential you write will be deleted before the report is rendered.
 Write the sourced half well instead.""",
