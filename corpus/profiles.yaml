@@ -1,0 +1,54 @@
+# Worldview axes the reduce stage is asked to place the subject on.
+#
+# These are deliberately not hardcoded in Python. Which axes matter depends on
+# who you are reading and why, and `--axes a,b,c` restricts a run to a subset.
+# Every selected axis appears in the report with its own `signal` value, so the
+# output states plainly which axes the corpus can and cannot speak to.
+#
+# `probe` is injected verbatim into the reduce prompt. Write it as a question
+# about how the person reasons, not as a topic label — the axis is a place to
+# locate someone's thinking, not a subject heading.
+
+axes:
+  - name: politics_and_ideology
+    label: Politics and ideology
+    probe: >
+      Where do they actually land on the distribution of power, the legitimacy
+      of hierarchy, and who is owed what? Watch for the positions they hold
+      that cut against their apparent tribe — those are the load-bearing ones.
+
+  - name: institutions_and_authority
+    label: Institutions and authority
+    probe: >
+      Do they treat institutions (universities, media, agencies, regulators,
+      professional bodies) as broadly credible, as captured, or as irrelevant?
+      What has to be true for them to defer to an institutional claim?
+
+  - name: defense_intel_natsec
+    label: Defense, intelligence, and national security
+    probe: >
+      How do they reason about state violence, secrecy, surveillance, and
+      adversary states? Note whether their general priors on institutions and
+      power hold here or break.
+
+  - name: technology_and_ai
+    label: Technology and AI
+    probe: >
+      Do they read technological change as continuous or discontinuous, and
+      what governs whether they see a given technology as a tool, a threat, or
+      a category error? Where do they place agency — in the technology, its
+      builders, or its adopters?
+
+  - name: economics_and_markets
+    label: Economics and markets
+    probe: >
+      What do they think markets are good at and bad at? Do they explain
+      outcomes through incentives, structure, culture, or luck — and does that
+      explanation change depending on who benefits?
+
+  - name: epistemics
+    label: Epistemics
+    probe: >
+      What do they treat as knowable, and by what method? Personal experience,
+      formal evidence, elite consensus, first-principles derivation, or
+      revealed preference? Watch what they accept without argument.
