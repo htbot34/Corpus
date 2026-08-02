@@ -1,15 +1,21 @@
-"""The grammar-size guard.
+"""The grammar-size guard, and the direction it now points.
 
 The API compiles `output_config.format.schema` into a decoding grammar and
 rejects anything too large with a 400: "The compiled grammar is too large."
-The ceiling was bisected against the live API: 3,522 bytes accepted, 3,809
-rejected.
+The ceiling was bisected against the live API on 2026-08-02: 3,522 bytes
+accepted, 3,809 rejected.
 
-Exceeding it does not fail loudly at runtime. The call errors, the code falls
-back to prompt-guided JSON, and the run keeps going — slower, retry-prone, and
-occasionally wrapping its output in markdown fences that burn a full billed
-generation. A future field addition should fail this test, not degrade
-production silently.
+That measurement used to be recorded as a *tripwire* asserting the schema was
+still above the band, because the pre-redesign schema was 4,826 bytes and the
+prompt-guided fallback was the only path that worked. The cognition-first
+schema is smaller, so the assertion inverts: constrained decoding is the normal
+path again, and this file's job is to keep it that way.
+
+Exceeding the limit does not fail loudly at runtime — the run degrades to the
+fallback, which is slower, retry-prone, and where the markdown-fence bug lives.
+A future field addition should fail this test, not quietly cost money in
+production. The fallback itself stays tested in tests/test_synthesize.py, since
+it is now the path nothing else exercises.
 
 3,400 leaves headroom under the last known-good 3,522 without pretending we
 know the exact boundary.

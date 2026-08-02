@@ -6,22 +6,38 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
-from fake_anthropic import FakeAnthropic
+from fake_anthropic import GOOD_CHAIN, FakeAnthropic
 from fake_provider import load
 
+from corpus.axes import AxisSpec
 from corpus.budget import Budget
-from corpus.models import Document, Synthesis
+from corpus.models import Axis, Document, Synthesis
 from corpus.synthesize import (
     CHUNK_TOKEN_TARGET,
+    EVIDENCE_CAP,
+    MAP_MODEL,
+    REDUCE_MODEL,
+    _is_schema_rejection,
+    _strip_code_fences,
+    build_reduce_system,
     chunk_documents,
     enforce_signal_counts,
+    parse_synthesis,
     prune_unsourced,
     render_document,
+    run_reduce,
     select_highlights,
+    supports_effort,
     synthesize,
 )
 from corpus.x.hydrate import hydrate
 from corpus.x.signals import compute_signals
+
+AXES = [
+    AxisSpec("institutions_and_authority", "Institutions", "probe"),
+    AxisSpec("epistemics", "Epistemics", "probe"),
+    AxisSpec("defense_intel_natsec", "Defense", "probe"),
+]
 
 
 def doc(doc_id: str, body: str, kind: str = "original", **kw) -> Document:
@@ -36,6 +52,11 @@ def doc(doc_id: str, body: str, kind: str = "original", **kw) -> Document:
         engagement={"likes": 1, "replies": 0, "reposts": 0},
         **kw,
     )
+
+
+def fresh_synthesis(ids: str = "[id: 111] [id: 222]") -> Synthesis:
+    raw = FakeAnthropic()._default_reduce({"messages": [{"c": ids}]})
+    return Synthesis.model_validate(json.loads(raw))
 
 
 # -- rendering: the rule that matters most ---------------------------------
@@ -80,7 +101,9 @@ def test_chunks_are_chronological_and_bounded():
         for i in range(60)
     ]
     for i, d in enumerate(docs):
-        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(day=1 + (i % 28))
+        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(
+            day=1 + (i % 28)
+        )
     chunks = chunk_documents(docs)
     assert len(chunks) > 1
     flat = [d for c in chunks for d in c]
@@ -95,60 +118,243 @@ def test_single_small_corpus_is_one_chunk():
     assert len(chunk_documents([doc("1", "short")])) == 1
 
 
+# -- model selection --------------------------------------------------------
+
+
+def test_map_is_cheap_and_reduce_is_not():
+    """Map is extraction, reduce is judgment. Do not let them drift together."""
+    assert MAP_MODEL == "claude-haiku-4-5-20251001"
+    assert REDUCE_MODEL == "claude-opus-5"
+
+
+def test_effort_is_only_sent_to_models_that_implement_it():
+    """Haiku 4.5 rejects `effort` outright; sending it would 400 every slice."""
+    assert not supports_effort("claude-haiku-4-5-20251001")
+    assert not supports_effort("claude-sonnet-4-5")
+    assert supports_effort("claude-opus-5")
+    assert supports_effort("claude-sonnet-5")
+
+
+def test_map_call_omits_effort_for_haiku(client, cache):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    fake = FakeAnthropic()
+    run_synth(fake, docs, compute_signals(docs), Budget(limit=10.0, cache=cache))
+    map_call = fake.calls[0]
+    assert "effort" not in map_call["output_config"]
+    assert map_call["output_config"]["format"]["type"] == "json_schema"
+
+
+def test_reduce_call_keeps_effort_and_constrained_decoding(client, cache):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    fake = FakeAnthropic()
+    run_synth(fake, docs, compute_signals(docs), Budget(limit=10.0, cache=cache))
+    reduce_call = fake.calls[-1]
+    assert reduce_call["output_config"]["effort"] == "high"
+    assert reduce_call["output_config"]["format"]["type"] == "json_schema"
+
+
+# -- fence stripping (belt and braces for the fallback path) ----------------
+
+
+def test_bare_json_passes_through_untouched():
+    assert _strip_code_fences('{"a": 1}') == '{"a": 1}'
+
+
+def test_json_fence_is_stripped():
+    assert _strip_code_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
+
+
+def test_bare_fence_is_stripped():
+    assert _strip_code_fences('```\n{"a": 1}\n```') == '{"a": 1}'
+
+
+def test_leading_prose_is_discarded():
+    text = 'Here is the synthesis you asked for:\n\n{"a": 1}'
+    assert _strip_code_fences(text) == '{"a": 1}'
+
+
+def test_prose_and_fence_together():
+    text = 'Sure! Here you go:\n\n```json\n{"a": 1}\n```\n\nLet me know.'
+    assert _strip_code_fences(text) == '{"a": 1}'
+
+
+def test_fenced_synthesis_validates():
+    """The exact failure seen live: a full generation lost to backticks."""
+    raw = FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 111]"}]})
+    assert parse_synthesis(f"```json\n{raw}\n```").summary
+
+
 # -- unsourced-finding enforcement -----------------------------------------
 
 
-def test_prune_drops_findings_citing_ids_not_in_the_corpus():
-    synthesis = Synthesis.model_validate(
-        json.loads(FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 111] [id: 222]"}]}))
-    )
-    assert len(synthesis.themes) == 2
-    notes = prune_unsourced(synthesis, {"111", "222"})
-    assert len(synthesis.themes) == 1
-    assert synthesis.themes[0].name == "hiring process design"
-    assert any("invented theme" in n for n in notes)
+def test_prune_drops_beliefs_citing_ids_not_in_the_corpus():
+    synthesis = fresh_synthesis()
+    assert len(synthesis.core_model) == 2
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert [b.belief for b in synthesis.core_model] == [
+        "Process quality is measurable and most people refuse to measure it"
+    ]
+    assert any("invented belief" in n for n in notes)
 
 
-def test_prune_clears_performance_gap_when_unsourced():
-    synthesis = Synthesis.model_validate(
-        json.loads(FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 111]"}]}))
-    )
-    prune_unsourced(synthesis, set())  # nothing is valid
-    assert synthesis.performance_gap.posts_most_about == ""
-    assert synthesis.positions == []
+def test_prune_drops_reasoning_moves_with_a_bogus_example_id():
+    synthesis = fresh_synthesis()
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert [m.move for m in synthesis.reasoning.moves] == [
+        "concedes the strongest objection first"
+    ]
+
+
+def test_everything_is_dropped_when_nothing_is_sourceable():
+    synthesis = fresh_synthesis()
+    prune_unsourced(synthesis, set(), AXES)
+    assert synthesis.core_model == []
     assert synthesis.evolution == []
+    assert synthesis.open_questions == []
+    assert synthesis.misreadings == []
+    assert synthesis.reasoning.blind_spots == []
+
+
+# -- the inference tier: reasoning is the evidence --------------------------
+
+
+def test_hand_waving_inference_is_dropped_but_the_stated_tier_survives():
+    synthesis = fresh_synthesis()
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    epistemics = next(a for a in synthesis.axes if a.axis == "epistemics")
+    assert epistemics.inferred == "", "an inference with no chain must not survive"
+    assert epistemics.reasoning == ""
+    assert epistemics.stated == "Prefers measurement to intuition.", (
+        "the stated tier has its own sourcing and must not be collateral damage"
+    )
+    assert any("not a chain" in n for n in notes)
+
+
+def test_inference_with_a_real_chain_is_kept():
+    synthesis = fresh_synthesis()
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    axis = next(a for a in synthesis.axes if a.axis == "institutions_and_authority")
+    assert axis.inferred
+    assert axis.reasoning == GOOD_CHAIN
+    assert axis.confidence == "medium"
+
+
+def test_blind_spot_without_a_basis_is_dropped():
+    synthesis = fresh_synthesis()
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert [s.pattern for s in synthesis.reasoning.blind_spots] == [
+        "Treats their own sample as representative"
+    ]
+
+
+def test_inference_that_merely_restates_itself_is_not_a_chain():
+    synthesis = fresh_synthesis()
+    axis = next(a for a in synthesis.axes if a.axis == "institutions_and_authority")
+    axis.inferred = "They treat institutional legitimacy as something earned per claim"
+    axis.reasoning = "They treat institutional legitimacy as something earned per claim"
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert axis.inferred == ""
+
+
+# -- signal: none is a first-class result -----------------------------------
+
+
+def test_empty_signal_axis_survives_validation_without_invented_content():
+    """The paulg corpus had zero defense/intel content. The correct report says
+    so. An axis that reports nothing must round-trip intact."""
+    synthesis = fresh_synthesis()
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    axis = next(a for a in synthesis.axes if a.axis == "defense_intel_natsec")
+    assert axis.signal == "none"
+    assert axis.stated == ""
+    assert axis.inferred == ""
+    assert axis.reasoning == ""
+    assert axis.evidence_ids == []
+    # and it survives a JSON round trip, so the report and downstream tools see it
+    assert Synthesis.model_validate(synthesis.model_dump()).axes[-1].signal == "none"
+
+
+def test_content_on_a_no_signal_axis_is_cleared_not_trusted():
+    synthesis = fresh_synthesis()
+    axis = next(a for a in synthesis.axes if a.axis == "defense_intel_natsec")
+    axis.stated = "They are hawkish on China."
+    axis.inferred = "They would support export controls."
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert axis.stated == ""
+    assert axis.inferred == ""
+    assert any("cleared invented content" in n for n in notes)
+
+
+def test_axis_claiming_signal_without_evidence_is_demoted_to_none():
+    synthesis = fresh_synthesis()
+    axis = next(a for a in synthesis.axes if a.axis == "institutions_and_authority")
+    axis.evidence_ids = ["9999999999"]
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert axis.signal == "none"
+    assert axis.stated == ""
+    assert any("demoted to signal none" in n for n in notes)
+
+
+def test_every_requested_axis_appears_even_if_the_model_forgot_it():
+    synthesis = fresh_synthesis()
+    synthesis.axes = [a for a in synthesis.axes if a.axis != "epistemics"]
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert [a.axis for a in synthesis.axes] == [s.name for s in AXES]
+    assert next(a for a in synthesis.axes if a.axis == "epistemics").signal == "none"
+    assert any("was not returned" in n for n in notes)
+
+
+def test_axes_outside_the_requested_set_are_dropped():
+    synthesis = fresh_synthesis()
+    synthesis.axes.append(
+        Axis(axis="astrology", signal="strong", stated="x", evidence_ids=["111"])
+    )
+    notes = prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert "astrology" not in [a.axis for a in synthesis.axes]
+    assert any("not among the requested axes" in n for n in notes)
+
+
+def test_reduce_prompt_names_the_selected_axes_and_the_none_rule():
+    prompt = build_reduce_system(AXES)
+    assert "defense_intel_natsec" in prompt
+    assert "technology_and_ai" not in prompt, "unselected axes must not leak in"
+    assert '`signal: "none"` is a required, valid, expected output' in prompt
+
+
+# -- evidence cap -----------------------------------------------------------
+
+
+def test_evidence_is_capped_at_three_ids():
+    synthesis = fresh_synthesis()
+    synthesis.core_model[0].evidence_ids = [str(i) for i in range(10)]
+    prune_unsourced(synthesis, {str(i) for i in range(10)}, AXES)
+    assert len(synthesis.core_model[0].evidence_ids) == EVIDENCE_CAP
+    assert synthesis.core_model[0].evidence_ids == ["0", "1", "2"]
+
+
+def test_duplicate_evidence_ids_are_collapsed():
+    synthesis = fresh_synthesis()
+    synthesis.core_model[0].evidence_ids = ["111", "111", "222"]
+    prune_unsourced(synthesis, {"111", "222"}, AXES)
+    assert synthesis.core_model[0].evidence_ids == ["111", "222"]
+
+
+# -- counts -----------------------------------------------------------------
 
 
 def test_signal_counts_override_whatever_the_model_said():
-    """Rule 4 is enforced, not merely requested."""
-    synthesis = Synthesis.model_validate(
-        json.loads(FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 111]"}]}))
-    )
-    synthesis.network[0].exchange_count = 999
-    synthesis.reading_diet[0].share_count = 999
-    signals = {
-        "date_range": "2024-01-08 to 2024-08-16",
-        "conversation_graph": [{"handle": "criticfriend", "exchange_count": 2}],
-        "outbound_domains": [{"domain": "arxiv.org", "share_count": 3}],
-    }
-    docs = [doc(str(i), "x") for i in range(7)]
-    notes = enforce_signal_counts(synthesis, signals, docs)
-
-    assert synthesis.network[0].exchange_count == 2
-    assert synthesis.reading_diet[0].share_count == 3
+    synthesis = fresh_synthesis()
+    signals = {"date_range": "2024-01-08 to 2024-08-16"}
+    notes = enforce_signal_counts(synthesis, signals, analyzed_documents=7)
     assert synthesis.coverage.total_documents == 7
     assert synthesis.coverage.date_range == "2024-01-08 to 2024-08-16"
-    assert len(notes) == 4
+    assert len(notes) == 2
 
 
-def test_theme_post_counts_are_left_to_the_model():
-    """Themes are model-defined, so signals.json has no ground truth for them."""
-    synthesis = Synthesis.model_validate(
-        json.loads(FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 111]"}]}))
-    )
-    before = synthesis.themes[0].post_count
-    enforce_signal_counts(synthesis, {"conversation_graph": [], "outbound_domains": []}, [])
-    assert synthesis.themes[0].post_count == before
+def test_analyzed_count_reflects_the_filter_not_the_corpus():
+    synthesis = fresh_synthesis()
+    enforce_signal_counts(synthesis, {}, analyzed_documents=42)
+    assert synthesis.coverage.total_documents == 42
 
 
 def test_select_highlights_dedupes_and_orders():
@@ -167,7 +373,10 @@ def test_select_highlights_dedupes_and_orders():
 
 
 def run_synth(client, docs, signals, budget, **kw):
-    return asyncio.run(synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw))
+    kw.setdefault("axes", AXES)
+    return asyncio.run(
+        synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw)
+    )
 
 
 def test_end_to_end_map_reduce(client, cache):
@@ -182,13 +391,13 @@ def test_end_to_end_map_reduce(client, cache):
     assert result.error == ""
     assert result.chunks >= 1
     assert result.map_failures == 0
-    # unsourced theme was dropped by the Python enforcement, not trusted away
-    assert [t.name for t in result.synthesis.themes] == ["hiring process design"]
+    # unsourced belief was dropped by the Python enforcement, not trusted away
+    assert len(result.synthesis.core_model) == 1
     assert result.dropped_findings
-    # both stages were charged
+    # both stages were charged, at their own rates
     assert budget.total_for("anthropic") > 0
-    assert any(c.endpoint == "claude-sonnet-5" for c in budget.charges)
-    assert any(c.endpoint == "claude-opus-5" for c in budget.charges)
+    assert any(c.endpoint == MAP_MODEL for c in budget.charges)
+    assert any(c.endpoint == REDUCE_MODEL for c in budget.charges)
 
 
 def test_reposts_and_media_only_are_not_sent_to_the_model(client, cache):
@@ -238,6 +447,22 @@ def test_reduce_retries_once_then_gives_up(client, cache):
     assert result.raw_reduce_output  # dumped for inspection
 
 
+def test_fenced_reduce_output_no_longer_burns_a_generation(client, cache):
+    """The live failure: constrained decoding unavailable, model wraps in
+    fences, validation fails, a full billed generation is lost."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    attempts: list[int] = []
+
+    def fenced(kwargs):
+        attempts.append(1)
+        return "```json\n" + FakeAnthropic()._default_reduce(kwargs) + "\n```"
+
+    fake = FakeAnthropic(reduce_response=fenced)
+    result = run_synth(fake, docs, compute_signals(docs), Budget(limit=10.0, cache=cache))
+    assert result.synthesis is not None
+    assert len(attempts) == 1, "no retry should have been needed"
+
+
 def test_retry_includes_the_validation_error(client, cache):
     docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
     fake = FakeAnthropic(reduce_response=lambda _k: "{}")
@@ -272,13 +497,18 @@ def test_budget_stop_during_synthesis_is_not_a_crash(client, cache):
 
 
 # --------------------------------------------------------------------------
-# Schema rejection: found live, 2026-08-02
+# Schema rejection: found live 2026-08-02, and now the *unused* path
 # --------------------------------------------------------------------------
-# The API compiles the output schema into a grammar for constrained decoding and
-# refuses one above an internal size limit. REDUCE_SCHEMA is over it, so the
-# reduce call could never have succeeded — and every test passed anyway, because
-# FakeAnthropic returns canned JSON and never submits a schema. These are the
-# tests that would have caught it.
+# The API compiles the output schema into a grammar and refuses one above an
+# internal size limit. The pre-redesign REDUCE_SCHEMA was 4,826 bytes and over
+# it, so reduce could never have succeeded; the fallback to prompt-guided JSON
+# was what made the tool work at all.
+#
+# The cognition-first schema is 3,251 bytes and fits, so the fallback is no
+# longer the normal path — which makes these tests the only thing keeping it
+# honest. Do not delete them because "the schema fits now": the limit belongs
+# to the provider, and the next field added could put us back over it in
+# production, after ingestion has been paid for.
 
 
 def _grammar_error() -> Exception:
@@ -290,32 +520,9 @@ def _grammar_error() -> Exception:
     )
 
 
-def test_schema_rejection_is_recognised():
-    from corpus.synthesize import _is_schema_rejection
-
-    assert _is_schema_rejection(_grammar_error())
-    assert not _is_schema_rejection(RuntimeError("500 internal server error"))
-    assert not _is_schema_rejection(RuntimeError("429 rate limited"))
-
-
-def test_reduce_falls_back_when_the_schema_is_refused(tmp_path):
-    """Degrade to prompt-guided JSON rather than losing the whole run."""
-    from corpus.budget import Budget
-    from corpus.cache import Cache
-    from corpus.synthesize import run_reduce
-
-    class RefusesSchema(FakeAnthropic):
-        def __init__(self):
-            super().__init__()
-            self.refused = 0
-
-        def _stream(self, **kwargs):
-            if "format" in (kwargs.get("output_config") or {}):
-                self.refused += 1
-                raise _grammar_error()
-            return super().messages.stream(**kwargs)
-
-    client = FakeAnthropic()
+def _refuse_schema(client: FakeAnthropic, billed: list[int] | None = None) -> list[int]:
+    """Make the stub behave like the live API: refuse any request carrying a
+    `format`, before generating anything."""
     original_stream = client.messages.stream
     refusals: list[int] = []
 
@@ -323,18 +530,33 @@ def test_reduce_falls_back_when_the_schema_is_refused(tmp_path):
         if "format" in (kwargs.get("output_config") or {}):
             refusals.append(1)
             raise _grammar_error()
+        if billed is not None:
+            billed.append(1)
         return original_stream(**kwargs)
 
     client.messages.stream = stream  # type: ignore[method-assign]
+    return refusals
 
-    cache = Cache(path=tmp_path / "c.db")
-    synthesis, raw, error, structured = asyncio.run(
+
+def test_schema_rejection_is_recognised():
+    assert _is_schema_rejection(_grammar_error())
+    assert not _is_schema_rejection(RuntimeError("500 internal server error"))
+    assert not _is_schema_rejection(RuntimeError("429 rate limited"))
+
+
+def test_reduce_falls_back_when_the_schema_is_refused(cache):
+    """Degrade to prompt-guided JSON rather than losing the whole run."""
+    client = FakeAnthropic()
+    refusals = _refuse_schema(client)
+
+    synthesis, _raw, error, structured = asyncio.run(
         run_reduce(
             client,
             [{"topics": [], "claims": []}],
             {"date_range": "2024"},
             [],
             Budget(limit=100.0, cache=cache),
+            axes=AXES,
             log=lambda _: None,
         )
     )
@@ -342,68 +564,46 @@ def test_reduce_falls_back_when_the_schema_is_refused(tmp_path):
     assert structured is False, "the fallback flag was not recorded"
     assert error == "", f"the fallback did not produce a synthesis: {error}"
     assert synthesis is not None
-    cache.close()
 
 
-def test_the_schema_fallback_does_not_consume_a_paid_attempt(tmp_path):
+def test_the_schema_fallback_does_not_consume_a_paid_attempt(cache):
     """The refusal is free — nothing is generated — so it must not cost a retry."""
-    from corpus.budget import Budget
-    from corpus.cache import Cache
-    from corpus.synthesize import run_reduce
-
     client = FakeAnthropic(reduce_response=lambda _kwargs: "{not json")
-    original_stream = client.messages.stream
     billed: list[int] = []
+    _refuse_schema(client, billed)
 
-    def stream(**kwargs):
-        if "format" in (kwargs.get("output_config") or {}):
-            raise _grammar_error()
-        billed.append(1)
-        return original_stream(**kwargs)
-
-    client.messages.stream = stream  # type: ignore[method-assign]
-
-    cache = Cache(path=tmp_path / "c.db")
-    synthesis, _, error, structured = asyncio.run(
+    synthesis, _raw, error, structured = asyncio.run(
         run_reduce(
             client,
             [{"topics": []}],
             {},
             [],
             Budget(limit=100.0, cache=cache),
+            axes=AXES,
             log=lambda _: None,
         )
     )
     assert synthesis is None and "validation failed" in error
     assert len(billed) == 2, f"expected 2 billed attempts, got {len(billed)}"
     assert structured is False
-    cache.close()
 
 
-def test_reduce_schema_size_is_recorded_against_the_measured_limit():
-    """A tripwire, not a gate: the limit is the provider's, not ours.
-
-    Measured live on 2026-08-02 by bisection: 3,522 bytes of schema accepted,
-    3,809 rejected. If REDUCE_SCHEMA ever drops below that band, constrained
-    decoding starts working again and the fallback stops being exercised — worth
-    noticing, because the fallback is then untested in production.
-    """
-    from corpus.synthesize import REDUCE_SCHEMA
-
-    size = len(json.dumps(REDUCE_SCHEMA))
-    assert size > 3809, (
-        f"REDUCE_SCHEMA is now {size} bytes, below the measured rejection "
-        "threshold. Re-test against the live API — the fallback path may no "
-        "longer be reachable."
+def test_the_fallback_prompt_carries_the_schema_and_forbids_fences(cache):
+    """Without `format` the schema has to be in the prompt, and the fence
+    instruction is what stops the failure `_strip_code_fences` cleans up."""
+    client = FakeAnthropic()
+    _refuse_schema(client)
+    asyncio.run(
+        run_reduce(
+            client,
+            [{"topics": []}],
+            {},
+            [],
+            Budget(limit=100.0, cache=cache),
+            axes=AXES,
+            log=lambda _: None,
+        )
     )
-
-
-def test_map_schema_stays_within_the_grammar_limit():
-    """MAP_SCHEMA works today at ~951 bytes. Keep it that way."""
-    from corpus.synthesize import MAP_SCHEMA
-
-    size = len(json.dumps(MAP_SCHEMA))
-    assert size < 3522, (
-        f"MAP_SCHEMA is {size} bytes, near the measured 3,522-byte limit. The "
-        "map stage would start falling back too, on every slice."
-    )
+    fallback_prompt = json.dumps(client.calls[-1]["messages"], default=str)
+    assert "core_model" in fallback_prompt, "the schema was not sent in the prompt"
+    assert "no markdown fences" in fallback_prompt

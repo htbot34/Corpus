@@ -12,6 +12,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+# Long enough to clear MIN_REASONING_CHARS and shaped like an actual chain, so
+# the fixtures exercise the "kept" branch of the inference enforcement.
+GOOD_CHAIN = (
+    "They twice answer institutional-authority claims with a counterexample from "
+    "their own hiring data rather than disputing the study, which places the "
+    "burden of proof on the institution rather than on the dissenter."
+)
+
 
 @dataclass
 class _Block:
@@ -106,7 +114,9 @@ class FakeAnthropic:
                     }
                 ],
                 "entities": ["work trials"],
-                "argumentative_moves": ["concedes then narrows"],
+                "reasoning_moves": [
+                    {"move": "concedes then narrows", "example_id": ids[0] if ids else ""}
+                ],
                 "highest_signal_document_ids": ids[:3],
             }
         )
@@ -116,102 +126,103 @@ class FakeAnthropic:
         real = ids[:2] or ["1700000000000000101"]
         return json.dumps(
             {
-                "summary": "One. Two. Three.",
-                "themes": [
+                "summary": "One. Two. Three. Four.",
+                "core_model": [
                     {
-                        "name": "hiring process design",
-                        "post_count": 6,
-                        "share_of_corpus": 0.4,
-                        "first_seen": "2024-01-08",
-                        "last_seen": "2024-07-01",
-                        "trajectory": "declining",
+                        "belief": (
+                            "Process quality is measurable and most people "
+                            "refuse to measure it"
+                        ),
+                        "role": "load_bearing",
+                        "generates": [
+                            "hostility to interview puzzles",
+                            "preference for work trials",
+                        ],
                         "evidence_ids": real,
-                        "low_evidence": False,
                     },
                     {
-                        "name": "invented theme",
-                        "post_count": 1,
-                        "share_of_corpus": 0.1,
-                        "first_seen": "",
-                        "last_seen": "",
-                        "trajectory": "steady",
+                        "belief": "invented belief",
+                        "role": "derived",
+                        "generates": [],
                         "evidence_ids": ["9999999999"],  # not in the corpus
-                        "low_evidence": True,
                     },
                 ],
-                "positions": [
-                    {
-                        "claim": "Hire when the pain is specific, not ahead of the curve",
-                        "confidence": "stated",
-                        "evidence_ids": real,
-                        "contradicted_by_ids": [],
-                        "low_evidence": False,
-                    }
-                ],
-                "argument_style": {
-                    "typical_moves": ["concedes the strongest objection first"],
-                    "how_they_handle_disagreement": "Grants the point, then narrows it.",
-                    "evidence_ids": real,
-                    "low_evidence": False,
+                "reasoning": {
+                    "moves": [
+                        {"move": "concedes the strongest objection first", "example_id": real[0]},
+                        {"move": "invented move", "example_id": "9999999999"},
+                    ],
+                    "what_counts_as_evidence": "Numbers they gathered themselves.",
+                    "under_disagreement": "Grants the point, then narrows it.",
+                    "updates_when": "Someone shows them a measurement they cannot dispute.",
+                    "blind_spots": [
+                        {
+                            "pattern": "Treats their own sample as representative",
+                            "basis": GOOD_CHAIN,
+                            "evidence_ids": real,
+                        },
+                        {
+                            "pattern": "hand-waved blind spot",
+                            "basis": "seems likely",
+                            "evidence_ids": real,
+                        },
+                    ],
                 },
-                "network": [
+                "axes": [
                     {
-                        "handle": "criticfriend",
-                        "exchange_count": 2,
-                        "relationship": "sparring partner",
+                        "axis": "institutions_and_authority",
+                        "signal": "strong",
+                        "stated": "Credentials are a lazy proxy for competence.",
+                        "inferred": "They treat institutional legitimacy as earned per-claim.",
+                        "reasoning": GOOD_CHAIN,
+                        "confidence": "medium",
                         "evidence_ids": real,
-                    }
-                ],
-                "reading_diet": [
-                    {"domain": "arxiv.org", "share_count": 2, "what_it_suggests": "reads papers"}
+                    },
+                    {
+                        "axis": "epistemics",
+                        "signal": "weak",
+                        "stated": "Prefers measurement to intuition.",
+                        "inferred": "They are a naive empiricist.",
+                        "reasoning": "it follows",  # hand-waving: must be dropped
+                        "confidence": "high",
+                        "evidence_ids": real,
+                    },
+                    {
+                        "axis": "defense_intel_natsec",
+                        "signal": "none",
+                        "stated": "",
+                        "inferred": "",
+                        "reasoning": "",
+                        "confidence": "low",
+                        "evidence_ids": [],
+                    },
                 ],
                 "evolution": [
                     {
                         "topic": "work trials",
-                        "earlier_view": "two days is enough",
-                        "later_view": "two days measures sprinting",
-                        "inflection_date": "2024-06-15",
+                        "earlier": "two days is enough",
+                        "later": "two days measures sprinting",
+                        "inflection": "2024-06-15",
                         "evidence_ids": real,
-                        "low_evidence": False,
                     }
                 ],
-                "performance_gap": {
-                    "posts_most_about": "hiring",
-                    "gets_most_traction_on": "RTO criticism",
-                    "interpretation": "The audience wants the fight, not the method.",
-                    "evidence_ids": real,
-                    "low_evidence": False,
-                },
-                "open_loops": [
+                "open_questions": [
                     {
                         "question": "How to price work trials fairly",
-                        "returned_to_count": 2,
+                        "returned_to": 2,
                         "evidence_ids": real,
                     }
                 ],
-                "voice": {
-                    "register": "declarative, numbers-forward",
-                    "hobbyhorses": ["rubrics"],
-                    "tells": ["'completely backwards'"],
-                },
-                "hooks": [
+                "misreadings": [
                     {
-                        "opener": "You said two-day trials measure sprinting, not judgment",
-                        "anchor_url": "https://x.com/testsubject/status/1700000000000000160",
-                        "why_it_works": "quotes their own reversal",
-                    }
-                ],
-                "avoid": [
-                    {
-                        "topic_or_framing": "hiring ahead of the curve",
-                        "reason": "called it completely backwards",
+                        "misreading": "That they are anti-credential in general",
+                        "why_wrong": "They defend credentials where the measurement is real.",
                         "evidence_ids": real,
                     }
                 ],
                 "coverage": {
                     "date_range": "2024-01-08 to 2024-08-01",
                     "total_documents": len(ids),
-                    "kinds_included": ["original", "thread", "reply", "quote"],
                     "gaps": [],
                     "confidence": "medium",
                 },

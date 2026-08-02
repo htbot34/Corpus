@@ -45,7 +45,7 @@ def test_report_has_caveats_at_the_top_and_spend_at_the_bottom(client):
     assert "> **Coverage and caveats**" in header
     assert "may be provider gaps" in header
     assert "duplicate-cursor regression" in header
-    assert report.index("## Spend") > report.index("## Themes")
+    assert report.index("## Spend") > report.index("## The generating model")
     assert "Total: $0.1234" in report
 
 
@@ -64,12 +64,13 @@ def test_every_claim_is_hyperlinked_to_its_source_post(client):
         assert f"https://x.com/testsubject/status/{doc_id}" in report
 
 
-def test_themes_are_ranked_by_corpus_share(client):
+def test_load_bearing_beliefs_come_before_derived_ones(client):
+    """The report is a tree, not a list: roots first, what hangs off them under."""
     docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
     synthesis = _synthesis([d.source_id for d in docs[:2]])
-    # give the second theme valid evidence and a bigger share
-    synthesis.themes[1].evidence_ids = [docs[0].source_id]
-    synthesis.themes[1].share_of_corpus = 0.9
+    synthesis.core_model[1].belief = "A second-order view"
+    synthesis.core_model[1].role = "derived"
+    synthesis.core_model[1].evidence_ids = [docs[0].source_id]
     report = render_report(
         handle="testsubject",
         synthesis=synthesis,
@@ -78,7 +79,72 @@ def test_themes_are_ranked_by_corpus_share(client):
         budget_lines=[],
         run_meta={},
     )
-    assert report.index("### invented theme") < report.index("### hiring process design")
+    assert report.index("### Process quality is measurable") < report.index(
+        "### A second-order view"
+    )
+    # `generates` is what makes this a model rather than a list of opinions
+    assert "→ hostility to interview puzzles" in report
+
+
+def test_inference_is_rendered_apart_from_what_was_stated(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert "**Stated.** Credentials are a lazy proxy for competence." in report
+    assert "**Inferred** _(medium confidence)_" in report
+    assert "_Chain:_" in report
+
+
+def test_no_signal_axes_are_reported_not_hidden(client):
+    """An axis the corpus cannot speak to is a finding. Silently omitting it
+    would be indistinguishable from never having asked."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert "**No signal:** defense intel natsec" in report
+
+
+def test_evidence_links_are_capped_per_claim(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    synthesis = _synthesis([d.source_id for d in docs[:2]])
+    synthesis.core_model[0].evidence_ids = [d.source_id for d in docs[:6]]
+    report = render_report(
+        handle="testsubject",
+        synthesis=synthesis,
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    belief_block = report.split("### Process quality is measurable")[1].split("###")[0]
+    assert belief_block.count("](https://x.com/") <= 3
+
+
+def test_filter_drop_count_lands_in_the_coverage_block(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={"filter": {"dropped": 4, "by_reason": {"acknowledgement": 4}}},
+    )
+    assert "4 low-signal document(s) filtered" in report
+    assert "nothing was filtered by subject" in report
+    assert "--no-filter" in report
 
 
 def test_report_survives_a_failed_synthesis(client):
@@ -100,7 +166,6 @@ def test_empty_evolution_says_so_rather_than_inventing_one(client):
     docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
     synthesis = _synthesis([d.source_id for d in docs[:2]])
     synthesis.evolution = []
-    synthesis.performance_gap.posts_most_about = ""
     report = render_report(
         handle="testsubject",
         synthesis=synthesis,
@@ -109,8 +174,24 @@ def test_empty_evolution_says_so_rather_than_inventing_one(client):
         budget_lines=[],
         run_meta={},
     )
-    assert "No view changes found in this corpus. Not manufactured." in report
-    assert "No gap to report." in report
+    assert "No view changed inside this corpus. Not manufactured." in report
+
+
+def test_cut_sections_are_gone(client):
+    """performance_gap, hooks, themes, and the network/reading-diet tables were
+    about reach and outreach, not cognition."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    for heading in ("## Themes", "## Hooks", "## Performance gap", "## Network",
+                    "## Reading diet", "## Voice", "## Positions"):
+        assert heading not in report
 
 
 # -- secondary sources ------------------------------------------------------
