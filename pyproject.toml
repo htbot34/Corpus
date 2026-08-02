@@ -22,13 +22,26 @@ dependencies = [
     # X_PROVIDER, ANTHROPIC_API_KEY) and a local .env is the documented way to
     # hold them. stdlib has no .env parser.
     "python-dotenv>=1.0",
+    # pyyaml: profiles.yaml holds the worldview axes, each with a multi-line
+    # `probe` injected verbatim into the reduce prompt. stdlib has no YAML
+    # parser, and a hand-rolled one would mis-handle valid YAML silently —
+    # which for a config that decides what the report analyzes is the wrong
+    # failure mode.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
 corpus = "corpus.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    # types-PyYAML: without it `mypy --strict` reports a missing stub for
+    # `import yaml` in corpus/axes.py. Stubs belong in the dev group rather
+    # than under the mypy ignore_missing_imports override below: yaml *has*
+    # real stubs, so silencing it would give up type checking we can have.
+    "types-PyYAML>=6.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,11 +52,10 @@ packages = ["corpus"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = [
-    # Synthesis.voice.register is fixed by the output schema; the pydantic
-    # shadow warning is cosmetic and the field name is not ours to change.
-    'ignore:Field name "register".*:UserWarning',
-]
+# The old schema's `voice.register` shadowed a pydantic attribute and needed a
+# suppression here. The cognition-first schema has no such field, so the
+# suppression went with it and warnings are errors again.
+filterwarnings = ["error"]
 
 # --------------------------------------------------------------------------
 # Quality gates (Phase 3.4). `make check` runs all three.

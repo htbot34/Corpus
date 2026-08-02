@@ -64,7 +64,10 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
     "claude-sonnet-5": (3.00, 15.00),  # overridden below during the intro window
+    # Both spellings: the map stage pins the dated id so a silent alias
+    # re-point cannot change what we billed against mid-run.
     "claude-haiku-4-5": (1.00, 5.00),
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
 }
 
 # Prompt caching multipliers against the input rate.
@@ -457,17 +460,28 @@ def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:
     return reads * X_COST_PER_TWEET + X_COST_PER_PROFILE
 
 
-def estimate_anthropic_cost(post_count: int) -> float:
+def estimate_anthropic_cost(
+    post_count: int,
+    map_model: str = "claude-haiku-4-5-20251001",
+    reduce_model: str = "claude-opus-5",
+) -> float:
     """Rough pre-flight estimate for map+reduce over `post_count` documents.
 
     Assumes ~120 tokens/document, ~30k-token map chunks with ~1.5k-token JSON
-    replies, and one reduce call over the map outputs plus signals.
+    replies, and one reduce call over the map outputs plus signals. The reduce
+    output allowance is generous because the reduce model thinks by default and
+    thinking bills as output.
+
+    Deliberately does not discount for the low-signal prefilter: a pre-flight
+    estimate that runs high is a budget you do not blow through. It is also
+    *not* the reservation — `estimate_anthropic_call` is, and it charges the
+    full `max_tokens` because a reservation that guesses low is not a ceiling.
     """
     corpus_tokens = post_count * 120
     map_chunks = max(1, round(corpus_tokens / 30_000))
-    sonnet_in, sonnet_out = model_rates("claude-sonnet-5")
-    opus_in, opus_out = model_rates("claude-opus-5")
-    map_cost = corpus_tokens * sonnet_in / 1_000_000 + map_chunks * 1_500 * sonnet_out / 1_000_000
+    map_in, map_out = model_rates(map_model)
+    reduce_in_rate, reduce_out_rate = model_rates(reduce_model)
+    map_cost = corpus_tokens * map_in / 1_000_000 + map_chunks * 1_500 * map_out / 1_000_000
     reduce_in = map_chunks * 1_500 + 3_000  # map outputs + signals.json
-    reduce_cost = reduce_in * opus_in / 1_000_000 + 6_000 * opus_out / 1_000_000
+    reduce_cost = reduce_in * reduce_in_rate / 1_000_000 + 10_000 * reduce_out_rate / 1_000_000
     return map_cost + reduce_cost
