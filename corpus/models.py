@@ -3,11 +3,15 @@
 `Document` is the unit everything downstream operates on. The most important
 field is `context`: a reply without its parent is noise, and "completely
 backwards" means nothing until you know what it answers.
+
+`Synthesis` is cognition-first. It does not catalogue what someone posts about;
+it reconstructs the model that generates their positions. Every field earns its
+place by telling you how the mind works — anything that only told you what the
+mouth said has been cut.
 """
 
 from __future__ import annotations
 
-import warnings
 from datetime import datetime
 from typing import Any, Literal
 
@@ -83,114 +87,106 @@ class Thread(BaseModel):
 # Synthesis output schema (validated against the reduce-stage model output)
 # --------------------------------------------------------------------------
 
-
-class Theme(BaseModel):
-    name: str
-    post_count: int = 0
-    share_of_corpus: float = 0.0
-    first_seen: str = ""
-    last_seen: str = ""
-    trajectory: Literal["rising", "steady", "declining", "abandoned"] = "steady"
-    evidence_ids: list[str] = Field(default_factory=list)
-    low_evidence: bool = False
+BeliefRole = Literal["load_bearing", "derived", "held_lightly"]
+SignalStrength = Literal["strong", "weak", "none"]
+Confidence = Literal["high", "medium", "low"]
 
 
-class Position(BaseModel):
-    claim: str
-    confidence: Literal["stated", "implied", "amplified_from_others"]
-    evidence_ids: list[str] = Field(default_factory=list)
-    contradicted_by_ids: list[str] = Field(default_factory=list)
-    low_evidence: bool = False
+class CoreBelief(BaseModel):
+    """One node of the generating model.
 
+    `generates` is what makes this different from a list of opinions: it names
+    the surface positions that fall out of the belief, so the report shows a
+    tree rather than a pile.
+    """
 
-class ArgumentStyle(BaseModel):
-    typical_moves: list[str] = Field(default_factory=list)
-    how_they_handle_disagreement: str = ""
-    evidence_ids: list[str] = Field(default_factory=list)
-    low_evidence: bool = False
-
-
-class NetworkEdge(BaseModel):
-    handle: str
-    exchange_count: int = 0
-    relationship: str = ""
+    belief: str
+    role: BeliefRole = "derived"
+    generates: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
 
 
-class ReadingDietEntry(BaseModel):
-    domain: str
-    share_count: int = 0
-    what_it_suggests: str = ""
+class ReasoningMove(BaseModel):
+    move: str
+    example_id: str = ""
+
+
+class BlindSpot(BaseModel):
+    """An inference, so it carries `basis` for the same reason `axes` carries
+    `reasoning`: the chain is the evidence."""
+
+    pattern: str
+    basis: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class Reasoning(BaseModel):
+    moves: list[ReasoningMove] = Field(default_factory=list)
+    what_counts_as_evidence: str = ""
+    under_disagreement: str = ""
+    updates_when: str = ""
+    blind_spots: list[BlindSpot] = Field(default_factory=list)
+
+
+class Axis(BaseModel):
+    """A worldview axis with the two inference tiers held apart.
+
+    `stated` is sourced the same way every claim has always been sourced.
+    `inferred` is what follows from it, and is only admissible with a
+    `reasoning` chain — an inference whose chain is missing or hand-waving is
+    dropped exactly as an unsourced claim is dropped.
+
+    `signal: "none"` is a required, expected output, not a failure. An axis the
+    corpus cannot speak to must say so; a confabulated axis is worse than an
+    absent one because it is indistinguishable from a real finding.
+    """
+
+    axis: str
+    signal: SignalStrength = "none"
+    stated: str = ""
+    inferred: str = ""
+    reasoning: str = ""
+    confidence: Confidence = "low"
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class EvolutionEntry(BaseModel):
     topic: str
-    earlier_view: str
-    later_view: str
-    inflection_date: str = ""
+    earlier: str = ""
+    later: str = ""
+    inflection: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
-    low_evidence: bool = False
 
 
-class PerformanceGap(BaseModel):
-    posts_most_about: str = ""
-    gets_most_traction_on: str = ""
-    interpretation: str = ""
-    evidence_ids: list[str] = Field(default_factory=list)
-    low_evidence: bool = False
-
-
-class OpenLoop(BaseModel):
+class OpenQuestion(BaseModel):
     question: str
-    returned_to_count: int = 0
+    returned_to: int = 0
     evidence_ids: list[str] = Field(default_factory=list)
 
 
-# `register` is fixed by the output schema and is not ours to rename; pydantic
-# warns that it shadows a BaseModel attribute. The warning is cosmetic and the
-# field works, so silence it here rather than leaking noise into every CLI run.
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", message='Field name "register"', category=UserWarning)
+class Misreading(BaseModel):
+    """The guard against the failure mode the inference tier introduces."""
 
-    class Voice(BaseModel):
-        register: str = ""
-        hobbyhorses: list[str] = Field(default_factory=list)
-        tells: list[str] = Field(default_factory=list)
-
-
-class Hook(BaseModel):
-    opener: str
-    anchor_url: str = ""
-    why_it_works: str = ""
-
-
-class AvoidEntry(BaseModel):
-    topic_or_framing: str
-    reason: str = ""
+    misreading: str
+    why_wrong: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
 
 
 class Coverage(BaseModel):
     date_range: str = ""
     total_documents: int = 0
-    kinds_included: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
-    confidence: Literal["high", "medium", "low"] = "medium"
+    confidence: Confidence = "medium"
 
 
 class Synthesis(BaseModel):
     summary: str
-    themes: list[Theme] = Field(default_factory=list)
-    positions: list[Position] = Field(default_factory=list)
-    argument_style: ArgumentStyle = Field(default_factory=ArgumentStyle)
-    network: list[NetworkEdge] = Field(default_factory=list)
-    reading_diet: list[ReadingDietEntry] = Field(default_factory=list)
+    core_model: list[CoreBelief] = Field(default_factory=list)
+    reasoning: Reasoning = Field(default_factory=Reasoning)
+    axes: list[Axis] = Field(default_factory=list)
     evolution: list[EvolutionEntry] = Field(default_factory=list)
-    performance_gap: PerformanceGap = Field(default_factory=PerformanceGap)
-    open_loops: list[OpenLoop] = Field(default_factory=list)
-    voice: Voice = Field(default_factory=Voice)
-    hooks: list[Hook] = Field(default_factory=list)
-    avoid: list[AvoidEntry] = Field(default_factory=list)
+    open_questions: list[OpenQuestion] = Field(default_factory=list)
+    misreadings: list[Misreading] = Field(default_factory=list)
     coverage: Coverage = Field(default_factory=Coverage)
 
 
@@ -205,11 +201,22 @@ class MapChunkClaim(BaseModel):
     confidence: Literal["stated", "implied", "amplified_from_others"] = "stated"
 
 
+class MapChunkMove(BaseModel):
+    """A reasoning move plus the document that shows it.
+
+    The id matters: `reasoning.moves` in the final synthesis must cite one, and
+    a move the reduce stage cannot source gets dropped.
+    """
+
+    move: str
+    example_id: str = ""
+
+
 class MapChunk(BaseModel):
     """Strict JSON returned by each map-stage call."""
 
     topics: list[MapChunkTopic] = Field(default_factory=list)
     claims: list[MapChunkClaim] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
-    argumentative_moves: list[str] = Field(default_factory=list)
+    reasoning_moves: list[MapChunkMove] = Field(default_factory=list)
     highest_signal_document_ids: list[str] = Field(default_factory=list)

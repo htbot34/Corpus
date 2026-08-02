@@ -1,14 +1,16 @@
 """Two-stage map-reduce synthesis. One call over 3,000 posts produces mush.
 
-Map:    chronological ~30k-token chunks -> one claude-sonnet-5 call each,
+Map:    chronological ~30k-token chunks -> one cheap extraction call each,
         strict JSON out, concurrency capped at 4.
 Reduce: one claude-opus-5 call over all map outputs plus signals.json, with
-        prompt caching on the corpus block.
+        prompt caching on the corpus block. Reduce is judgment and inference
+        with visible reasoning, which is what the expensive model is for.
 
 The hard rules live in the system prompts below and are *also* enforced in
-Python afterwards: every evidence id is checked against the real corpus and
-unsourceable findings are dropped. A rule the model is merely asked to follow
-is a hope; a rule the code enforces is a guarantee.
+Python afterwards: every evidence id is checked against the real corpus, every
+inference is checked for an actual reasoning chain, and anything that fails is
+dropped. A rule the model is merely asked to follow is a hope; a rule the code
+enforces is a guarantee.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -23,36 +26,66 @@ from typing import Any, cast
 from anthropic import AsyncAnthropic
 from pydantic import ValidationError
 
+from .axes import AxisSpec, axes_prompt_block, load_axes
 from .budget import (
     Budget,
     BudgetExceeded,
     estimate_anthropic_call,
     estimate_tokens,
 )
-from .models import Document, MapChunk, Synthesis
+from .models import Axis, Document, MapChunk, Synthesis
+from .prefilter import FilterStats, filter_low_signal
 
-MAP_MODEL = "claude-sonnet-5"
+# Map is extraction: find the claims, name the moves, point at the ids. It does
+# not need judgment, so it does not need an expensive model — and map is the
+# bulk of the tokens.
+MAP_MODEL = "claude-haiku-4-5-20251001"
+# Reduce builds the generating model and defends every inference. Do not
+# downgrade it.
 REDUCE_MODEL = "claude-opus-5"
 
 MAP_MAX_TOKENS = 8_000
 REDUCE_MAX_TOKENS = 32_000
+
+# `effort` is rejected outright by models that do not implement it — Haiku 4.5
+# among them, which is now the default map model. So it is opt-in by model
+# rather than opt-out: omitting it is always safe, sending it blindly is a 400
+# on every map slice.
+EFFORT_CAPABLE_PREFIXES = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+)
+
+
+def supports_effort(model: str) -> bool:
+    return model.startswith(EFFORT_CAPABLE_PREFIXES)
+
 
 # Constrained decoding compiles the JSON schema into a grammar, and the API
 # rejects a grammar above an internal size limit with a 400:
 #
 #   "The compiled grammar is too large, which would cause performance issues."
 #
-# Measured against the live API on 2026-08-02 by bisecting REDUCE_SCHEMA field
-# by field: 9 of its 13 top-level fields (3,522 bytes of schema) are accepted
-# and 10 (3,809 bytes) are not. The full schema is 4,826 bytes, so the reduce
-# call could never have succeeded — every test passed because FakeAnthropic
-# returns canned JSON and never submits the schema anywhere.
+# Measured against the live API on 2026-08-02 by bisecting the then-current
+# REDUCE_SCHEMA field by field: 3,522 bytes of schema accepted, 3,809 rejected.
+# The schema at the time was 4,826 bytes, so the reduce call could never have
+# succeeded — every test passed because FakeAnthropic returns canned JSON and
+# never submits the schema anywhere.
 #
-# MAP_SCHEMA, at 951 bytes, is comfortably inside the limit and is unaffected.
+# The cognition-first REDUCE_SCHEMA is 3,251 bytes and fits, so constrained
+# decoding is the normal path again and the grammar cannot emit a markdown
+# fence. tests/test_schema_size.py keeps it under budget.
 #
-# Rather than shaving the schema to sit just under a limit we do not control —
-# where the next field added breaks it again, in production, after ingestion has
-# been paid for — the reduce degrades: it asks for constrained decoding, and if
+# The fallback below stays regardless, because the size limit is not ours to
+# control and the next field added could cross it in production, after
+# ingestion has been paid for: the reduce asks for constrained decoding, and if
 # the schema is refused it retries without `format`, putting the schema in the
 # prompt instead. The real guarantee was never the grammar anyway; it is
 # `Synthesis.model_validate_json` below, plus the retry-with-the-error loop.
@@ -71,7 +104,13 @@ MAP_CONCURRENCY = 4
 # for English prose and costs no API round trip to compute.
 CHARS_PER_TOKEN = 4
 
-MAP_SYSTEM = """You are extracting structured evidence from one chronological slice of a \
+# Three ids is enough to prove a claim and few enough that the report reads as
+# analysis with citations rather than a citation dump with commentary.
+EVIDENCE_CAP = 3
+# An inference whose reasoning is this short is not a chain, it is a restatement.
+MIN_REASONING_CHARS = 80
+
+MAP_SYSTEM_BASE = """You are extracting structured evidence from one chronological slice of a \
 person's public writing. You are not summarizing and not editorializing.
 
 Each document is presented as:
@@ -89,40 +128,106 @@ Return strict JSON only:
 - topics: recurring subjects in this slice, each with the document ids that show it.
 - claims: explicit positions the subject states, each with document ids. Mark a \
 claim "amplified_from_others" when the only support is a repost or the content of \
-a quoted post rather than the subject's own words.
+a quoted post rather than the subject's own words. Prefer the claims that reveal \
+an underlying commitment over the ones that merely report a fact.
 - entities: people, companies, products, papers, and places the subject cites.
-- argumentative_moves: how they argue (e.g. "reframes the question", "concedes then \
-narrows", "answers with a counterexample", "cites own prior work").
+- reasoning_moves: how they argue, each with one document id that shows it \
+(e.g. "reframes the question", "concedes then narrows", "answers with a \
+counterexample", "cites own prior work", "reaches for a base rate").
 - highest_signal_document_ids: the 3 documents in this slice that best reveal how \
 this person thinks. Not the most popular — the most revealing.
 
 Every id you emit must be an id that appears in this slice. Emit no other prose."""
 
-REDUCE_SYSTEM = """You are producing a sourced synthesis of one person's public \
-writing. You are given: (a) structured extractions from every chronological slice \
-of their corpus, (b) the highest-signal documents verbatim, and (c) signals.json, \
-which contains every count and statistic computed from the corpus.
+MAP_AXES_SUFFIX = """
 
-Hard rules:
+The downstream analysis will try to locate this person on the axes below. When a \
+document bears on one of them, make sure it appears in `claims` or \
+`highest_signal_document_ids`. Do not force it: a slice that touches none of \
+these should return none of them.
+
+{axes}"""
+
+
+REDUCE_SYSTEM_TEMPLATE = """You are reconstructing how one person thinks from their public \
+writing. Not what they post about — the model that generates their positions.
+
+You are given: (a) structured extractions from every chronological slice of their \
+corpus, (b) the highest-signal documents verbatim, and (c) signals.json, which \
+contains every count and statistic computed from the corpus.
+
+## What each field is for
+
+`core_model` is the centerpiece. Three to six load-bearing beliefs that generate \
+the rest — not a list of opinions. For each, `generates` names the surface \
+positions that follow from it. A belief that generates nothing is an opinion and \
+does not belong here. Mark `role` honestly: "load_bearing" for the roots that \
+other positions hang off, "derived" for what follows from a root, \
+"held_lightly" for a view they voice but do not defend.
+
+`reasoning` is the machinery: the moves they make, what they will accept as \
+evidence, what happens under disagreement, and what it takes for them to update. \
+`blind_spots` are patterns they do not appear to see in themselves.
+
+`axes` locates them on the axes listed below. `evolution` is where a view \
+actually moved. `open_questions` are the problems they return to without \
+resolving. `misreadings` are the wrong conclusions a careless reader would draw \
+from this corpus — this is the guard on everything above it, so make it specific \
+to this person.
+
+## The two inference tiers, which you must keep apart
+
+- `stated` is what they actually said. Same sourcing rule as always: it traces \
+to real document ids or it is dropped.
+- `inferred` is what follows from what they said. It requires `reasoning`: the \
+chain from specific posts to the conclusion, written out. Naming the conclusion \
+again is not a chain. "Their posts suggest this" is not a chain. An inference \
+whose reasoning is missing or hand-waving will be deleted before the report is \
+written, so write the chain or leave `inferred` empty.
+
+`confidence` describes the inference, not the topic.
+
+## Signal strength, which you must not inflate
+
+`signal: "none"` is a required, valid, expected output. If the corpus contains \
+nothing bearing on an axis, say so: set `signal` to "none", leave `stated`, \
+`inferred` and `reasoning` empty, and cite nothing. Do not reach for something \
+plausible. A confabulated axis is worse than an absent one, because it is \
+indistinguishable from a real finding. Most corpora have nothing to say about \
+most axes; that is the normal case, not a failure.
+
+Use "weak" when there are one or two documents that glance at the axis, and \
+"strong" only when the corpus genuinely lets you locate them.
+
+## Axes for this run
+
+{axes}
+
+## Hard rules
 
 1. Every field carrying evidence_ids must reference real document ids from the \
-corpus. Drop any finding you cannot source. No unsourced assertions.
-2. Never attribute a parent tweet's or quoted tweet's content to the subject. Only \
-THEY WROTE text supports a position.
-3. Reposts and quote-tweet targets support confidence "amplified_from_others" and \
-nothing stronger.
-4. All counts come from signals.json. Do not compute or estimate any number. If a \
-number you want is not in signals.json, omit the claim rather than inventing it.
-5. `evolution` and `performance_gap` are the differentiating fields. If the corpus \
-genuinely shows no change of view, return an empty evolution list. If posting \
-subject and traction subject match, return an empty performance_gap. Never \
-manufacture an arc.
-6. `hooks` must be impossible to write without having read this specific corpus. \
-Each opener must reference a specific claim, exchange, or reversal in it. Reject \
-anything that would apply to any founder or any writer.
-7. Thin evidence gets "low_evidence": true, never padding. Two documents is thin.
+corpus. Drop any finding you cannot source.
+2. At most {cap} evidence ids per claim. Choose the most *distinctive* documents, \
+not the most recent — the ones that would be hard to explain any other way.
+3. Never attribute a parent tweet's or quoted tweet's content to the subject. \
+Only THEY WROTE text supports a position.
+4. Reposts and quote-tweet targets are the weakest evidence there is. They never \
+support a load-bearing belief on their own.
+5. All counts come from signals.json. Do not compute or estimate any number.
+6. Never manufacture an arc. If no view changed, return an empty `evolution`.
 
-Write `summary` as exactly 3 sentences, no hedging. Return only the JSON object."""
+Write `summary` as 3-4 sentences on how this person reasons — the shape of their \
+thinking, not a list of their subjects. Return only the JSON object."""
+
+
+def build_map_system(axes: list[AxisSpec]) -> str:
+    if not axes:
+        return MAP_SYSTEM_BASE
+    return MAP_SYSTEM_BASE + MAP_AXES_SUFFIX.format(axes=axes_prompt_block(axes))
+
+
+def build_reduce_system(axes: list[AxisSpec]) -> str:
+    return REDUCE_SYSTEM_TEMPLATE.format(axes=axes_prompt_block(axes), cap=EVIDENCE_CAP)
 
 
 # --------------------------------------------------------------------------
@@ -139,34 +244,33 @@ def _obj(props: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _arr(items: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "items": items}
+
+
+def _enum(*values: str) -> dict[str, Any]:
+    return {"type": "string", "enum": list(values)}
+
+
 _STR = {"type": "string"}
 _INT = {"type": "integer"}
-_NUM = {"type": "number"}
-_BOOL = {"type": "boolean"}
 _IDS = {"type": "array", "items": {"type": "string"}}
 _STRS = {"type": "array", "items": {"type": "string"}}
 
 MAP_SCHEMA = _obj(
     {
-        "topics": {
-            "type": "array",
-            "items": _obj({"name": _STR, "document_ids": _IDS}),
-        },
-        "claims": {
-            "type": "array",
-            "items": _obj(
+        "topics": _arr(_obj({"name": _STR, "document_ids": _IDS})),
+        "claims": _arr(
+            _obj(
                 {
                     "claim": _STR,
                     "document_ids": _IDS,
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["stated", "implied", "amplified_from_others"],
-                    },
+                    "confidence": _enum("stated", "implied", "amplified_from_others"),
                 }
-            ),
-        },
+            )
+        ),
         "entities": _STRS,
-        "argumentative_moves": _STRS,
+        "reasoning_moves": _arr(_obj({"move": _STR, "example_id": _STR})),
         "highest_signal_document_ids": _IDS,
     }
 )
@@ -174,108 +278,124 @@ MAP_SCHEMA = _obj(
 REDUCE_SCHEMA = _obj(
     {
         "summary": _STR,
-        "themes": {
-            "type": "array",
-            "items": _obj(
+        "core_model": _arr(
+            _obj(
                 {
-                    "name": _STR,
-                    "post_count": _INT,
-                    "share_of_corpus": _NUM,
-                    "first_seen": _STR,
-                    "last_seen": _STR,
-                    "trajectory": {
-                        "type": "string",
-                        "enum": ["rising", "steady", "declining", "abandoned"],
-                    },
+                    "belief": _STR,
+                    "role": _enum("load_bearing", "derived", "held_lightly"),
+                    "generates": _STRS,
                     "evidence_ids": _IDS,
-                    "low_evidence": _BOOL,
                 }
-            ),
-        },
-        "positions": {
-            "type": "array",
-            "items": _obj(
-                {
-                    "claim": _STR,
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["stated", "implied", "amplified_from_others"],
-                    },
-                    "evidence_ids": _IDS,
-                    "contradicted_by_ids": _IDS,
-                    "low_evidence": _BOOL,
-                }
-            ),
-        },
-        "argument_style": _obj(
+            )
+        ),
+        "reasoning": _obj(
             {
-                "typical_moves": _STRS,
-                "how_they_handle_disagreement": _STR,
-                "evidence_ids": _IDS,
-                "low_evidence": _BOOL,
+                "moves": _arr(_obj({"move": _STR, "example_id": _STR})),
+                "what_counts_as_evidence": _STR,
+                "under_disagreement": _STR,
+                "updates_when": _STR,
+                "blind_spots": _arr(_obj({"pattern": _STR, "basis": _STR, "evidence_ids": _IDS})),
             }
         ),
-        "network": {
-            "type": "array",
-            "items": _obj(
+        "axes": _arr(
+            _obj(
                 {
-                    "handle": _STR,
-                    "exchange_count": _INT,
-                    "relationship": _STR,
+                    "axis": _STR,
+                    "signal": _enum("strong", "weak", "none"),
+                    "stated": _STR,
+                    "inferred": _STR,
+                    "reasoning": _STR,
+                    "confidence": _enum("high", "medium", "low"),
                     "evidence_ids": _IDS,
                 }
-            ),
-        },
-        "reading_diet": {
-            "type": "array",
-            "items": _obj({"domain": _STR, "share_count": _INT, "what_it_suggests": _STR}),
-        },
-        "evolution": {
-            "type": "array",
-            "items": _obj(
+            )
+        ),
+        "evolution": _arr(
+            _obj(
                 {
                     "topic": _STR,
-                    "earlier_view": _STR,
-                    "later_view": _STR,
-                    "inflection_date": _STR,
+                    "earlier": _STR,
+                    "later": _STR,
+                    "inflection": _STR,
                     "evidence_ids": _IDS,
-                    "low_evidence": _BOOL,
                 }
-            ),
-        },
-        "performance_gap": _obj(
-            {
-                "posts_most_about": _STR,
-                "gets_most_traction_on": _STR,
-                "interpretation": _STR,
-                "evidence_ids": _IDS,
-                "low_evidence": _BOOL,
-            }
+            )
         ),
-        "open_loops": {
-            "type": "array",
-            "items": _obj({"question": _STR, "returned_to_count": _INT, "evidence_ids": _IDS}),
-        },
-        "voice": _obj({"register": _STR, "hobbyhorses": _STRS, "tells": _STRS}),
-        "hooks": {
-            "type": "array",
-            "items": _obj({"opener": _STR, "anchor_url": _STR, "why_it_works": _STR}),
-        },
-        "avoid": {
-            "type": "array",
-            "items": _obj({"topic_or_framing": _STR, "reason": _STR, "evidence_ids": _IDS}),
-        },
+        "open_questions": _arr(_obj({"question": _STR, "returned_to": _INT, "evidence_ids": _IDS})),
+        "misreadings": _arr(_obj({"misreading": _STR, "why_wrong": _STR, "evidence_ids": _IDS})),
         "coverage": _obj(
             {
                 "date_range": _STR,
                 "total_documents": _INT,
-                "kinds_included": _STRS,
                 "gaps": _STRS,
-                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                "confidence": _enum("high", "medium", "low"),
             }
         ),
     }
 )
+
+
+def schema_bytes(schema: dict[str, Any]) -> int:
+    """Serialized size, measured the way the grammar limit was bisected."""
+    return len(json.dumps(schema))
+
+
+def _output_config(model: str, effort: str, schema: dict[str, Any] | None) -> dict[str, Any]:
+    """Build `output_config`, omitting what the model would reject.
+
+    `schema=None` is the schema-rejection fallback: no `format`, so no grammar.
+    """
+    config: dict[str, Any] = {}
+    if supports_effort(model):
+        config["effort"] = effort
+    if schema is not None:
+        config["format"] = {"type": "json_schema", "schema": schema}
+    return config
+
+
+# --------------------------------------------------------------------------
+# output parsing
+# --------------------------------------------------------------------------
+
+_FENCE = re.compile(r"```(?:json|JSON)?\s*\n?(.*?)```", re.DOTALL)
+
+
+def _strip_code_fences(text: str) -> str:
+    """Recover bare JSON from a fenced or prose-prefixed response.
+
+    A no-op on the constrained-decoding path, where the grammar physically
+    cannot emit a backtick. This exists for the schema-rejection fallback,
+    which is exactly where a model asked for JSON in the prompt tends to wrap
+    it in ```json — seen live, and it used to cost a full billed generation.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return text
+    if stripped[0] in "{[":
+        return stripped
+
+    match = _FENCE.search(stripped)
+    if match:
+        inner = match.group(1).strip()
+        if inner:
+            return inner
+
+    # Leading prose, or an unterminated fence: fall back to the outermost
+    # brace/bracket pair.
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = stripped.find(opener)
+        end = stripped.rfind(closer)
+        if start != -1 and end > start:
+            return stripped[start : end + 1]
+    return stripped
+
+
+def parse_synthesis(raw: str) -> Synthesis:
+    return Synthesis.model_validate_json(_strip_code_fences(raw))
+
+
+def parse_map_chunk(raw: str) -> MapChunk:
+    return MapChunk.model_validate_json(_strip_code_fences(raw))
 
 
 # --------------------------------------------------------------------------
@@ -337,6 +457,8 @@ class SynthesisRun:
     map_failures: int = 0
     dropped_findings: list[str] = field(default_factory=list)
     corrected_counts: list[str] = field(default_factory=list)
+    filter_stats: FilterStats | None = None
+    analyzed_documents: int = 0
     raw_reduce_output: str = ""
     structured_output: bool = True  # False when the schema was refused
     error: str = ""
@@ -347,6 +469,8 @@ class SynthesisRun:
             "map_failures": self.map_failures,
             "dropped_findings": self.dropped_findings,
             "corrected_counts": self.corrected_counts,
+            "analyzed_documents": self.analyzed_documents,
+            "filter": self.filter_stats.as_dict() if self.filter_stats else {},
             "structured_output": self.structured_output,
             "error": self.error,
         }
@@ -389,10 +513,12 @@ async def _count_input_tokens(client: Any, model: str, system: Any, messages: An
 
 
 async def run_map(
-    client: AsyncAnthropic,
+    client: Any,  # AsyncAnthropic, or any stub with the same messages API
     chunks: list[list[Document]],
     budget: Budget,
     *,
+    axes: list[AxisSpec],
+    model: str = MAP_MODEL,
     effort: str = "medium",
     completed: dict[int, dict[str, Any]] | None = None,
     on_slice: Callable[[int, dict[str, Any]], None] | None = None,
@@ -408,6 +534,7 @@ async def run_map(
     semaphore = asyncio.Semaphore(MAP_CONCURRENCY)
     results: list[dict[str, Any] | None] = [None] * len(chunks)
     failures = 0
+    system_prompt = build_map_system(axes)
     already = completed or {}
     for index, payload in already.items():
         if 0 <= index < len(chunks):
@@ -428,7 +555,7 @@ async def run_map(
             system = [
                 {
                     "type": "text",
-                    "text": MAP_SYSTEM,
+                    "text": system_prompt,
                     # Shared across every map call — cache it once.
                     "cache_control": {"type": "ephemeral"},
                 }
@@ -447,11 +574,11 @@ async def run_map(
             # flight holds its own reservation, so four simultaneous calls
             # cannot collectively overshoot — which is exactly what asyncio
             # .gather + charge-on-return allowed before.
-            counted = await _count_input_tokens(client, MAP_MODEL, system, messages)
+            counted = await _count_input_tokens(client, model, system, messages)
             input_tokens = (
-                counted if counted is not None else estimate_tokens(MAP_SYSTEM + str(messages))
+                counted if counted is not None else estimate_tokens(system_prompt + str(messages))
             )
-            estimate = estimate_anthropic_call(MAP_MODEL, input_tokens, MAP_MAX_TOKENS)
+            estimate = estimate_anthropic_call(model, input_tokens, MAP_MAX_TOKENS)
 
             try:
                 reservation = budget.reserve(estimate, f"map slice {index + 1}")
@@ -462,20 +589,14 @@ async def run_map(
 
             try:
                 message = await client.messages.create(
-                    model=MAP_MODEL,
+                    model=model,
                     max_tokens=MAP_MAX_TOKENS,
                     # The SDK's TypedDicts are stricter than the dict literals
                     # built above. Casting at the call boundary keeps the
                     # prompt-building code readable; the shapes themselves are
                     # pinned by tests/test_sdk_contract.py.
                     system=cast(Any, system),
-                    output_config=cast(
-                        Any,
-                        {
-                            "effort": effort,
-                            "format": {"type": "json_schema", "schema": MAP_SCHEMA},
-                        },
-                    ),
+                    output_config=cast(Any, _output_config(model, effort, MAP_SCHEMA)),
                     messages=cast(Any, messages),
                 )
             except BudgetExceeded:
@@ -489,7 +610,7 @@ async def run_map(
 
             actual: float | None = None
             try:
-                actual = _charge(budget, MAP_MODEL, message, note=f"map slice {index + 1} ({span})")
+                actual = _charge(budget, model, message, note=f"map slice {index + 1} ({span})")
             finally:
                 # Settle after charging: briefly counting both is conservative,
                 # counting neither is the overshoot this class exists to prevent.
@@ -499,7 +620,7 @@ async def run_map(
                 log(f"  [map {index + 1}/{len(chunks)}] refused by safety classifier")
                 return
             try:
-                parsed = MapChunk.model_validate_json(_text_of(message))
+                parsed = parse_map_chunk(_text_of(message))
             except (ValidationError, ValueError) as exc:
                 failures += 1
                 log(f"  [map {index + 1}/{len(chunks)}] unparseable JSON: {exc}")
@@ -547,17 +668,20 @@ def _corpus_block(
 
 
 async def run_reduce(
-    client: AsyncAnthropic,
+    client: Any,  # AsyncAnthropic, or any stub with the same messages API
     map_outputs: list[dict[str, Any]],
     signals: dict[str, Any],
     highlights: list[Document],
     budget: Budget,
     *,
+    axes: list[AxisSpec],
+    model: str = REDUCE_MODEL,
     effort: str = "high",
     log: Callable[[str], None] = print,
 ) -> tuple[Synthesis | None, str, str, bool]:
     """Returns (synthesis, raw_output, error, used_structured_output)."""
     corpus = _corpus_block(map_outputs, signals, highlights)
+    system_prompt = build_reduce_system(axes)
     attempt_note = ""
     structured = True
 
@@ -591,20 +715,21 @@ async def run_reduce(
                     "type": "text",
                     "text": (
                         "Return JSON matching this schema exactly. Every listed "
-                        "property is required and no others are permitted:\n\n"
-                        + json.dumps(REDUCE_SCHEMA, indent=2)
+                        "property is required and no others are permitted. Emit "
+                        "the bare JSON object with no markdown fences and no "
+                        "prose around it:\n\n" + json.dumps(REDUCE_SCHEMA, indent=2)
                     ),
                 }
             )
         messages = [{"role": "user", "content": content}]
 
-        # The single largest exposure in the tool: claude-opus-5 at
-        # max_tokens=32_000 is ~$3.50 on a 10,000-post corpus. Charging after
-        # the fact means a $10 budget at $9.99 fires anyway and lands at $13.49.
-        # Reserve worst-case output; reconcile down when the real usage lands.
-        counted = await _count_input_tokens(client, REDUCE_MODEL, REDUCE_SYSTEM, messages)
-        input_tokens = counted if counted is not None else estimate_tokens(REDUCE_SYSTEM + corpus)
-        estimate = estimate_anthropic_call(REDUCE_MODEL, input_tokens, REDUCE_MAX_TOKENS)
+        # The single largest exposure in the tool: the reduce model at
+        # max_tokens=32_000 is ~$0.80. Charging after the fact means a $10
+        # budget at $9.99 fires anyway and lands well past it. Reserve
+        # worst-case output; reconcile down when the real usage lands.
+        counted = await _count_input_tokens(client, model, system_prompt, messages)
+        input_tokens = counted if counted is not None else estimate_tokens(system_prompt + corpus)
+        estimate = estimate_anthropic_call(model, input_tokens, REDUCE_MAX_TOKENS)
         log(
             f"  [reduce] attempt {attempt}: ~{input_tokens:,} input tokens, "
             f"reserving ${estimate:.4f} (worst case, {REDUCE_MAX_TOKENS:,} output)"
@@ -614,16 +739,14 @@ async def run_reduce(
         # reported as a model failure. The corpus is already on disk.
         reservation = budget.reserve(estimate, f"reduce attempt {attempt}")
 
-        output_config: dict[str, Any] = {"effort": effort}
-        if structured:
-            output_config["format"] = {"type": "json_schema", "schema": REDUCE_SCHEMA}
-
         try:
             async with client.messages.stream(
-                model=REDUCE_MODEL,
+                model=model,
                 max_tokens=REDUCE_MAX_TOKENS,
-                system=REDUCE_SYSTEM,
-                output_config=cast(Any, output_config),
+                system=system_prompt,
+                output_config=cast(
+                    Any, _output_config(model, effort, REDUCE_SCHEMA if structured else None)
+                ),
                 messages=cast(Any, messages),
             ) as stream:
                 message = await stream.get_final_message()
@@ -647,7 +770,7 @@ async def run_reduce(
 
         actual: float | None = None
         try:
-            actual = _charge(budget, REDUCE_MODEL, message, note=f"reduce attempt {attempt}")
+            actual = _charge(budget, model, message, note=f"reduce attempt {attempt}")
         finally:
             reservation.settle(actual)
         if message.stop_reason == "refusal":
@@ -655,7 +778,7 @@ async def run_reduce(
 
         raw = _text_of(message)
         try:
-            return Synthesis.model_validate_json(raw), raw, "", structured
+            return parse_synthesis(raw), raw, "", structured
         except (ValidationError, ValueError) as exc:
             log(f"  [reduce] attempt {attempt} failed validation: {exc}")
             if attempt >= 2:
@@ -668,36 +791,83 @@ async def run_reduce(
     return None, "", "unreachable", structured
 
 
-def prune_unsourced(synthesis: Synthesis, valid_ids: set[str]) -> list[str]:
-    """Rule 1, enforced in code: drop findings that cite ids not in the corpus.
+# --------------------------------------------------------------------------
+# enforcement
+# --------------------------------------------------------------------------
+
+
+def _is_hand_waving(reasoning: str, conclusion: str) -> bool:
+    """True when `reasoning` is not actually a chain.
+
+    Two ways to fail: too short to contain one, or a restatement of the thing
+    it is supposed to justify.
+    """
+    text = " ".join(reasoning.split())
+    if len(text) < MIN_REASONING_CHARS:
+        return True
+    claim = " ".join(conclusion.split()).lower()
+    lowered = text.lower()
+    return bool(
+        claim
+        and (
+            lowered == claim
+            or (len(claim) > 40 and claim in lowered and len(lowered) < len(claim) * 1.3)
+        )
+    )
+
+
+def prune_unsourced(
+    synthesis: Synthesis, valid_ids: set[str], axes: list[AxisSpec] | None = None
+) -> list[str]:
+    """The rules, enforced in code rather than hoped for.
+
+    1. A finding citing ids that do not exist is dropped.
+    2. An inference without a real reasoning chain is dropped, exactly as an
+       unsourced claim is. The reasoning *is* the evidence for the inference.
+    3. Evidence is capped at three ids per claim.
+    4. Every requested axis appears exactly once. Missing ones come back as
+       `signal: "none"` rather than silently vanishing.
 
     Returns human-readable notes about what was dropped, for the report.
     """
     notes: list[str] = []
 
     def clean(ids: list[str]) -> list[str]:
-        return [i for i in ids if i in valid_ids]
+        seen: list[str] = []
+        for i in ids:
+            if i in valid_ids and i not in seen:
+                seen.append(i)
+        return seen[:EVIDENCE_CAP]
 
-    kept_themes = []
-    for theme in synthesis.themes:
-        theme.evidence_ids = clean(theme.evidence_ids)
-        if theme.evidence_ids:
-            kept_themes.append(theme)
+    kept_beliefs = []
+    for belief in synthesis.core_model:
+        belief.evidence_ids = clean(belief.evidence_ids)
+        if belief.evidence_ids:
+            kept_beliefs.append(belief)
         else:
-            notes.append(f"theme '{theme.name}' dropped: no valid evidence ids")
-    synthesis.themes = kept_themes
+            notes.append(f"core_model '{belief.belief[:60]}' dropped: no valid evidence ids")
+    synthesis.core_model = kept_beliefs
 
-    kept_positions = []
-    for pos in synthesis.positions:
-        pos.evidence_ids = clean(pos.evidence_ids)
-        pos.contradicted_by_ids = clean(pos.contradicted_by_ids)
-        if pos.evidence_ids:
-            kept_positions.append(pos)
+    kept_moves = []
+    for move in synthesis.reasoning.moves:
+        if move.example_id in valid_ids:
+            kept_moves.append(move)
         else:
-            notes.append(f"position '{pos.claim[:60]}' dropped: no valid evidence ids")
-    synthesis.positions = kept_positions
+            notes.append(f"reasoning move '{move.move[:50]}' dropped: example id not in corpus")
+    synthesis.reasoning.moves = kept_moves
 
-    synthesis.argument_style.evidence_ids = clean(synthesis.argument_style.evidence_ids)
+    kept_blind_spots = []
+    for spot in synthesis.reasoning.blind_spots:
+        spot.evidence_ids = clean(spot.evidence_ids)
+        if not spot.evidence_ids:
+            notes.append(f"blind spot '{spot.pattern[:50]}' dropped: no valid evidence ids")
+        elif _is_hand_waving(spot.basis, spot.pattern):
+            notes.append(f"blind spot '{spot.pattern[:50]}' dropped: basis is not a chain")
+        else:
+            kept_blind_spots.append(spot)
+    synthesis.reasoning.blind_spots = kept_blind_spots
+
+    synthesis.axes = _enforce_axes(synthesis.axes, clean, axes, notes)
 
     kept_evolution = []
     for evo in synthesis.evolution:
@@ -708,66 +878,105 @@ def prune_unsourced(synthesis: Synthesis, valid_ids: set[str]) -> list[str]:
             notes.append(f"evolution entry '{evo.topic}' dropped: no valid evidence ids")
     synthesis.evolution = kept_evolution
 
-    synthesis.performance_gap.evidence_ids = clean(synthesis.performance_gap.evidence_ids)
-    if not synthesis.performance_gap.evidence_ids and synthesis.performance_gap.posts_most_about:
-        notes.append("performance_gap cleared: no valid evidence ids")
-        synthesis.performance_gap.posts_most_about = ""
-        synthesis.performance_gap.gets_most_traction_on = ""
-        synthesis.performance_gap.interpretation = ""
+    kept_questions = []
+    for question in synthesis.open_questions:
+        question.evidence_ids = clean(question.evidence_ids)
+        if question.evidence_ids:
+            kept_questions.append(question)
+        else:
+            notes.append(f"open question '{question.question[:50]}' dropped: no valid evidence ids")
+    synthesis.open_questions = kept_questions
 
-    for edge in synthesis.network:
-        edge.evidence_ids = clean(edge.evidence_ids)
-    for loop in synthesis.open_loops:
-        loop.evidence_ids = clean(loop.evidence_ids)
-    for entry in synthesis.avoid:
+    kept_misreadings = []
+    for entry in synthesis.misreadings:
         entry.evidence_ids = clean(entry.evidence_ids)
+        if entry.evidence_ids:
+            kept_misreadings.append(entry)
+        else:
+            notes.append(f"misreading '{entry.misreading[:50]}' dropped: no valid evidence ids")
+    synthesis.misreadings = kept_misreadings
 
     return notes
 
 
-def enforce_signal_counts(
-    synthesis: Synthesis, signals: dict[str, Any], docs: list[Document]
-) -> list[str]:
-    """Rule 4, enforced in code: any number we have ground truth for is overwritten.
+def _blank_axis(name: str) -> Axis:
+    return Axis(axis=name, signal="none", confidence="low")
 
-    The prompt tells the model not to compute counts. This makes it true. Only
-    fields with a real counterpart in signals.json are touched — theme post
-    counts are inherently model-assigned and are left alone.
+
+def _enforce_axes(
+    emitted: list[Axis],
+    clean: Callable[[list[str]], list[str]],
+    requested: list[AxisSpec] | None,
+    notes: list[str],
+) -> list[Axis]:
+    """Clean each axis, then reconcile against what was actually requested."""
+    cleaned: dict[str, Axis] = {}
+    for axis in emitted:
+        axis.evidence_ids = clean(axis.evidence_ids)
+
+        if axis.signal == "none":
+            # An axis with no signal carries no content, by definition. Anything
+            # the model wrote here is invention with nothing behind it.
+            if axis.stated or axis.inferred or axis.reasoning:
+                notes.append(f"axis '{axis.axis}': signal none, cleared invented content")
+            axis.stated = axis.inferred = axis.reasoning = ""
+            axis.confidence = "low"
+        elif not axis.evidence_ids:
+            notes.append(f"axis '{axis.axis}' demoted to signal none: no valid evidence ids")
+            axis.signal = "none"
+            axis.stated = axis.inferred = axis.reasoning = ""
+            axis.confidence = "low"
+        elif axis.inferred and _is_hand_waving(axis.reasoning, axis.inferred):
+            # Tier two failed its own test. The stated tier survives on its own
+            # sourcing; only the inference goes.
+            notes.append(f"axis '{axis.axis}': inference dropped, reasoning was not a chain")
+            axis.inferred = ""
+            axis.reasoning = ""
+
+        if axis.axis in cleaned:
+            notes.append(f"axis '{axis.axis}': duplicate entry discarded")
+            continue
+        cleaned[axis.axis] = axis
+
+    if requested is None:
+        return list(cleaned.values())
+
+    out: list[Axis] = []
+    for spec in requested:
+        if spec.name in cleaned:
+            out.append(cleaned.pop(spec.name))
+            continue
+        notes.append(f"axis '{spec.name}' was not returned; recorded as no signal")
+        out.append(_blank_axis(spec.name))
+    for name in cleaned:
+        notes.append(f"axis '{name}' dropped: not among the requested axes")
+    return out
+
+
+def enforce_signal_counts(
+    synthesis: Synthesis,
+    signals: dict[str, Any],
+    analyzed_documents: int,
+) -> list[str]:
+    """Any number we have ground truth for is overwritten.
+
+    The prompt tells the model not to compute counts. This makes it true.
+    `open_questions.returned_to` is left alone: it counts a model-defined
+    concept, so signals.json has no counterpart to check it against.
     """
     notes: list[str] = []
 
-    if synthesis.coverage.total_documents != len(docs):
+    if synthesis.coverage.total_documents != analyzed_documents:
         notes.append(
-            f"coverage.total_documents corrected {synthesis.coverage.total_documents} -> {len(docs)}"
+            f"coverage.total_documents corrected "
+            f"{synthesis.coverage.total_documents} -> {analyzed_documents}"
         )
-        synthesis.coverage.total_documents = len(docs)
+        synthesis.coverage.total_documents = analyzed_documents
 
     date_range = signals.get("date_range", "")
     if date_range and synthesis.coverage.date_range != date_range:
         notes.append(f"coverage.date_range corrected to {date_range}")
         synthesis.coverage.date_range = date_range
-
-    truth = {
-        g["handle"].lower(): g["exchange_count"] for g in signals.get("conversation_graph", [])
-    }
-    for edge in synthesis.network:
-        actual = truth.get(edge.handle.lstrip("@").lower())
-        if actual is not None and edge.exchange_count != actual:
-            notes.append(
-                f"network[@{edge.handle}].exchange_count corrected "
-                f"{edge.exchange_count} -> {actual}"
-            )
-            edge.exchange_count = actual
-
-    domains = {d["domain"].lower(): d["share_count"] for d in signals.get("outbound_domains", [])}
-    for entry in synthesis.reading_diet:
-        actual = domains.get(entry.domain.lower())
-        if actual is not None and entry.share_count != actual:
-            notes.append(
-                f"reading_diet[{entry.domain}].share_count corrected "
-                f"{entry.share_count} -> {actual}"
-            )
-            entry.share_count = actual
 
     return notes
 
@@ -792,8 +1001,12 @@ async def synthesize(
     budget: Budget,
     *,
     api_key: str | None = None,
+    axes: list[AxisSpec] | None = None,
+    map_model: str = MAP_MODEL,
+    reduce_model: str = REDUCE_MODEL,
     map_effort: str = "medium",
     reduce_effort: str = "high",
+    prefilter: bool = True,
     client: Any | None = None,
     completed_slices: dict[int, dict[str, Any]] | None = None,
     on_slice: Callable[[int, dict[str, Any]], None] | None = None,
@@ -802,9 +1015,17 @@ async def synthesize(
     """Run map+reduce. Pass `client` to iterate on prompts against a stub
     instead of paying per attempt."""
     run = SynthesisRun()
+    selected_axes = axes if axes is not None else load_axes()
     # Reposts and media-only posts are excluded from synthesis input; they are
     # already counted in signals.json.
     synth_docs = [d for d in docs if d.kind in ("original", "thread", "reply", "quote")]
+
+    if prefilter:
+        synth_docs, stats = filter_low_signal(synth_docs)
+        run.filter_stats = stats
+        log(f"  prefilter: {stats.summary_line()}")
+
+    run.analyzed_documents = len(synth_docs)
     if not synth_docs:
         run.error = "no synthesizable documents"
         return run
@@ -824,7 +1045,7 @@ async def synthesize(
 
     chunks = chunk_documents(synth_docs)
     run.chunks = len(chunks)
-    log(f"  {len(synth_docs)} documents -> {len(chunks)} map slices")
+    log(f"  {len(synth_docs)} documents -> {len(chunks)} map slices ({map_model})")
 
     owns_client = client is None
     if client is None:
@@ -834,6 +1055,8 @@ async def synthesize(
             client,
             chunks,
             budget,
+            axes=selected_axes,
+            model=map_model,
             effort=map_effort,
             completed=completed_slices,
             on_slice=on_slice,
@@ -857,13 +1080,18 @@ async def synthesize(
             return run
 
         highlights = select_highlights(synth_docs, run.map_outputs)
-        log(f"  reduce over {len(run.map_outputs)} slices + {len(highlights)} highlights")
+        log(
+            f"  reduce over {len(run.map_outputs)} slices + {len(highlights)} "
+            f"highlights ({reduce_model})"
+        )
         synthesis, raw, error, structured = await run_reduce(
             client,
             run.map_outputs,
             signals,
             highlights,
             budget,
+            axes=selected_axes,
+            model=reduce_model,
             effort=reduce_effort,
             log=log,
         )
@@ -877,10 +1105,12 @@ async def synthesize(
             )
         if synthesis is not None:
             valid_ids = {d.source_id for d in docs}
-            run.dropped_findings = prune_unsourced(synthesis, valid_ids)
+            run.dropped_findings = prune_unsourced(synthesis, valid_ids, selected_axes)
             for note in run.dropped_findings:
                 log(f"  [unsourced] {note}")
-            run.corrected_counts = enforce_signal_counts(synthesis, signals, docs)
+            run.corrected_counts = enforce_signal_counts(
+                synthesis, signals, run.analyzed_documents
+            )
             for note in run.corrected_counts:
                 log(f"  [counts] {note}")
             run.synthesis = synthesis
