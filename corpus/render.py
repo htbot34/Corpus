@@ -28,6 +28,7 @@ ROLE_LABELS = {
     "load_bearing": "load-bearing",
     "derived": "derived",
     "held_lightly": "held lightly",
+    "unclassified": "position in the model not assessed",
 }
 
 
@@ -287,6 +288,8 @@ def render_report(
         )
         out.append("")
         out.append("- **Inferred positions** on every axis are suppressed. Only `stated` is shown.")
+        out.append("- **Beliefs are listed without structure.** Each one is sourced, but which")
+        out.append("  are load-bearing and what each generates is not assessed.")
         out.append("- **Blind spots** are empty — a blind spot is a pattern, and there is no")
         out.append("  run of behaviour here to establish one.")
         out.append("- **What moved** is empty — a change of view needs enough before and after")
@@ -302,23 +305,44 @@ def render_report(
         out.append("")
 
     # ---- core model, the centrepiece -------------------------------------
-    out.append("## The generating model")
+    # Bound to the tier itself rather than a bare bool so the branch below can
+    # quote its document count without a second None check.
+    flat = tier if (tier is not None and not tier.allow_belief_structure) else None
+    structured = flat is None
+    out.append("## The generating model" if structured else "## Beliefs, without the structure")
     out.append("")
     if not synthesis.core_model:
         out.append("_No belief survived sourcing. The corpus is too thin to reconstruct a model._")
         out.append("")
-    else:
+    elif flat is None:
         out.append(
             "The beliefs below are ordered by how much else hangs off them. "
             "`generates` is what follows if the belief is held."
+        )
+        out.append("")
+    else:
+        # Without this the reader sees a flat list and reads it as a considered
+        # tree that happens to have no branches — a stronger claim than the
+        # corpus supports, made by omission.
+        out.append(
+            "**This is a list, not a model.** Each belief below is traced to real posts "
+            "and stands on its own. What is missing is the structure: which beliefs are "
+            "load-bearing, which follow from others, and what each one generates. Placing "
+            f"a belief relative to the others is an inference, and {flat.document_count} "
+            "documents cannot support it — so the order here carries no meaning and the "
+            "`generates` lists are empty rather than guessed."
         )
         out.append("")
     order = {"load_bearing": 0, "derived": 1, "held_lightly": 2}
     for belief in sorted(synthesis.core_model, key=lambda b: order.get(b.role, 3)):
         out.append(f"### {belief.belief}")
         out.append("")
+        cites = _cite(belief.evidence_ids, links)
+        # Without structure there is no role to print: "position in the model
+        # not assessed" under every single belief would be noise, and the
+        # section header and note above already said it once.
         out.append(
-            f"_{ROLE_LABELS.get(belief.role, belief.role)}_ · {_cite(belief.evidence_ids, links)}"
+            f"_{ROLE_LABELS.get(belief.role, belief.role)}_ · {cites}" if structured else cites
         )
         out.append("")
         for downstream in belief.generates:
