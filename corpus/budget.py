@@ -160,6 +160,10 @@ class Budget:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     estimate_misses: list[str] = field(default_factory=list)
     refusals: list[str] = field(default_factory=list)
+    # Spend carried over from earlier attempts at the same target (--resume).
+    # Counted against the limit, because otherwise `--budget 10` resumed three
+    # times is a $30 run and the flag documented as a hard stop is per-attempt.
+    prior_spend: float = 0.0
 
     def __post_init__(self) -> None:
         if self.mode not in BUDGET_MODES:
@@ -171,6 +175,11 @@ class Budget:
 
     @property
     def total(self) -> float:
+        return self.prior_spend + sum(c.cost for c in self.charges)
+
+    @property
+    def this_attempt(self) -> float:
+        """Spend by this process alone, excluding anything carried by --resume."""
         return sum(c.cost for c in self.charges)
 
     @property

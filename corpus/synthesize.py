@@ -371,14 +371,31 @@ async def run_map(
     budget: Budget,
     *,
     effort: str = "medium",
+    completed: dict[int, dict[str, Any]] | None = None,
+    on_slice: Callable[[int, dict[str, Any]], None] | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[list[dict[str, Any]], int]:
+    """Map every chunk, skipping any slice a previous attempt already completed.
+
+    `completed` comes from the run manifest. Re-paying the entire map stage to
+    retry a reduce that failed validation is the most expensive avoidable
+    mistake this tool can make — on a 10,000-post corpus the map stage is ~40
+    calls and most of the Anthropic spend.
+    """
     semaphore = asyncio.Semaphore(MAP_CONCURRENCY)
     results: list[dict[str, Any] | None] = [None] * len(chunks)
     failures = 0
+    already = completed or {}
+    for index, payload in already.items():
+        if 0 <= index < len(chunks):
+            results[index] = payload
+    if already:
+        log(f"  reusing {len(already)} map slice(s) from a previous attempt")
 
     async def one(index: int, docs: list[Document]) -> None:
         nonlocal failures
+        if results[index] is not None:
+            return  # already paid for
         async with semaphore:
             body = "\n\n---\n\n".join(render_document(d) for d in docs)
             span = (
@@ -463,6 +480,11 @@ async def run_map(
             payload["span"] = span
             payload["document_ids"] = [d.source_id for d in docs]
             results[index] = payload
+            if on_slice is not None:
+                # Checkpoint immediately: the value of a completed slice is that
+                # it never has to be paid for twice, which requires it to be on
+                # disk before the next thing fails.
+                on_slice(index, payload)
             log(
                 f"  [map {index + 1}/{len(chunks)}] {span}: "
                 f"{len(parsed.topics)} topics, {len(parsed.claims)} claims "
@@ -716,6 +738,8 @@ async def synthesize(
     map_effort: str = "medium",
     reduce_effort: str = "high",
     client: Any | None = None,
+    completed_slices: dict[int, dict[str, Any]] | None = None,
+    on_slice: Callable[[int, dict[str, Any]], None] | None = None,
     log: Callable[[str], None] = print,
 ) -> SynthesisRun:
     """Run map+reduce. Pass `client` to iterate on prompts against a stub
@@ -750,7 +774,13 @@ async def synthesize(
         client = AsyncAnthropic(api_key=api_key) if api_key else AsyncAnthropic()
     try:
         run.map_outputs, run.map_failures = await run_map(
-            client, chunks, budget, effort=map_effort, log=log
+            client,
+            chunks,
+            budget,
+            effort=map_effort,
+            completed=completed_slices,
+            on_slice=on_slice,
+            log=log,
         )
         if not run.map_outputs:
             run.error = (

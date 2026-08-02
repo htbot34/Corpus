@@ -150,6 +150,9 @@ def ingest_timeline(
     include_replies: bool = True,
     probe_enabled: bool = True,
     public_post_count: int | None = None,
+    resume_until_ts: int | None = None,
+    resume_seen: dict[str, dict[str, Any]] | None = None,
+    on_progress: Callable[[int, dict[str, dict[str, Any]], IngestStats], None] | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[list[dict[str, Any]], IngestStats]:
     """Walk a handle's history backwards in fixed windows.
@@ -162,9 +165,11 @@ def ingest_timeline(
     # the handle goes straight into a query string below.
     handle = validate_handle(handle)
     stats = IngestStats(public_post_count=public_post_count)
-    seen: dict[str, dict[str, Any]] = {}
+    # Resuming: carry forward what a previous attempt already paid for, so the
+    # walk neither re-reads it nor counts it as new.
+    seen: dict[str, dict[str, Any]] = dict(resume_seen or {})
 
-    until_ts = int((until or datetime.now(tz=timezone.utc)).timestamp())
+    until_ts = resume_until_ts or int((until or datetime.now(tz=timezone.utc)).timestamp())
     floor_ts = int(since.timestamp()) if since else PLATFORM_EPOCH
     window_seconds = window_days * 24 * 3600
     consecutive_empty = 0
@@ -383,6 +388,14 @@ def ingest_timeline(
             else:
                 next_until = window_earliest - 1
             until_ts = min(next_until, until_ts - 1)
+
+            # Checkpoint after every window, not at the end. The failures worth
+            # resuming from — a budget stop, a crash, a killed process — all
+            # happen mid-walk, and a manifest written only on success would
+            # never exist when it was needed.
+            if on_progress is not None:
+                stats.unique = len(seen)
+                on_progress(until_ts, seen, stats)
 
     except BudgetExceeded as exc:
         stats.stop_reason = f"budget exhausted: {exc}"

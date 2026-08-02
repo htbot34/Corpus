@@ -32,6 +32,7 @@ from .budget import (
 )
 from .cache import Cache, DEFAULT_TTL_SECONDS
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
+from .manifest import RunManifest
 from .models import Document, Synthesis
 from .render import render_report
 from .synthesize import synthesize
@@ -202,6 +203,12 @@ def run(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Warnings and errors only. Never hides a budget stop."
     ),
+    resume: Path | None = typer.Option(
+        None,
+        "--resume",
+        metavar="PATH",
+        help="Resume from a previous run's out/<handle>/<date> directory.",
+    ),
 ) -> None:
     """Ingest, hydrate, and synthesize one person's public writing."""
     if log_format not in LOG_FORMATS:
@@ -242,12 +249,41 @@ def run(
         budget.run_id, log_format=log_format, verbose=verbose, quiet=quiet
     )
 
+    # ---- resume ---------------------------------------------------------
+    manifest = RunManifest.load(resume) if resume else None
+    if resume and manifest is None:
+        error(
+            f"--resume {resume}: no usable run.json there. A corrupt or "
+            f"future-version manifest is ignored rather than trusted; re-run "
+            f"without --resume to start fresh."
+        )
+        raise typer.Exit(code=2)
+    if manifest is not None:
+        if manifest.handle and manifest.handle != handle:
+            error(
+                f"--resume {resume} is a run for @{manifest.handle}, not @{handle}"
+            )
+            raise typer.Exit(code=2)
+        # A resumed run's budget covers everything the target has cost, not
+        # just this attempt — otherwise --budget 10 resumed three times is a $30
+        # run, and the flag documented as a hard stop would be per-attempt.
+        budget.prior_spend = manifest.prior_spend
+
     echo(f"corpus run @{handle} (run {budget.run_id})")
     echo(f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
          f"· window {window_days}d"
          + (f" · since {since}" if since else "")
          + (" · OFFLINE" if offline else ""))
     echo("")
+
+    # The output directory is created up front, not after ingestion: the
+    # manifest is checkpointed during the walk, and a checkpoint needs
+    # somewhere to land before the thing it protects against happens.
+    out_dir = Path(resume) if resume else _out_dir(out, handle)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = manifest or RunManifest(handle=handle, run_id=budget.run_id)
+    manifest.handle = manifest.handle or handle
+    manifest.run_id = budget.run_id
 
     # ---- estimate + confirm ---------------------------------------------
     raw_tweets: list[dict[str, Any]] = []
@@ -307,6 +343,29 @@ def run(
         # ---- ingest ------------------------------------------------------
         echo("Ingesting (sliding time window):")
         _ACTIVE_LOGGER.context.phase = "ingest"
+
+        resume_seen: dict[str, dict[str, Any]] = {}
+        if manifest.raw_tweet_ids and not manifest.ingest_complete:
+            # The tweets themselves are in the permanent cache; the manifest
+            # only holds their ids. Re-walking would re-pay for search pages,
+            # which are billed per tweet returned regardless of what we already
+            # have.
+            for tid in manifest.raw_tweet_ids:
+                cached = cache.get("x", f"tweet:{tid}")
+                if cached is not None:
+                    resume_seen[tid] = cached
+            echo(
+                f"  resuming: {len(resume_seen)} of {len(manifest.raw_tweet_ids)} "
+                f"previously-ingested posts recovered from cache"
+            )
+
+        def _checkpoint(frontier: int, seen: dict[str, dict[str, Any]], st: Any) -> None:
+            manifest.until_ts = frontier
+            manifest.raw_tweet_ids = list(seen)
+            manifest.ingest_stats = st.as_dict()
+            manifest.prior_spend = budget.total
+            manifest.save(out_dir)
+
         raw_tweets, ingest_stats = ingest_timeline(
             client,
             handle,
@@ -320,9 +379,17 @@ def run(
             # statusesCount from the profile, so the report can say
             # "400 of 53,901" instead of leaving it to be inferred.
             public_post_count=public_posts or None,
+            resume_until_ts=manifest.until_ts if not manifest.ingest_complete else None,
+            resume_seen=resume_seen or None,
+            on_progress=_checkpoint,
             log=echo,
         )
         cache.put("x", f"corpus:{handle.lower()}", raw_tweets)
+        manifest.ingest_complete = True
+        manifest.raw_tweet_ids = [t.get("id") or t.get("id_str") or "" for t in raw_tweets]
+        manifest.ingest_stats = ingest_stats.as_dict()
+        manifest.prior_spend = budget.total
+        manifest.save(out_dir)
 
     if dry_run:
         echo("--dry-run with --offline: nothing to estimate.")
@@ -375,6 +442,11 @@ def run(
         )
     echo("")
 
+    manifest.hydrate_complete = True
+    manifest.hydrated_documents = len(docs)
+    manifest.prior_spend = budget.total
+    manifest.save(out_dir)
+
     # ---- secondary sources ----------------------------------------------
     secondary = _fetch_secondary(handle, substack, rss, url, cache, echo)
     if secondary:
@@ -397,7 +469,6 @@ def run(
     echo("")
 
     # ---- write corpus + signals before spending on synthesis -------------
-    out_dir = _out_dir(out, handle)
     _write_json(out_dir / "corpus.json", [d.model_dump() for d in docs])
     _write_json(out_dir / "signals.json", signals)
     echo(f"Wrote corpus.json and signals.json to {out_dir}")
@@ -421,6 +492,15 @@ def run(
     else:
         _ACTIVE_LOGGER.context.phase = "synthesize"
         echo("Synthesizing (map -> reduce):")
+        completed = {int(k): v for k, v in manifest.map_slices.items()}
+        if completed:
+            echo(f"  {len(completed)} map slice(s) already done; not re-paying for them")
+
+        def _slice_done(index: int, payload: dict[str, Any]) -> None:
+            manifest.record_slice(index, payload)
+            manifest.prior_spend = budget.total
+            manifest.save(out_dir)
+
         result = asyncio.run(
             synthesize(
                 docs,
@@ -428,9 +508,15 @@ def run(
                 budget,
                 map_effort=map_effort,
                 reduce_effort=reduce_effort,
+                completed_slices=completed or None,
+                on_slice=_slice_done,
                 log=echo,
             )
         )
+        manifest.map_total = result.chunks
+        manifest.reduce_complete = result.synthesis is not None
+        manifest.prior_spend = budget.total
+        manifest.save(out_dir)
         synthesis = result.synthesis
         run_meta["synthesis_error"] = result.error
         run_meta["dropped_findings"] = result.dropped_findings
