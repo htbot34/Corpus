@@ -3,6 +3,29 @@
 Keyed by (source, source_id), storing raw payloads with fetch timestamps.
 Default TTL 7 days. Hydrated parents are stored with permanent=1 — old tweets
 do not change, so re-paying for them is pure waste.
+
+Concurrency
+-----------
+The cache is shared: two runs against different handles hit the same database,
+and the whole point of the permanent rows is that a second run does not re-pay
+for what the first already fetched. Under SQLite's default rollback journal, a
+writer takes an exclusive lock over the entire database, so a second run gets
+`database is locked` immediately and dies — having paid for the data it was
+about to write.
+
+Three settings fix that, and none of them are optional for this workload:
+
+* **WAL** lets readers proceed during a write, so a long-running run no longer
+  blocks a `corpus cache stats` or a second ingest.
+* **busy_timeout** makes a contended write *wait* rather than fail. Without it
+  SQLite returns SQLITE_BUSY the instant it cannot get the lock; the default
+  timeout is zero.
+* **synchronous=NORMAL** is the standard WAL pairing. FULL fsyncs every commit,
+  which for a cache of re-fetchable data buys durability we do not need at a
+  cost we pay on every tweet.
+
+WAL also means the database is three files (`-wal`, `-shm`), which matters when
+copying one by hand.
 """
 
 from __future__ import annotations
@@ -10,11 +33,17 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
+
+# How long a contended write waits before giving up. Generous on purpose: the
+# alternative to waiting is a failed run that has already spent money, and the
+# writes here are small and short.
+BUSY_TIMEOUT_SECONDS = 30.0
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -61,10 +90,38 @@ class Cache:
         self.refresh = refresh
         self.offline = offline
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        # check_same_thread=False because Budget.charge() is reachable from the
+        # asyncio map stage and from worker threads; every write below is
+        # serialized by self._lock, which is the guarantee sqlite3 wants.
+        self.conn = sqlite3.connect(
+            str(self.path),
+            timeout=BUSY_TIMEOUT_SECONDS,
+            check_same_thread=False,
+        )
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+        self._configure()
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
+
+    def _configure(self) -> None:
+        """Pragmas that make a shared cache survive two runs at once."""
+        # journal_mode is persistent (stored in the file header), so this is a
+        # no-op after the first time. It can fail on exotic filesystems where
+        # WAL's shared memory is unavailable — a network mount, some containers
+        # — and there the rollback journal is still correct, just less
+        # concurrent. Degrading is right; refusing to open the cache is not.
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.DatabaseError:
+            pass
+        self.conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
+    @property
+    def journal_mode(self) -> str:
+        row = self.conn.execute("PRAGMA journal_mode").fetchone()
+        return str(row[0]).lower() if row else ""
 
     # -- content ----------------------------------------------------------
 
@@ -90,20 +147,28 @@ class Cache:
     def put(
         self, source: str, source_id: str, payload: Any, permanent: bool = False
     ) -> None:
-        existing = self.conn.execute(
-            "SELECT permanent FROM entries WHERE source=? AND source_id=?",
-            (source, source_id),
-        ).fetchone()
-        # Never downgrade a permanent row: once we know a tweet is immutable
-        # history, a later TTL'd write should not make it expirable again.
-        if existing is not None and existing["permanent"]:
-            permanent = True
-        self.conn.execute(
-            "INSERT OR REPLACE INTO entries (source, source_id, payload, fetched_at, permanent) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (source, source_id, json.dumps(payload), time.time(), 1 if permanent else 0),
-        )
-        self.conn.commit()
+        """Write an entry, never downgrading a permanent row to expirable.
+
+        The permanent flag is max()'d in SQL rather than read-then-written in
+        Python. The old version did a SELECT, decided, then INSERT OR REPLACE —
+        two statements with a gap in between. Under two concurrent runs, a
+        permanent write landing in that gap was silently clobbered by the
+        second run's TTL'd write, quietly making already-paid-for tweets
+        expirable again. Doing it in one statement closes the window; the lock
+        below closes it for the same-process case too.
+        """
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO entries (source, source_id, payload, fetched_at, permanent) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(source, source_id) DO UPDATE SET "
+                "  payload=excluded.payload, "
+                "  fetched_at=excluded.fetched_at, "
+                # max(): permanent is a one-way door.
+                "  permanent=max(entries.permanent, excluded.permanent)",
+                (source, source_id, json.dumps(payload), time.time(), 1 if permanent else 0),
+            )
+            self.conn.commit()
 
     def has(self, source: str, source_id: str) -> bool:
         return self.get(source, source_id) is not None
@@ -120,12 +185,13 @@ class Cache:
         cost: float,
         note: str = "",
     ) -> None:
-        self.conn.execute(
-            "INSERT INTO spend (ts, run_id, category, endpoint, units, unit_cost, cost, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (time.time(), run_id, category, endpoint, units, unit_cost, cost, note),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO spend (ts, run_id, category, endpoint, units, unit_cost, cost, note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), run_id, category, endpoint, units, unit_cost, cost, note),
+            )
+            self.conn.commit()
 
     def spend_log(self, limit: int = 200) -> list[sqlite3.Row]:
         return list(
@@ -160,12 +226,50 @@ class Cache:
         }
 
     def clear(self, keep_permanent: bool = False) -> int:
-        if keep_permanent:
-            cur = self.conn.execute("DELETE FROM entries WHERE permanent=0")
-        else:
-            cur = self.conn.execute("DELETE FROM entries")
-        self.conn.commit()
-        return cur.rowcount
+        with self._lock:
+            if keep_permanent:
+                cur = self.conn.execute("DELETE FROM entries WHERE permanent=0")
+            else:
+                cur = self.conn.execute("DELETE FROM entries")
+            self.conn.commit()
+            return cur.rowcount
+
+    def vacuum(self) -> dict[str, Any]:
+        """Reclaim space and checkpoint the WAL.
+
+        Deleting rows leaves the file the same size, and the -wal file grows
+        until something checkpoints it. Neither is a correctness problem, which
+        is exactly why it goes unnoticed until a cache directory is surprisingly
+        large. Returns before/after sizes so the command can show its work.
+        """
+        with self._lock:
+            before = self.total_bytes()
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.DatabaseError:
+                pass  # not in WAL mode; nothing to checkpoint
+            # VACUUM cannot run inside a transaction, which sqlite3 opens
+            # implicitly for DML.
+            self.conn.commit()
+            self.conn.execute("VACUUM")
+            self.conn.commit()
+            after = self.total_bytes()
+            return {"before_bytes": before, "after_bytes": after, "reclaimed_bytes": before - after}
+
+    def total_bytes(self) -> int:
+        """Size of the database *and* its WAL sidecars.
+
+        Measuring only cache.db understates a WAL database badly — recent writes
+        live in cache.db-wal until a checkpoint, so a "vacuum" could appear to
+        make things bigger simply by moving bytes from a file nobody counted
+        into the one everybody does.
+        """
+        total = 0
+        for suffix in ("", "-wal", "-shm"):
+            candidate = self.path.with_name(self.path.name + suffix)
+            if candidate.exists():
+                total += candidate.stat().st_size
+        return total
 
     def close(self) -> None:
         self.conn.close()

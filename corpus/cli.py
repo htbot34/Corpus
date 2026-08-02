@@ -583,6 +583,18 @@ def cache_clear(
     cache.close()
 
 
+@cache_app.command("vacuum")
+def cache_vacuum() -> None:
+    """Reclaim space and checkpoint the write-ahead log."""
+    cache = Cache()
+    result = cache.vacuum()
+    echo(f"path:      {cache.path}")
+    echo(f"before:    {result['before_bytes'] / 1024:.1f} KiB")
+    echo(f"after:     {result['after_bytes'] / 1024:.1f} KiB")
+    echo(f"reclaimed: {result['reclaimed_bytes'] / 1024:.1f} KiB")
+    cache.close()
+
+
 @budget_app.command("log")
 def budget_log(limit: int = typer.Option(50, "--limit")) -> None:
     """Every billable call, most recent first."""
