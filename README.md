@@ -42,10 +42,13 @@ corpus run --x paulg
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
 corpus run --x someone --dry-run
 corpus run --x someone --also-substack example.com
+corpus run --x paulg --resume out/paulg/2026-07-31   # pick up where a dead run stopped
 corpus resynth out/paulg/2026-07-31     # re-run synthesis on cached corpus, no fetch
 corpus cache stats
 corpus cache clear --keep-permanent
+corpus cache vacuum
 corpus budget log
+corpus budget accuracy                  # how wrong --dry-run has been, historically
 ```
 
 ### Options that matter
@@ -54,15 +57,21 @@ corpus budget log
 | --- | --- | --- |
 | `--max-posts` | 3000 | Ingestion stop condition. |
 | `--since YYYY-MM-DD` | unset | History floor. |
-| `--budget` | 10.00 | Hard stop in dollars. Partial results are always preserved. |
+| `--budget` | 10.00 | Hard stop in dollars, enforced **before** each call. Partial results are always preserved. |
+| `--budget-mode` | strict | `strict` refuses any call it cannot fully reserve. `advisory` reserves and reports but never blocks. |
 | `--window-days` | 30 | Size of the sliding ingestion window. |
-| `--empty-window-tolerance` | 3 | Consecutive empty windows before stopping. See the sharp edge below. |
+| `--empty-window-tolerance` | 8 | Consecutive empty windows before stopping. See the sharp edge below. |
+| `--hiatus-probe` | on | On hitting the tolerance, sweep 12 months in one call before concluding history has ended. |
 | `--max-pages` | 20 | Cursor pages per window, the guard against the duplicate-cursor loop. |
 | `--no-replies` | off | Replies are included by default and are usually the better corpus. |
 | `--include-reposts` | off | When kept, reposts only ever support amplification claims. |
 | `--refresh` / `--offline` | off | Bypass the cache / run from cache only. |
 | `--dry-run` | off | Print the estimate and stop before any paid fetch. |
+| `--resume PATH` | unset | Continue a previous run from its `run.json`. |
 | `--map-effort` / `--reduce-effort` | medium / high | Map is extraction, not deep reasoning, so it runs a notch lower. |
+| `--log-format` | text | `text` or `json` (one object per line). |
+| `--verbose` / `--quiet` | off | Add phase and elapsed time / warnings and errors only. |
+| `--capture-raw DIR` | unset | Dump every raw provider response verbatim, before normalization. |
 
 ---
 
@@ -130,6 +139,24 @@ fraction of tokens but the most expensive per token).
 The default `--budget 10.00` comfortably covers a 10,000-post run. `--dry-run` prints
 the estimate for a specific target after one profile lookup (~$0.0002).
 
+### The budget is enforced before the call, not after
+
+`--budget` is a ceiling, not a tripwire. Every billable call is *reserved* first, and a
+call that cannot be fully covered is refused rather than made and regretted. Reservations
+are held for the duration of a call, so the four concurrent map slices cannot collectively
+overshoot.
+
+One consequence worth knowing: the reduce call reserves its **worst case**, which is
+`claude-opus-5` emitting all 32,000 output tokens — about **$0.80**. In `strict` mode a
+budget below roughly a dollar will therefore refuse synthesis outright, even though the
+call would probably have cost a fifth of that. That is the guarantee working: it cannot
+promise not to exceed $0.50 when the model *may* spend $0.80. Use `--budget-mode advisory`
+if you would rather overshoot than stop.
+
+Reservations are reconciled against actual usage afterwards, and any call where the real
+cost exceeded the reservation by more than 20% is reported — an estimator that is wrong
+should say so rather than quietly drift. `corpus budget accuracy` shows the history.
+
 ### Where the money does *not* go twice
 
 - Hydrated parents are cached **permanently** — old tweets do not change.
@@ -160,15 +187,44 @@ therefore not the end of history. The walk continues until
 recorded in `signals.json` so a systematic gap is visible rather than silent.
 
 > **Sharp edge worth knowing.** Because a lying empty window is indistinguishable from
-> a genuinely silent one, a *real* hiatus longer than `window_days × tolerance`
-> (90 days at the defaults) will end ingestion early. The run tells you — `stop_reason`
-> is recorded and surfaced in the report's caveat block — but for an account with known
-> long silences, raise `--empty-window-tolerance` or `--window-days`.
+> a genuinely silent one, a *real* hiatus can still end ingestion early. Two things
+> reduce that risk: the default tolerance is **8** (240 days at 30-day windows, not the
+> 90 it used to be), and on reaching the tolerance the walk spends one more call
+> sweeping the next **12 months** before concluding anything. Find posts and it resumes;
+> find nothing and the guess has become evidence. The combination reaches roughly
+> **605 days** below the last post seen.
+>
+> A silence longer than that still truncates, and the report says so in bold, naming
+> the last date reached. Raise `--empty-window-tolerance` or `--window-days` for an
+> account with known multi-year gaps.
 
 When a window is cut short by either regression, the walk resumes at
 `earliest_seen - 1` and deliberately re-covers the unexplored region, accepting some
 duplicate reads rather than punching a hole in the history. When a window completes
 normally it drops straight to the window floor and re-reads nothing.
+
+---
+
+## A third regression, on the other provider
+
+**The Anthropic output schema is too large for constrained decoding.** Measured against
+the live API on 2026-08-02: the reduce schema compiles to a grammar the API refuses with
+
+```
+400 invalid_request_error: The compiled grammar is too large, which would cause
+performance issues. Simplify your tool schemas.
+```
+
+Bisected field by field, 9 of the reduce schema's 13 top-level fields (3,522 bytes) are
+accepted and 10 (3,809) are not. The full schema is 4,826. The map schema, at 951 bytes,
+is unaffected — which is why the map stage always worked and only the reduce failed.
+
+The reduce now asks for constrained decoding and, if the schema is refused, retries
+without it and puts the schema in the prompt instead. That retry is free, because the API
+refuses the schema before generating anything, so it does not consume one of the two
+billed validation attempts. The real guarantee was never the grammar: every reduce output
+is validated against the pydantic model regardless, and a failure retries once with the
+error appended. When the fallback fires, the run says so and `report.md` records it.
 
 ---
 
@@ -262,15 +318,37 @@ instead.
 ## Development
 
 ```bash
-uv pip install -e . pytest
-python -m pytest -q
+make install     # uv venv + the package + pytest, ruff, mypy
+make check       # lint, format, types, secrets, tests — the gate
+make coverage    # per-module floors on the money and history paths
 ```
 
-83 tests, all offline. The suite covers both provider regressions (via
-`tests/fake_provider.py`, which can inject repeating cursors and lying empty windows),
-thread stitching, context hydration, every signal function, and the full map-reduce
-path against a stubbed model client (`tests/fake_anthropic.py`) so prompts can be
-iterated on without paying per attempt.
+394 tests, all offline. The suite covers both provider regressions (via
+`tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
+malformed timestamps), thread stitching, context hydration, every signal function, and
+the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
+prompts can be iterated on without paying per attempt.
+
+`make check` runs ruff (lint + format), `mypy --strict` over `corpus/`,
+`scripts/check_secrets.sh`, and pytest. The GitHub Actions workflow runs exactly the same
+commands, with `X_API_KEY` and `ANTHROPIC_API_KEY` deliberately set empty so a test that
+reaches for a real key fails loudly rather than passing on a machine that happens to have
+one. **Nothing in CI needs a network route or a key.**
+
+Coverage floors are enforced per module rather than on the total
+(`scripts/check_coverage.py`): a single total is satisfiable by a well-covered renderer
+carrying an untested budget over the line. `budget.py`, `ingest.py`, `client.py`, and
+`hydrate.py` each hold at 90%+.
+
+### The two scripts that cost money
+
+Never run by CI; `verify_contract.py` refuses to run when `CI` is set.
+
+```bash
+corpus run --x <handle> --max-posts 50 --budget 0.15 --skip-synthesis --capture-raw captures/
+python scripts/verify_contract.py            # ~$0.01, monthly drift check
+python scripts/verify_contract.py --dry-run  # free, prints the plan
+```
 
 > **Fixture provenance.** Mixed, and [`docs/wire-contract.md`](docs/wire-contract.md)
 > says exactly which is which.
@@ -278,23 +356,38 @@ iterated on without paying per attempt.
 > `user_info.json` matches a **confirmed** live response (2026-07-31): envelope
 > `{status, msg, data}`, the real key set, and `createdAt` in the actual ISO-8601
 > six-digit-microsecond form (`2010-08-27T20:13:59.000000Z`) rather than the legacy
-> `Mon Mar 03 12:00:00 +0000 2014` shape the first draft assumed. Values are still
-> synthetic; the shape is not.
+> `Mon Mar 03 12:00:00 +0000 2014` shape the first draft assumed.
 >
 > The three **tweet-endpoint** fixtures are still synthetic — written from
-> twitterapi.io's documented shapes, not captured from the wire, because this
-> environment has no `X_API_KEY` and no network route to `api.twitterapi.io`. The
-> 83-test baseline therefore proved the logic self-consistent against assumed
-> payloads, and proved nothing about whether those payloads are real.
+> twitterapi.io's documented shapes, not captured from the wire, because the machine this
+> was built on has no `X_API_KEY` and no network route to `api.twitterapi.io`. So the
+> tests prove the code and the fixtures agree; they do not prove either matches
+> twitterapi.io.
 >
-> To fix that, capture and diff:
+> `corpus/x/contract.py` states every field name and nesting the code depends on, with a
+> severity and a what-breaks note per field. `tests/test_wire_contract.py` checks the
+> fixtures against it offline on every run, and `scripts/verify_contract.py` checks the
+> same spec against the live API. One spec, two checkers.
 >
-> ```bash
-> corpus run --x <handle> --max-posts 50 --budget 0.15 --skip-synthesis --capture-raw captures/
-> python scripts/verify_contract.py     # ~$0.01, monthly drift check
-> ```
->
-> `corpus/x/contract.py` states every field name and nesting the code depends on;
-> `tests/test_wire_contract.py` checks the fixtures against it offline on every run.
-> If the real shapes differ, `normalize_tweet` in `corpus/x/client.py` and
-> `_tweets_from`/`_cursor_from` in `corpus/x/providers.py` are the designed seams.
+> The Anthropic side had exactly the same gap, and running it live is what exposed the
+> reduce-schema regression above. Stubbed tests prove a pipeline is self-consistent; only
+> a real call proves it works.
+
+---
+
+## Known gaps
+
+Honest failure over polish, so these are stated rather than buried:
+
+- **The tweet endpoints are unverified.** `advanced_search`, `last_tweets`, and
+  `tweets_by_ids` are described from documentation, not observation. The open questions —
+  including whether `since_time:`/`until_time:` are honoured at all, which is the most
+  expensive thing in the file to be wrong about — are listed as a checklist in
+  [`docs/wire-contract.md`](docs/wire-contract.md).
+- **`_cursor_from` falls back to `bool(cursor)`.** If the provider returns a cursor on the
+  last page, every window pages to `--max-pages` and pays for it. Correct output, ~20x the
+  cost, and nothing would flag it. First item under Pagination in the wire contract.
+- **The 100-id batch ceiling is documented, not measured.** So is the response for a
+  deleted or protected parent, which `hydrate.py` assumes is simply absent from the array.
+- **Estimator accuracy is unproven against real runs.** The machinery to check it exists
+  (`corpus budget accuracy`); it has no live data yet.
