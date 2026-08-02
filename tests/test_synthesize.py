@@ -269,3 +269,141 @@ def test_budget_stop_during_synthesis_is_not_a_crash(client, cache):
     result = run_synth(FakeAnthropic(), docs, compute_signals(docs), budget)
     assert result.synthesis is None
     assert "budget" in result.error.lower()
+
+
+# --------------------------------------------------------------------------
+# Schema rejection: found live, 2026-08-02
+# --------------------------------------------------------------------------
+# The API compiles the output schema into a grammar for constrained decoding and
+# refuses one above an internal size limit. REDUCE_SCHEMA is over it, so the
+# reduce call could never have succeeded — and every test passed anyway, because
+# FakeAnthropic returns canned JSON and never submits a schema. These are the
+# tests that would have caught it.
+
+
+def _grammar_error() -> Exception:
+    return RuntimeError(
+        "Error code: 400 - {'type': 'error', 'error': {'type': "
+        "'invalid_request_error', 'message': 'The compiled grammar is too "
+        "large, which would cause performance issues. Simplify your tool "
+        "schemas or reduce the number of strict tools.'}}"
+    )
+
+
+def test_schema_rejection_is_recognised():
+    from corpus.synthesize import _is_schema_rejection
+
+    assert _is_schema_rejection(_grammar_error())
+    assert not _is_schema_rejection(RuntimeError("500 internal server error"))
+    assert not _is_schema_rejection(RuntimeError("429 rate limited"))
+
+
+def test_reduce_falls_back_when_the_schema_is_refused(tmp_path):
+    """Degrade to prompt-guided JSON rather than losing the whole run."""
+    from corpus.budget import Budget
+    from corpus.cache import Cache
+    from corpus.synthesize import run_reduce
+
+    class RefusesSchema(FakeAnthropic):
+        def __init__(self):
+            super().__init__()
+            self.refused = 0
+
+        def _stream(self, **kwargs):
+            if "format" in (kwargs.get("output_config") or {}):
+                self.refused += 1
+                raise _grammar_error()
+            return super().messages.stream(**kwargs)
+
+    client = FakeAnthropic()
+    original_stream = client.messages.stream
+    refusals: list[int] = []
+
+    def stream(**kwargs):
+        if "format" in (kwargs.get("output_config") or {}):
+            refusals.append(1)
+            raise _grammar_error()
+        return original_stream(**kwargs)
+
+    client.messages.stream = stream  # type: ignore[method-assign]
+
+    cache = Cache(path=tmp_path / "c.db")
+    synthesis, raw, error, structured = asyncio.run(
+        run_reduce(
+            client,
+            [{"topics": [], "claims": []}],
+            {"date_range": "2024"},
+            [],
+            Budget(limit=100.0, cache=cache),
+            log=lambda _: None,
+        )
+    )
+    assert refusals, "the structured attempt never happened"
+    assert structured is False, "the fallback flag was not recorded"
+    assert error == "", f"the fallback did not produce a synthesis: {error}"
+    assert synthesis is not None
+    cache.close()
+
+
+def test_the_schema_fallback_does_not_consume_a_paid_attempt(tmp_path):
+    """The refusal is free — nothing is generated — so it must not cost a retry."""
+    from corpus.budget import Budget
+    from corpus.cache import Cache
+    from corpus.synthesize import run_reduce
+
+    client = FakeAnthropic(reduce_response=lambda _kwargs: "{not json")
+    original_stream = client.messages.stream
+    billed: list[int] = []
+
+    def stream(**kwargs):
+        if "format" in (kwargs.get("output_config") or {}):
+            raise _grammar_error()
+        billed.append(1)
+        return original_stream(**kwargs)
+
+    client.messages.stream = stream  # type: ignore[method-assign]
+
+    cache = Cache(path=tmp_path / "c.db")
+    synthesis, _, error, structured = asyncio.run(
+        run_reduce(
+            client,
+            [{"topics": []}],
+            {},
+            [],
+            Budget(limit=100.0, cache=cache),
+            log=lambda _: None,
+        )
+    )
+    assert synthesis is None and "validation failed" in error
+    assert len(billed) == 2, f"expected 2 billed attempts, got {len(billed)}"
+    assert structured is False
+    cache.close()
+
+
+def test_reduce_schema_size_is_recorded_against_the_measured_limit():
+    """A tripwire, not a gate: the limit is the provider's, not ours.
+
+    Measured live on 2026-08-02 by bisection: 3,522 bytes of schema accepted,
+    3,809 rejected. If REDUCE_SCHEMA ever drops below that band, constrained
+    decoding starts working again and the fallback stops being exercised — worth
+    noticing, because the fallback is then untested in production.
+    """
+    from corpus.synthesize import REDUCE_SCHEMA
+
+    size = len(json.dumps(REDUCE_SCHEMA))
+    assert size > 3809, (
+        f"REDUCE_SCHEMA is now {size} bytes, below the measured rejection "
+        "threshold. Re-test against the live API — the fallback path may no "
+        "longer be reachable."
+    )
+
+
+def test_map_schema_stays_within_the_grammar_limit():
+    """MAP_SCHEMA works today at ~951 bytes. Keep it that way."""
+    from corpus.synthesize import MAP_SCHEMA
+
+    size = len(json.dumps(MAP_SCHEMA))
+    assert size < 3522, (
+        f"MAP_SCHEMA is {size} bytes, near the measured 3,522-byte limit. The "
+        "map stage would start falling back too, on every slice."
+    )

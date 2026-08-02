@@ -37,6 +37,34 @@ REDUCE_MODEL = "claude-opus-5"
 MAP_MAX_TOKENS = 8_000
 REDUCE_MAX_TOKENS = 32_000
 
+# Constrained decoding compiles the JSON schema into a grammar, and the API
+# rejects a grammar above an internal size limit with a 400:
+#
+#   "The compiled grammar is too large, which would cause performance issues."
+#
+# Measured against the live API on 2026-08-02 by bisecting REDUCE_SCHEMA field
+# by field: 9 of its 13 top-level fields (3,522 bytes of schema) are accepted
+# and 10 (3,809 bytes) are not. The full schema is 4,826 bytes, so the reduce
+# call could never have succeeded — every test passed because FakeAnthropic
+# returns canned JSON and never submits the schema anywhere.
+#
+# MAP_SCHEMA, at 951 bytes, is comfortably inside the limit and is unaffected.
+#
+# Rather than shaving the schema to sit just under a limit we do not control —
+# where the next field added breaks it again, in production, after ingestion has
+# been paid for — the reduce degrades: it asks for constrained decoding, and if
+# the schema is refused it retries without `format`, putting the schema in the
+# prompt instead. The real guarantee was never the grammar anyway; it is
+# `Synthesis.model_validate_json` below, plus the retry-with-the-error loop.
+SCHEMA_REJECTION_MARKERS = ("grammar is too large", "compiled grammar", "schema is too large")
+
+
+def _is_schema_rejection(exc: Exception) -> bool:
+    """Did the API refuse the schema itself, as opposed to failing the call?"""
+    text = str(exc).lower()
+    return any(marker in text for marker in SCHEMA_REJECTION_MARKERS)
+
+
 CHUNK_TOKEN_TARGET = 30_000
 MAP_CONCURRENCY = 4
 # Chunking only needs to be approximately right; ~4 chars/token is close enough
@@ -310,6 +338,7 @@ class SynthesisRun:
     dropped_findings: list[str] = field(default_factory=list)
     corrected_counts: list[str] = field(default_factory=list)
     raw_reduce_output: str = ""
+    structured_output: bool = True  # False when the schema was refused
     error: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -318,6 +347,7 @@ class SynthesisRun:
             "map_failures": self.map_failures,
             "dropped_findings": self.dropped_findings,
             "corrected_counts": self.corrected_counts,
+            "structured_output": self.structured_output,
             "error": self.error,
         }
 
@@ -525,12 +555,18 @@ async def run_reduce(
     *,
     effort: str = "high",
     log: Callable[[str], None] = print,
-) -> tuple[Synthesis | None, str, str]:
-    """Returns (synthesis, raw_output, error)."""
+) -> tuple[Synthesis | None, str, str, bool]:
+    """Returns (synthesis, raw_output, error, used_structured_output)."""
     corpus = _corpus_block(map_outputs, signals, highlights)
     attempt_note = ""
+    structured = True
 
-    for attempt in (1, 2):
+    # `attempt` counts *billed* attempts, so the schema-rejection fallback below
+    # does not consume one: that retry is free, because the API refuses the
+    # schema before generating anything. Two billed attempts, as before.
+    attempt = 0
+    while attempt < 2:
+        attempt += 1
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -547,6 +583,19 @@ async def run_reduce(
                 ),
             },
         ]
+        if not structured:
+            # The schema is no longer enforced by the decoder, so it has to be
+            # in the prompt. Stating it verbatim beats describing it.
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "Return JSON matching this schema exactly. Every listed "
+                        "property is required and no others are permitted:\n\n"
+                        + json.dumps(REDUCE_SCHEMA, indent=2)
+                    ),
+                }
+            )
         messages = [{"role": "user", "content": content}]
 
         # The single largest exposure in the tool: claude-opus-5 at
@@ -565,18 +614,16 @@ async def run_reduce(
         # reported as a model failure. The corpus is already on disk.
         reservation = budget.reserve(estimate, f"reduce attempt {attempt}")
 
+        output_config: dict[str, Any] = {"effort": effort}
+        if structured:
+            output_config["format"] = {"type": "json_schema", "schema": REDUCE_SCHEMA}
+
         try:
             async with client.messages.stream(
                 model=REDUCE_MODEL,
                 max_tokens=REDUCE_MAX_TOKENS,
                 system=REDUCE_SYSTEM,
-                output_config=cast(
-                    Any,
-                    {
-                        "effort": effort,
-                        "format": {"type": "json_schema", "schema": REDUCE_SCHEMA},
-                    },
-                ),
+                output_config=cast(Any, output_config),
                 messages=cast(Any, messages),
             ) as stream:
                 message = await stream.get_final_message()
@@ -585,7 +632,18 @@ async def run_reduce(
             raise
         except Exception as exc:
             reservation.settle()
-            return None, "", f"reduce call failed: {exc}"
+            if structured and _is_schema_rejection(exc):
+                # The schema was refused, not the request. Nothing was
+                # generated and nothing was billed, so this retry is free.
+                structured = False
+                attempt -= 1  # nothing was generated and nothing was billed
+                log(
+                    "  [reduce] the API refused the output schema as too large "
+                    "for constrained decoding; falling back to prompt-guided "
+                    "JSON, still validated against the pydantic model"
+                )
+                continue
+            return None, "", f"reduce call failed: {exc}", structured
 
         actual: float | None = None
         try:
@@ -593,21 +651,21 @@ async def run_reduce(
         finally:
             reservation.settle(actual)
         if message.stop_reason == "refusal":
-            return None, "", "reduce refused by safety classifier"
+            return None, "", "reduce refused by safety classifier", structured
 
         raw = _text_of(message)
         try:
-            return Synthesis.model_validate_json(raw), raw, ""
+            return Synthesis.model_validate_json(raw), raw, "", structured
         except (ValidationError, ValueError) as exc:
             log(f"  [reduce] attempt {attempt} failed validation: {exc}")
-            if attempt == 2:
-                return None, raw, f"validation failed twice: {exc}"
+            if attempt >= 2:
+                return None, raw, f"validation failed twice: {exc}", structured
             attempt_note = (
                 "Your previous output failed schema validation with this error. "
                 "Return corrected JSON matching the schema exactly:\n"
                 f"{exc}"
             )
-    return None, "", "unreachable"
+    return None, "", "unreachable", structured
 
 
 def prune_unsourced(synthesis: Synthesis, valid_ids: set[str]) -> list[str]:
@@ -800,7 +858,7 @@ async def synthesize(
 
         highlights = select_highlights(synth_docs, run.map_outputs)
         log(f"  reduce over {len(run.map_outputs)} slices + {len(highlights)} highlights")
-        synthesis, raw, error = await run_reduce(
+        synthesis, raw, error, structured = await run_reduce(
             client,
             run.map_outputs,
             signals,
@@ -810,7 +868,13 @@ async def synthesize(
             log=log,
         )
         run.raw_reduce_output = raw
+        run.structured_output = structured
         run.error = error
+        if not structured:
+            log(
+                "  [reduce] completed without constrained decoding; output was "
+                "validated in Python instead"
+            )
         if synthesis is not None:
             valid_ids = {d.source_id for d in docs}
             run.dropped_findings = prune_unsourced(synthesis, valid_ids)

@@ -146,6 +146,14 @@ def render_report(
         caveats.append(f"- Synthesis problem: {run_meta['synthesis_error']}")
     for note in run_meta.get("dropped_findings", [])[:5]:
         caveats.append(f"- Dropped as unsourced: {note}")
+    if run_meta.get("structured_output") is False:
+        caveats.append(
+            "- The provider refused the output schema as too large for "
+            "constrained decoding, so the model was asked for JSON in the "
+            "prompt instead and the result was validated in Python. Every "
+            "guarantee below still holds; the first attempt is just likelier "
+            "to need a retry."
+        )
     corrected = run_meta.get("corrected_counts", [])
     if corrected:
         caveats.append(

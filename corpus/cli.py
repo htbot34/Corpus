@@ -520,6 +520,7 @@ def run(
         synthesis = result.synthesis
         run_meta["synthesis_error"] = result.error
         run_meta["dropped_findings"] = result.dropped_findings
+        run_meta["structured_output"] = result.structured_output
         run_meta["corrected_counts"] = result.corrected_counts
         run_meta["budget_stopped"] = budget.stopped
         if synthesis is not None:
@@ -690,6 +691,7 @@ def resynth(
         "synthesis_error": result.error,
         "dropped_findings": result.dropped_findings,
         "corrected_counts": result.corrected_counts,
+        "structured_output": result.structured_output,
         "budget_stopped": budget.stopped,
     }
 
