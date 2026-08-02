@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from itertools import pairwise
 
-import pytest
+from fake_provider import FakeProvider, load, tweet_ts
 
 from corpus.budget import Budget
 from corpus.cache import Cache
 from corpus.x.client import XClient
 from corpus.x.ingest import ingest_timeline
-from fake_provider import FakeProvider, load, tweet_ts
 
 # The fixture corpus runs 2024-01-08 .. 2024-08-16 and contains a deliberate
 # 160-day silence in the middle. Anchor "now" just past the last post so the
@@ -197,7 +197,7 @@ def test_windows_do_not_overlap(tmp_path):
         log=lambda _: None,
     )
     windows = provider._windows_seen
-    for (s1, u1), (s2, u2) in zip(windows, windows[1:]):
+    for (s1, u1), (s2, u2) in pairwise(windows):
         assert u2 <= s1, f"windows overlap: {(s1, u1)} then {(s2, u2)}"
         assert u2 < u1, "the walk must always move backwards"
 
@@ -259,9 +259,7 @@ def test_budget_is_never_exceeded_during_ingestion(tmp_path):
         empty_window_tolerance=GAP_TOLERANT,
         log=lambda _: None,
     )
-    assert client.budget.total <= 0.003, (
-        f"spent ${client.budget.total:.5f} against a $0.003 budget"
-    )
+    assert client.budget.total <= 0.003, f"spent ${client.budget.total:.5f} against a $0.003 budget"
     assert tweets and "budget" in stats.stop_reason
 
 
@@ -284,9 +282,7 @@ def test_advisory_mode_allows_what_strict_refuses(tmp_path):
     cache = Cache(path=tmp_path / "c.db")
     budget = Budget(limit=0.0006, cache=cache, mode="advisory")
     client = XClient(FakeProvider(page_size=2), cache, budget)
-    tweets, _ = ingest_timeline(
-        client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
-    )
+    tweets, _ = ingest_timeline(client, "testsubject", since=SINCE, until=NOW, log=lambda _: None)
     assert tweets, "advisory mode must not refuse the call"
     assert budget.refusals, "but it must still record that the budget was blown"
 

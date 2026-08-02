@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from fake_provider import load
+
 from corpus.x.client import normalize_tweet
 from corpus.x.hydrate import UNAVAILABLE, hydrate, stitch_threads
-from fake_provider import load
 
 
 def docs_from_fixture():

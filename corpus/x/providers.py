@@ -18,9 +18,10 @@ from __future__ import annotations
 import os
 import random
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
@@ -34,15 +35,15 @@ TWITTERAPI_IO_BASE = "https://api.twitterapi.io"
 Page = tuple[list[dict[str, Any]], str | None, bool]
 
 __all__ = [
+    "PROVIDERS",
     "Page",
     "ProviderError",
     "RawCapture",
     "ScopeViolation",
     "TwitterApiIoProvider",
     "XProvider",
-    "get_provider",
-    "PROVIDERS",
     "_redact",
+    "get_provider",
 ]
 
 
@@ -226,7 +227,6 @@ class TwitterApiIoProvider:
         # the request URL — which is one proxy misconfiguration away from
         # carrying the key.
         self._log_sink = log
-        self.log = lambda msg: self._log_sink(_redact(msg))
         self.api_key = api_key or os.environ.get("X_API_KEY", "")
         if capture is not None:
             # Explicit-key construction bypasses the environment, so tell the
@@ -244,6 +244,14 @@ class TwitterApiIoProvider:
             headers={"X-API-Key": self.api_key},
             timeout=timeout,
         )
+
+    def log(self, message: str) -> None:
+        """Emit a line through the configured sink, redacted.
+
+        Retry lines interpolate exception strings, and an httpx error carries
+        the request URL — one proxy misconfiguration away from carrying the key.
+        """
+        self._log_sink(_redact(message))
 
     # -- transport --------------------------------------------------------
 
@@ -311,7 +319,8 @@ class TwitterApiIoProvider:
             if resp.status_code >= 400:
                 raise ProviderError(f"{resp.status_code} from {path}: {resp.text[:400]}")
             try:
-                return resp.json()
+                payload: dict[str, Any] = resp.json()
+                return payload
             except ValueError as exc:
                 raise ProviderError(f"non-JSON response from {path}: {resp.text[:200]}") from exc
         raise ProviderError(f"{path} failed after {self.max_retries} attempts: {last_exc}")
@@ -328,7 +337,9 @@ class TwitterApiIoProvider:
         """
         for candidate in (
             payload.get("tweets"),
-            (payload.get("data") or {}).get("tweets") if isinstance(payload.get("data"), dict) else None,
+            (payload.get("data") or {}).get("tweets")
+            if isinstance(payload.get("data"), dict)
+            else None,
             payload.get("data") if isinstance(payload.get("data"), list) else None,
             payload.get("results"),
         ):
@@ -396,11 +407,24 @@ class _StubProvider:
             f"register the class in PROVIDERS. Nothing outside this file needs to change."
         )
 
-    def user_info(self, handle: str) -> dict[str, Any]: ...
-    def last_tweets(self, handle: str, cursor: str | None = None) -> Page: ...
-    def advanced_search(self, query: str, cursor: str | None = None) -> Page: ...
-    def tweets_by_ids(self, ids: list[str]) -> list[dict[str, Any]]: ...
-    def close(self) -> None: ...
+    # These exist only so the class satisfies XProvider structurally. __init__
+    # always raises, so none of them is ever reachable — but a body of `...`
+    # reads to a type checker as "returns None", which is a lie about the
+    # signature. Raising says the same thing honestly.
+    def user_info(self, handle: str) -> dict[str, Any]:
+        raise NotImplementedError(self.name)
+
+    def last_tweets(self, handle: str, cursor: str | None = None) -> Page:
+        raise NotImplementedError(self.name)
+
+    def advanced_search(self, query: str, cursor: str | None = None) -> Page:
+        raise NotImplementedError(self.name)
+
+    def tweets_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        raise NotImplementedError(self.name)
+
+    def close(self) -> None:
+        return None
 
 
 class ApiDanceProvider(_StubProvider):
@@ -434,7 +458,6 @@ PROVIDERS: dict[str, type] = {
 def get_provider(name: str | None = None, **kwargs: Any) -> XProvider:
     name = (name or os.environ.get("X_PROVIDER") or "twitterapi_io").strip()
     if name not in PROVIDERS:
-        raise ProviderError(
-            f"Unknown X_PROVIDER {name!r}. Known: {', '.join(sorted(PROVIDERS))}"
-        )
-    return PROVIDERS[name](**kwargs)  # type: ignore[return-value]
+        raise ProviderError(f"Unknown X_PROVIDER {name!r}. Known: {', '.join(sorted(PROVIDERS))}")
+    provider: XProvider = PROVIDERS[name](**kwargs)
+    return provider

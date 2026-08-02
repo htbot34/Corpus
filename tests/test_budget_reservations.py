@@ -17,15 +17,14 @@ import pytest
 
 from corpus.budget import (
     ADVISORY,
+    STRICT,
     Budget,
     BudgetExceeded,
-    STRICT,
     estimate_anthropic_call,
     estimate_tokens,
     estimate_x_batch_cost,
     estimate_x_page_cost,
 )
-
 
 # -- basics -----------------------------------------------------------------
 

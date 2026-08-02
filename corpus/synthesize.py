@@ -16,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, cast
 
 from anthropic import AsyncAnthropic
 from pydantic import ValidationError
@@ -199,9 +200,7 @@ REDUCE_SCHEMA = _obj(
         },
         "reading_diet": {
             "type": "array",
-            "items": _obj(
-                {"domain": _STR, "share_count": _INT, "what_it_suggests": _STR}
-            ),
+            "items": _obj({"domain": _STR, "share_count": _INT, "what_it_suggests": _STR}),
         },
         "evolution": {
             "type": "array",
@@ -227,22 +226,16 @@ REDUCE_SCHEMA = _obj(
         ),
         "open_loops": {
             "type": "array",
-            "items": _obj(
-                {"question": _STR, "returned_to_count": _INT, "evidence_ids": _IDS}
-            ),
+            "items": _obj({"question": _STR, "returned_to_count": _INT, "evidence_ids": _IDS}),
         },
-        "voice": _obj(
-            {"register": _STR, "hobbyhorses": _STRS, "tells": _STRS}
-        ),
+        "voice": _obj({"register": _STR, "hobbyhorses": _STRS, "tells": _STRS}),
         "hooks": {
             "type": "array",
             "items": _obj({"opener": _STR, "anchor_url": _STR, "why_it_works": _STR}),
         },
         "avoid": {
             "type": "array",
-            "items": _obj(
-                {"topic_or_framing": _STR, "reason": _STR, "evidence_ids": _IDS}
-            ),
+            "items": _obj({"topic_or_framing": _STR, "reason": _STR, "evidence_ids": _IDS}),
         },
         "coverage": _obj(
             {
@@ -425,8 +418,8 @@ async def run_map(
             # cannot collectively overshoot — which is exactly what asyncio
             # .gather + charge-on-return allowed before.
             counted = await _count_input_tokens(client, MAP_MODEL, system, messages)
-            input_tokens = counted if counted is not None else estimate_tokens(
-                MAP_SYSTEM + str(messages)
+            input_tokens = (
+                counted if counted is not None else estimate_tokens(MAP_SYSTEM + str(messages))
             )
             estimate = estimate_anthropic_call(MAP_MODEL, input_tokens, MAP_MAX_TOKENS)
 
@@ -441,12 +434,19 @@ async def run_map(
                 message = await client.messages.create(
                     model=MAP_MODEL,
                     max_tokens=MAP_MAX_TOKENS,
-                    system=system,
-                    output_config={
-                        "effort": effort,
-                        "format": {"type": "json_schema", "schema": MAP_SCHEMA},
-                    },
-                    messages=messages,
+                    # The SDK's TypedDicts are stricter than the dict literals
+                    # built above. Casting at the call boundary keeps the
+                    # prompt-building code readable; the shapes themselves are
+                    # pinned by tests/test_sdk_contract.py.
+                    system=cast(Any, system),
+                    output_config=cast(
+                        Any,
+                        {
+                            "effort": effort,
+                            "format": {"type": "json_schema", "schema": MAP_SCHEMA},
+                        },
+                    ),
+                    messages=cast(Any, messages),
                 )
             except BudgetExceeded:
                 reservation.settle()
@@ -459,9 +459,7 @@ async def run_map(
 
             actual: float | None = None
             try:
-                actual = _charge(
-                    budget, MAP_MODEL, message, note=f"map slice {index + 1} ({span})"
-                )
+                actual = _charge(budget, MAP_MODEL, message, note=f"map slice {index + 1} ({span})")
             finally:
                 # Settle after charging: briefly counting both is conservative,
                 # counting neither is the overshoot this class exists to prevent.
@@ -556,9 +554,7 @@ async def run_reduce(
         # the fact means a $10 budget at $9.99 fires anyway and lands at $13.49.
         # Reserve worst-case output; reconcile down when the real usage lands.
         counted = await _count_input_tokens(client, REDUCE_MODEL, REDUCE_SYSTEM, messages)
-        input_tokens = counted if counted is not None else estimate_tokens(
-            REDUCE_SYSTEM + corpus
-        )
+        input_tokens = counted if counted is not None else estimate_tokens(REDUCE_SYSTEM + corpus)
         estimate = estimate_anthropic_call(REDUCE_MODEL, input_tokens, REDUCE_MAX_TOKENS)
         log(
             f"  [reduce] attempt {attempt}: ~{input_tokens:,} input tokens, "
@@ -574,11 +570,14 @@ async def run_reduce(
                 model=REDUCE_MODEL,
                 max_tokens=REDUCE_MAX_TOKENS,
                 system=REDUCE_SYSTEM,
-                output_config={
-                    "effort": effort,
-                    "format": {"type": "json_schema", "schema": REDUCE_SCHEMA},
-                },
-                messages=messages,
+                output_config=cast(
+                    Any,
+                    {
+                        "effort": effort,
+                        "format": {"type": "json_schema", "schema": REDUCE_SCHEMA},
+                    },
+                ),
+                messages=cast(Any, messages),
             ) as stream:
                 message = await stream.get_final_message()
         except BudgetExceeded:
@@ -590,9 +589,7 @@ async def run_reduce(
 
         actual: float | None = None
         try:
-            actual = _charge(
-                budget, REDUCE_MODEL, message, note=f"reduce attempt {attempt}"
-            )
+            actual = _charge(budget, REDUCE_MODEL, message, note=f"reduce attempt {attempt}")
         finally:
             reservation.settle(actual)
         if message.stop_reason == "refusal":
@@ -692,7 +689,9 @@ def enforce_signal_counts(
         notes.append(f"coverage.date_range corrected to {date_range}")
         synthesis.coverage.date_range = date_range
 
-    truth = {g["handle"].lower(): g["exchange_count"] for g in signals.get("conversation_graph", [])}
+    truth = {
+        g["handle"].lower(): g["exchange_count"] for g in signals.get("conversation_graph", [])
+    }
     for edge in synthesis.network:
         actual = truth.get(edge.handle.lstrip("@").lower())
         if actual is not None and edge.exchange_count != actual:

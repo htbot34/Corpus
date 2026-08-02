@@ -28,7 +28,9 @@ SCRIPT = REPO / "scripts" / "check_secrets.sh"
 
 # Fake credentials, assembled from pieces so this file does not contain the
 # literal prefixes and therefore does not trip the scanner it is testing.
-FAKE_ANTHROPIC = "sk-" + "ant-" + "api03-" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"  # secrets-scan: ok
+FAKE_ANTHROPIC = (
+    "sk-" + "ant-" + "api03-" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"  # secrets-scan: ok
+)  # secrets-scan: ok
 FAKE_TWITTERAPI = "new" + "1_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"  # secrets-scan: ok
 
 
@@ -67,8 +69,7 @@ def _run_scanner() -> subprocess.CompletedProcess[str]:
 def test_tree_has_no_committable_secrets() -> None:
     result = _run_scanner()
     assert result.returncode == 0, (
-        "scripts/check_secrets.sh found credential material:\n"
-        f"{result.stdout}\n{result.stderr}"
+        f"scripts/check_secrets.sh found credential material:\n{result.stdout}\n{result.stderr}"
     )
 
 
@@ -78,7 +79,10 @@ def test_tree_has_no_committable_secrets() -> None:
         ("anthropic prefix", f'KEY = "{FAKE_ANTHROPIC}"\n'),
         ("twitterapi prefix", f'KEY = "{FAKE_TWITTERAPI}"\n'),
         ("assigned env var", "X_API_KEY=Zm9vYmFyYmF6cXV1eDEyMzQ1Njc4OTA=\n"),  # secrets-scan: ok
-        ("bare high entropy", 'blob = "Ax7Kq9ZmPl2WsdE4rTyU8iOp1AsdFgHj5KlZ"\n'),  # secrets-scan: ok
+        (
+            "bare high entropy",
+            'blob = "Ax7Kq9ZmPl2WsdE4rTyU8iOp1AsdFgHj5KlZ"\n',  # secrets-scan: ok
+        ),  # secrets-scan: ok
     ],
 )
 def test_scanner_catches_planted_leak(name: str, content: str) -> None:
@@ -111,9 +115,7 @@ def test_env_example_holds_placeholders_only() -> None:
 
 def test_env_is_gitignored_and_untracked() -> None:
     """Phase 0.1, asserted rather than assumed."""
-    ignored = subprocess.run(
-        ["git", "check-ignore", "-q", ".env"], cwd=REPO, capture_output=True
-    )
+    ignored = subprocess.run(["git", "check-ignore", "-q", ".env"], cwd=REPO, capture_output=True)
     assert ignored.returncode == 0, ".env is not gitignored"
 
     tracked = subprocess.run(
@@ -163,9 +165,7 @@ def test_redact_masks_unknown_keys_by_pattern(monkeypatch: pytest.MonkeyPatch) -
         "Authorization: Bearer abc123XYZsecretvalue",
     ],
 )
-def test_redact_masks_credential_syntax(
-    leaked: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_redact_masks_credential_syntax(leaked: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("X_API_KEY", raising=False)
     assert "abc123XYZsecretvalue" not in redact(leaked)
 
@@ -180,9 +180,7 @@ def test_redact_leaves_ordinary_text_alone(monkeypatch: pytest.MonkeyPatch) -> N
 def test_redact_ignores_short_env_values(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 1-char 'secret' would otherwise corrupt every message containing it."""
     monkeypatch.setenv("X_API_KEY", "x")
-    assert redact("status 200, path /twitter/user/info") == (
-        "status 200, path /twitter/user/info"
-    )
+    assert redact("status 200, path /twitter/user/info") == ("status 200, path /twitter/user/info")
 
 
 def test_secret_values_picks_up_suffix_convention() -> None:

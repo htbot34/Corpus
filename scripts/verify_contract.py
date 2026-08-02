@@ -37,10 +37,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from corpus.budget import X_COST_PER_PROFILE, X_COST_PER_TWEET  # noqa: E402
-from corpus.x.capture import RawCapture  # noqa: E402
-from corpus.x.client import _tweet_id, parse_created_at  # noqa: E402
-from corpus.x.contract import (  # noqa: E402
+from corpus.budget import X_COST_PER_PROFILE, X_COST_PER_TWEET
+from corpus.x.capture import RawCapture
+from corpus.x.client import _tweet_id, parse_created_at
+from corpus.x.contract import (
     ADVANCED_SEARCH,
     CRITICAL,
     IMPORTANT,
@@ -51,7 +51,7 @@ from corpus.x.contract import (  # noqa: E402
     check_payload,
     locate_items,
 )
-from corpus.x.providers import ProviderError, TwitterApiIoProvider  # noqa: E402
+from corpus.x.providers import ProviderError, TwitterApiIoProvider
 
 try:  # dotenv is a declared dependency, but this script must work standalone.
     from dotenv import load_dotenv
@@ -81,10 +81,7 @@ class Report:
 
     @property
     def spend(self) -> float:
-        return (
-            self.tweet_reads * X_COST_PER_TWEET
-            + self.profile_reads * X_COST_PER_PROFILE
-        )
+        return self.tweet_reads * X_COST_PER_TWEET + self.profile_reads * X_COST_PER_PROFILE
 
     def add(self, violations: list[Violation]) -> None:
         self.violations.extend(violations)
@@ -163,9 +160,7 @@ def check_advanced_search(
     query = f"from:{handle} since_time:{since_ts} until_time:{until_ts}"
     print(f"    query: {query}")
 
-    payload = provider._get(
-        ADVANCED_SEARCH.path, {"query": query, "queryType": "Latest"}
-    )
+    payload = provider._get(ADVANCED_SEARCH.path, {"query": query, "queryType": "Latest"})
     location, tweets = locate_items(ADVANCED_SEARCH, payload)
     report.tweet_reads += len(tweets)
     print(f"    array at {location!r}, {len(tweets)} tweets")
@@ -203,9 +198,7 @@ def check_advanced_search(
     return tweets
 
 
-def check_tweets_by_ids(
-    provider: TwitterApiIoProvider, ids: list[str], report: Report
-) -> None:
+def check_tweets_by_ids(provider: TwitterApiIoProvider, ids: list[str], report: Report) -> None:
     section(f"4. tweets_by_ids  GET {TWEETS_BY_IDS.path}")
     if not ids:
         report.finding("no ids harvested from earlier calls; batch lookup UNTESTED")
@@ -213,7 +206,7 @@ def check_tweets_by_ids(
     # A known-bad id alongside real ones: hydrate.py renders a missing parent as
     # "[unavailable]" on the assumption that it is simply absent from the array
     # rather than present with an error marker. Worth knowing which.
-    probe = ids[:4] + ["1"]
+    probe = [*ids[:4], "1"]
     print(f"    tweet_ids={','.join(probe)}  ({len(probe)} ids, one deliberately bogus)")
     payload = provider._get(TWEETS_BY_IDS.path, {"tweet_ids": ",".join(probe)})
     location, tweets = locate_items(TWEETS_BY_IDS, payload)
@@ -246,8 +239,7 @@ def _report_cursor(payload: dict[str, Any], report: Report) -> None:
 def _report_timestamp_format(tweets: list[dict[str, Any]], report: Report) -> None:
     """Tweet objects may differ from user objects. Verify rather than assume."""
     samples = {
-        str(t.get("createdAt") or t.get("created_at") or t.get("timestamp"))
-        for t in tweets[:5]
+        str(t.get("createdAt") or t.get("created_at") or t.get("timestamp")) for t in tweets[:5]
     }
     for sample in sorted(s for s in samples if s and s != "None"):
         iso = sample.endswith("Z") and "." in sample
@@ -269,9 +261,7 @@ def main() -> int:
     parser.add_argument("--handle", default=DEFAULT_HANDLE)
     parser.add_argument("--capture-raw", metavar="DIR", default=None)
     parser.add_argument("--dry-run", action="store_true", help="Plan and price only.")
-    parser.add_argument(
-        "--force", action="store_true", help="Run even under CI. Please do not."
-    )
+    parser.add_argument("--force", action="store_true", help="Run even under CI. Please do not.")
     args = parser.parse_args()
 
     if os.environ.get("CI") and not args.force:
@@ -284,8 +274,10 @@ def main() -> int:
 
     print(f"{BOLD}wire contract check{OFF}  @{args.handle}  (~$0.01)")
     if args.dry_run:
-        print("\n--dry-run: would call user_info, last_tweets, advanced_search, "
-              "tweets_by_ids. No calls made, nothing spent.")
+        print(
+            "\n--dry-run: would call user_info, last_tweets, advanced_search, "
+            "tweets_by_ids. No calls made, nothing spent."
+        )
         return 0
 
     capture = RawCapture(args.capture_raw, log=print) if args.capture_raw else None
@@ -316,8 +308,10 @@ def main() -> int:
     section("summary")
     critical = [v for v in report.violations if v.severity == CRITICAL]
     important = [v for v in report.violations if v.severity == IMPORTANT]
-    print(f"    spend:      ~${report.spend:.4f} "
-          f"({report.profile_reads} profile, {report.tweet_reads} tweet reads)")
+    print(
+        f"    spend:      ~${report.spend:.4f} "
+        f"({report.profile_reads} profile, {report.tweet_reads} tweet reads)"
+    )
     print(f"    critical:   {len(critical)}")
     print(f"    important:  {len(important)}")
     print(f"    findings:   {len(report.findings)}")
@@ -325,13 +319,17 @@ def main() -> int:
         print(f"    captured:   {capture.count} responses -> {capture.directory}")
 
     if critical:
-        print(f"\n{RED}{BOLD}CONTRACT BROKEN{OFF} — the provider changed shape. Fix "
-              "normalize_tweet / _tweets_from / _cursor_from, update "
-              "corpus/x/contract.py and docs/wire-contract.md, then re-run.")
+        print(
+            f"\n{RED}{BOLD}CONTRACT BROKEN{OFF} — the provider changed shape. Fix "
+            "normalize_tweet / _tweets_from / _cursor_from, update "
+            "corpus/x/contract.py and docs/wire-contract.md, then re-run."
+        )
         return 1
     if important or report.findings:
-        print(f"\n{YELLOW}drift worth reading{OFF} — nothing is broken, but the "
-              "notes above differ from what docs/wire-contract.md records.")
+        print(
+            f"\n{YELLOW}drift worth reading{OFF} — nothing is broken, but the "
+            "notes above differ from what docs/wire-contract.md records."
+        )
         return 0
     print(f"\n{GREEN}{BOLD}clean{OFF} — provider matches the recorded contract.")
     return 0

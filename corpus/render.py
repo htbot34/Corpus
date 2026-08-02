@@ -19,7 +19,7 @@ def _link_map(docs: list[Document]) -> dict[str, Document]:
 def _cite(ids: list[str], links: dict[str, Document]) -> str:
     """Render evidence ids as markdown links to the source posts."""
     out = []
-    for i, doc_id in enumerate(ids[:8], start=1):
+    for doc_id in ids[:8]:
         doc = links.get(doc_id)
         if doc is None:
             continue
@@ -132,8 +132,7 @@ def render_report(
         caveats.append(
             f"- **{dropped} document(s) were skipped because their timestamp could "
             "not be parsed.** They are missing from the corpus and from every "
-            "count below."
-            + (f" Examples: {'; '.join(samples)}" if samples else "")
+            "count below." + (f" Examples: {'; '.join(samples)}" if samples else "")
         )
     hyd = run_meta.get("hydration", {})
     if hyd.get("context_unavailable"):
@@ -277,9 +276,7 @@ def render_report(
         out.append("| Domain | Shares | What it suggests |")
         out.append("| --- | ---: | --- |")
         for entry in synthesis.reading_diet:
-            out.append(
-                f"| {entry.domain} | {entry.share_count} | {entry.what_it_suggests} |"
-            )
+            out.append(f"| {entry.domain} | {entry.share_count} | {entry.what_it_suggests} |")
     else:
         out.append("_No outbound links in this corpus._")
     out.append("")
@@ -313,7 +310,7 @@ def render_report(
     out.append("## Hooks")
     out.append("")
     for hook in synthesis.hooks:
-        out.append(f"- **\"{hook.opener}\"**")
+        out.append(f'- **"{hook.opener}"**')
         if hook.anchor_url:
             out.append(f"  - Anchor: {hook.anchor_url}")
         if hook.why_it_works:
@@ -325,8 +322,11 @@ def render_report(
     # ---- avoid -----------------------------------------------------------
     out.append("## Avoid")
     out.append("")
-    for entry in synthesis.avoid:
-        out.append(f"- **{entry.topic_or_framing}** — {entry.reason} {_cite(entry.evidence_ids, links)}")
+    for avoid_entry in synthesis.avoid:
+        out.append(
+            f"- **{avoid_entry.topic_or_framing}** — {avoid_entry.reason} "
+            f"{_cite(avoid_entry.evidence_ids, links)}"
+        )
     if not synthesis.avoid:
         out.append("_Nothing flagged._")
     out.append("")
@@ -360,9 +360,7 @@ def render_report(
         out.append(
             "- Register: "
             + "; ".join(
-                f"{k} {v['mean_word_count']} words/post"
-                for k, v in reg.items()
-                if v.get("n")
+                f"{k} {v['mean_word_count']} words/post" for k, v in reg.items() if v.get("n")
             )
         )
     drift = signals.get("vocabulary_drift", [])

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from fake_provider import load
+
 from corpus.models import Document
 from corpus.x.hydrate import hydrate
 from corpus.x.signals import (
@@ -16,7 +18,6 @@ from corpus.x.signals import (
     register_split,
     vocabulary_drift,
 )
-from fake_provider import load
 
 
 def doc(
@@ -72,7 +73,11 @@ def test_cadence_finds_hiatuses_of_14_plus_days():
 
 
 def test_kind_mix_shares_sum_to_one():
-    docs = [doc("1", BASE, "a"), doc("2", BASE, "b", kind="reply"), doc("3", BASE, "c", kind="reply")]
+    docs = [
+        doc("1", BASE, "a"),
+        doc("2", BASE, "b", kind="reply"),
+        doc("3", BASE, "c", kind="reply"),
+    ]
     mix = kind_mix(docs)
     assert mix["counts"] == {"original": 1, "reply": 2}
     assert abs(sum(mix["shares"].values()) - 1.0) < 1e-9

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 
+from fake_anthropic import FakeAnthropic
+from fake_provider import load
+
 from corpus.models import Synthesis
 from corpus.render import render_report
 from corpus.sources.base import html_to_text
 from corpus.sources.rss import RSSSource
 from corpus.x.hydrate import hydrate
 from corpus.x.signals import compute_signals
-from fake_anthropic import FakeAnthropic
-from fake_provider import load
 
 
 def _synthesis(ids: list[str]) -> Synthesis:
@@ -143,7 +144,10 @@ def test_rss_source_parses_rss_2_0(cache, tmp_path):
     </channel></rss>"""
     cache.put("rss", "rss:https://blog.example.com/feed", xml)
     docs = RSSSource().fetch(
-        "https://blog.example.com/feed", author_handle="testsubject", cache=cache, log=lambda _: None
+        "https://blog.example.com/feed",
+        author_handle="testsubject",
+        cache=cache,
+        log=lambda _: None,
     )
     assert len(docs) == 1
     assert docs[0].source == "rss"
@@ -165,7 +169,10 @@ def test_rss_source_parses_atom(cache):
     </feed>"""
     cache.put("rss", "rss:https://blog.example.com/atom", xml)
     docs = RSSSource().fetch(
-        "https://blog.example.com/atom", author_handle="testsubject", cache=cache, log=lambda _: None
+        "https://blog.example.com/atom",
+        author_handle="testsubject",
+        cache=cache,
+        log=lambda _: None,
     )
     assert len(docs) == 1
     assert docs[0].published_at.year == 2025

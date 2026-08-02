@@ -19,10 +19,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-import pytest
-
 from corpus.cache import BUSY_TIMEOUT_SECONDS, Cache
-
 
 # -- pragmas ---------------------------------------------------------------
 
@@ -86,7 +83,7 @@ def test_concurrent_writers_do_not_lose_entries(tmp_path: Path) -> None:
         try:
             for i in range(25):
                 cache.put("x", f"tweet:{worker_id}-{i}", {"w": worker_id, "i": i}, permanent=True)
-        except Exception as exc:  # noqa: BLE001 - the point is to see it
+        except Exception as exc:
             errors.append(exc)
         finally:
             cache.close()
@@ -168,7 +165,7 @@ def test_spend_log_is_safe_under_concurrent_charges(tmp_path: Path) -> None:
         try:
             for _ in range(20):
                 budget.charge("x", "search", 1, 0.0001)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(5)]
@@ -244,9 +241,7 @@ def test_a_filesystem_without_wal_still_opens(tmp_path: Path, monkeypatch) -> No
             else:
                 setattr(self._inner, name, value)
 
-    monkeypatch.setattr(
-        sqlite3, "connect", lambda *a, **k: NoWalConnection(real_connect(*a, **k))
-    )
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: NoWalConnection(real_connect(*a, **k)))
     c = Cache(path=tmp_path / "c.db")
     c.put("x", "tweet:1", {"a": 1}, permanent=True)
     assert c.get("x", "tweet:1") == {"a": 1}

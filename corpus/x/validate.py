@@ -71,10 +71,7 @@ def validate_handle(raw: str, *, field: str = "--x") -> str:
     offenders = sorted({c for c in handle if not re.match(r"[A-Za-z0-9_]", c)})
     for char in offenders:
         hint = _OPERATOR_HINTS.get(char)
-        reasons.append(
-            f"{char!r} is not allowed in an X handle"
-            + (f" — {hint}" if hint else "")
-        )
+        reasons.append(f"{char!r} is not allowed in an X handle" + (f" — {hint}" if hint else ""))
 
     raise InvalidHandle(
         f"{field}: {raw!r} is not a valid X handle. "

@@ -44,3 +44,62 @@ filterwarnings = [
     # shadow warning is cosmetic and the field name is not ours to change.
     'ignore:Field name "register".*:UserWarning',
 ]
+
+# --------------------------------------------------------------------------
+# Quality gates (Phase 3.4). `make check` runs all three.
+# --------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "captures", "out"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes — unused imports/names, the ones that bite
+    "I",        # import sorting
+    "UP",       # pyupgrade — keep 3.11+ idioms consistent
+    "B",        # bugbear — mutable defaults, except-pass, loop-variable capture
+    "C4",       # comprehensions
+    "SIM",      # obvious simplifications
+    "RUF",
+]
+ignore = [
+    # The codebase deliberately uses long explanatory strings in error
+    # messages; wrapping them to satisfy E501 would hurt the messages more
+    # than the line length hurts anyone.
+    "E501",
+    # Asserts are used in tests and in one deliberate invariant check.
+    "S101",
+    # UP017 rewrites timezone.utc -> datetime.UTC. The codebase uses
+    # timezone.utc consistently and both are correct on 3.11+; churning every
+    # datetime call site would bury the real changes in this branch under a
+    # mechanical diff.
+    "UP017",
+    # RUF001 flags typographic characters (x, non-breaking space, curly quotes)
+    # as "ambiguous". They are deliberate in user-facing output — the spend
+    # table and the report are meant to read well, and ASCII-fying them would
+    # make the tool's output worse to satisfy a linter.
+    "RUF001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's entire API is function calls in argument defaults. B008 exists to
+# catch mutable defaults; here it catches the framework working as designed.
+"corpus/cli.py" = ["B008"]
+# Tests re-import inside functions on purpose, to keep each test's dependencies
+# visible at its point of use.
+"tests/*" = ["B011", "SIM117", "E402", "RUF059"]
+"scripts/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["corpus"]
+# Third-party packages without bundled stubs. Listed individually rather than
+# with a blanket ignore_missing_imports, so a new untyped dependency is a
+# decision rather than an accident.
+[[tool.mypy.overrides]]
+module = ["dotenv.*", "anthropic.*", "typer.*"]
+ignore_missing_imports = true

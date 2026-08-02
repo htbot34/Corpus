@@ -39,10 +39,11 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Iterator
+from typing import Protocol
 
 # --------------------------------------------------------------------------
 # Price table
@@ -84,6 +85,25 @@ def model_rates(model: str, today: date | None = None) -> tuple[float, float]:
     return MODEL_PRICES[model]
 
 
+class SpendSink(Protocol):
+    """The slice of Cache that Budget actually uses.
+
+    Typed structurally rather than importing Cache, so budget.py keeps no
+    dependency on storage and a test can pass anything that records a charge.
+    """
+
+    def log_spend(
+        self,
+        run_id: str,
+        category: str,
+        endpoint: str,
+        units: float,
+        unit_cost: float,
+        cost: float,
+        note: str = "",
+    ) -> None: ...
+
+
 class BudgetExceeded(RuntimeError):
     """Raised when a charge would cross the hard limit."""
 
@@ -117,7 +137,7 @@ class Reservation:
     estimate for the duration of its call.
     """
 
-    budget: "Budget"
+    budget: Budget
     endpoint: str
     estimated: float
     token: str
@@ -152,7 +172,7 @@ class Budget:
     limit: float = 10.00
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     charges: list[Charge] = field(default_factory=list)
-    cache: object | None = None  # corpus.cache.Cache, optional persistence
+    cache: SpendSink | None = None  # corpus.cache.Cache, optional persistence
     stopped: bool = False
     mode: str = STRICT
     # Reservations held for in-flight calls, keyed by an opaque token.
@@ -167,9 +187,7 @@ class Budget:
 
     def __post_init__(self) -> None:
         if self.mode not in BUDGET_MODES:
-            raise ValueError(
-                f"budget mode {self.mode!r} is not one of {BUDGET_MODES}"
-            )
+            raise ValueError(f"budget mode {self.mode!r} is not one of {BUDGET_MODES}")
 
     # -- totals -----------------------------------------------------------
 
@@ -225,8 +243,7 @@ class Budget:
         if self.total >= self.limit:
             self.stopped = True
             raise BudgetExceeded(
-                f"budget of ${self.limit:.2f} exhausted (spent ${self.total:.4f}) "
-                f"on {endpoint}"
+                f"budget of ${self.limit:.2f} exhausted (spent ${self.total:.4f}) on {endpoint}"
             )
         return charge
 
@@ -450,10 +467,7 @@ def estimate_anthropic_cost(post_count: int) -> float:
     map_chunks = max(1, round(corpus_tokens / 30_000))
     sonnet_in, sonnet_out = model_rates("claude-sonnet-5")
     opus_in, opus_out = model_rates("claude-opus-5")
-    map_cost = (
-        corpus_tokens * sonnet_in / 1_000_000
-        + map_chunks * 1_500 * sonnet_out / 1_000_000
-    )
+    map_cost = corpus_tokens * sonnet_in / 1_000_000 + map_chunks * 1_500 * sonnet_out / 1_000_000
     reduce_in = map_chunks * 1_500 + 3_000  # map outputs + signals.json
     reduce_cost = reduce_in * opus_in / 1_000_000 + 6_000 * opus_out / 1_000_000
     return map_cost + reduce_cost

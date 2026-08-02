@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Callable, Iterable, Match, Union
+from collections.abc import Callable, Iterable
+from re import Match
+from typing import Any
 
 MASK = "***REDACTED***"
 
@@ -44,7 +46,7 @@ _SECRET_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIALS"
 # substituting it would corrupt unrelated text (e.g. X_API_KEY="1").
 _MIN_SECRET_LEN = 8
 
-_Replacement = Union[str, Callable[[Match[str]], str]]
+_Replacement = str | Callable[[Match[str]], str]
 
 _PATTERNS: tuple[tuple[re.Pattern[str], _Replacement], ...] = (
     # Anthropic key prefix. Split so this file never contains the literal and

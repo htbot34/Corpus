@@ -8,8 +8,9 @@ and responses carrying `.content`, `.usage`, `.stop_reason`.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -37,7 +38,7 @@ class _Stream:
     def __init__(self, message: _Message) -> None:
         self._message = message
 
-    async def __aenter__(self) -> "_Stream":
+    async def __aenter__(self) -> _Stream:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
@@ -48,7 +49,7 @@ class _Stream:
 
 
 class _Messages:
-    def __init__(self, owner: "FakeAnthropic") -> None:
+    def __init__(self, owner: FakeAnthropic) -> None:
         self.owner = owner
 
     async def create(self, **kwargs: Any) -> _Message:

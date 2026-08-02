@@ -9,10 +9,11 @@ that must fail with an explanation instead.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
@@ -68,12 +69,35 @@ def http_client(timeout: float = 30.0) -> httpx.Client:
 # becomes the bottleneck, swap this one function.
 
 _DROP_TAGS = {
-    "script", "style", "noscript", "nav", "header", "footer", "aside",
-    "form", "svg", "iframe", "button", "figcaption",
+    "script",
+    "style",
+    "noscript",
+    "nav",
+    "header",
+    "footer",
+    "aside",
+    "form",
+    "svg",
+    "iframe",
+    "button",
+    "figcaption",
 }
 _BLOCK_TAGS = {
-    "p", "div", "br", "li", "tr", "section", "article",
-    "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre",
+    "p",
+    "div",
+    "br",
+    "li",
+    "tr",
+    "section",
+    "article",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "pre",
 }
 
 

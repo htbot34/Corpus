@@ -13,8 +13,10 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Iterable
+from itertools import pairwise
+from typing import Any
 from urllib.parse import urlparse
 
 from ..models import Document
@@ -33,18 +35,107 @@ _MENTION = re.compile(r"@\w+")
 # Deliberately small: an English stoplist plus the words every X corpus is
 # saturated with. Anything longer starts deleting signal.
 STOPWORDS = {
-    "the", "and", "for", "that", "this", "with", "you", "not", "but", "are",
-    "have", "has", "was", "were", "they", "them", "their", "there", "then",
-    "than", "from", "what", "when", "who", "how", "why", "all", "any", "can",
-    "will", "would", "should", "could", "just", "like", "get", "got", "one",
-    "out", "about", "more", "most", "some", "such", "only", "very", "even",
-    "also", "into", "over", "your", "our", "its", "it's", "i'm", "don't",
-    "doesn't", "didn't", "you're", "we're", "they're", "isn't", "aren't",
-    "much", "many", "way", "make", "made", "makes", "know", "think", "really",
-    "people", "thing", "things", "because", "which", "been", "being", "here",
-    "does", "did", "yes", "yeah", "well", "still", "now", "new", "good",
-    "great", "want", "need", "see", "look", "going", "gonna", "actually",
-    "http", "https", "com", "rt",
+    "the",
+    "and",
+    "for",
+    "that",
+    "this",
+    "with",
+    "you",
+    "not",
+    "but",
+    "are",
+    "have",
+    "has",
+    "was",
+    "were",
+    "they",
+    "them",
+    "their",
+    "there",
+    "then",
+    "than",
+    "from",
+    "what",
+    "when",
+    "who",
+    "how",
+    "why",
+    "all",
+    "any",
+    "can",
+    "will",
+    "would",
+    "should",
+    "could",
+    "just",
+    "like",
+    "get",
+    "got",
+    "one",
+    "out",
+    "about",
+    "more",
+    "most",
+    "some",
+    "such",
+    "only",
+    "very",
+    "even",
+    "also",
+    "into",
+    "over",
+    "your",
+    "our",
+    "its",
+    "it's",
+    "i'm",
+    "don't",
+    "doesn't",
+    "didn't",
+    "you're",
+    "we're",
+    "they're",
+    "isn't",
+    "aren't",
+    "much",
+    "many",
+    "way",
+    "make",
+    "made",
+    "makes",
+    "know",
+    "think",
+    "really",
+    "people",
+    "thing",
+    "things",
+    "because",
+    "which",
+    "been",
+    "being",
+    "here",
+    "does",
+    "did",
+    "yes",
+    "yeah",
+    "well",
+    "still",
+    "now",
+    "new",
+    "good",
+    "great",
+    "want",
+    "need",
+    "see",
+    "look",
+    "going",
+    "gonna",
+    "actually",
+    "http",
+    "https",
+    "com",
+    "rt",
 }
 
 SYNTHESIZABLE_KINDS = ("original", "thread", "reply", "quote")
@@ -53,11 +144,7 @@ SYNTHESIZABLE_KINDS = ("original", "thread", "reply", "quote")
 def _tokens(text: str) -> list[str]:
     text = _URL.sub(" ", text)
     text = _MENTION.sub(" ", text)
-    return [
-        w.lower()
-        for w in _WORD.findall(text)
-        if w.lower() not in STOPWORDS and len(w) > 2
-    ]
+    return [w.lower() for w in _WORD.findall(text) if w.lower() not in STOPWORDS and len(w) > 2]
 
 
 def _domain(url: str) -> str | None:
@@ -128,7 +215,7 @@ def cadence(docs: list[Document]) -> dict[str, Any]:
     ]
 
     hiatuses = []
-    for earlier, later in zip(ordered, ordered[1:]):
+    for earlier, later in pairwise(ordered):
         gap = later - earlier
         if gap >= timedelta(days=HIATUS_DAYS):
             hiatuses.append(
@@ -263,9 +350,7 @@ def register_split(docs: list[Document]) -> dict[str, Any]:
         for doc in group:
             sentences = [s for s in _SENTENCE_SPLIT.split(doc.body) if s.strip()]
             if sentences:
-                sentence_lengths.append(
-                    statistics.fmean(len(s.split()) for s in sentences)
-                )
+                sentence_lengths.append(statistics.fmean(len(s.split()) for s in sentences))
         out[kind] = {
             "n": len(group),
             "mean_word_count": _mean(word_counts),
@@ -327,16 +412,12 @@ def vocabulary_drift(docs: list[Document]) -> list[dict[str, Any]]:
     return results
 
 
-def compute_signals(
-    docs: list[Document], extra: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def compute_signals(docs: list[Document], extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything above, in one JSON-serializable dict."""
     synth = [d for d in docs if d.kind in SYNTHESIZABLE_KINDS]
     dates = sorted(d.published_at for d in docs)
     date_range = (
-        f"{dates[0].strftime('%Y-%m-%d')} to {dates[-1].strftime('%Y-%m-%d')}"
-        if dates
-        else "empty"
+        f"{dates[0].strftime('%Y-%m-%d')} to {dates[-1].strftime('%Y-%m-%d')}" if dates else "empty"
     )
     signals: dict[str, Any] = {
         "author_handle": docs[0].author_handle if docs else "",

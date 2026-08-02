@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from fake_provider import FakeProvider
 
 from corpus.budget import Budget
 from corpus.cache import Cache
@@ -28,7 +29,6 @@ from corpus.x.ingest import (
     IngestStats,
     ingest_timeline,
 )
-from fake_provider import FakeProvider, load
 
 NOW = datetime(2024, 9, 1, tzinfo=timezone.utc)
 SINCE = datetime(2023, 12, 1, tzinfo=timezone.utc)
@@ -255,7 +255,7 @@ def test_truncation_is_stated_prominently_in_the_report():
     )
     assert "HISTORY MAY BE INCOMPLETE" in report
     assert "2021-06-04" in report, "the report must name the last date reached"
-    assert "400 of 53,901" in report or "400" in report and "53,901" in report
+    assert "400 of 53,901" in report or ("400" in report and "53,901" in report)
 
 
 def test_full_coverage_is_not_flagged_as_truncated():

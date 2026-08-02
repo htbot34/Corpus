@@ -279,8 +279,7 @@ def build() -> tuple[list[dict], list[dict]]:
             p3,
             step(5),
             "engmanager",
-            "How do you handle the case where the rubric writer leaves before the hire "
-            "ramps up?",
+            "How do you handle the case where the rubric writer leaves before the hire ramps up?",
         )
     )
     subject.append(

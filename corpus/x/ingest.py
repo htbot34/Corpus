@@ -23,9 +23,10 @@ return empty or unbounded results.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 from ..budget import BudgetExceeded
 from .client import TimestampParseError, XClient, _tweet_id, parse_created_at
@@ -288,7 +289,9 @@ def ingest_timeline(
                             f"sweeping {_iso(probe_since)}..{_iso(probe_until)} "
                             f"({HIATUS_PROBE_DAYS}d) before concluding the history ends here"
                         )
-                        probe_query = f"from:{handle} since_time:{probe_since} until_time:{probe_until}"
+                        probe_query = (
+                            f"from:{handle} since_time:{probe_since} until_time:{probe_until}"
+                        )
                         if not include_replies:
                             probe_query += " -filter:replies"
                         probe_tweets, _pc, _ph = client.advanced_search(probe_query, None)
@@ -310,9 +313,7 @@ def ingest_timeline(
                             except TimestampParseError as exc:
                                 stats.timestamp_errors += 1
                                 if len(stats.timestamp_error_samples) < 5:
-                                    stats.timestamp_error_samples.append(
-                                        f"{tid}: {exc.value!r}"
-                                    )
+                                    stats.timestamp_error_samples.append(f"{tid}: {exc.value!r}")
                                 continue
                             probe_latest = ts if probe_latest is None else max(probe_latest, ts)
                             if tid not in seen:
@@ -442,6 +443,7 @@ def ingest_recent(
     *,
     max_posts: int = 200,
     max_pages: int = 10,
+    public_post_count: int | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[list[dict[str, Any]], IngestStats]:
     """Recent timeline via /user/last_tweets.

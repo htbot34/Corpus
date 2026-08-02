@@ -30,9 +30,7 @@ SAMPLE = {
 }
 
 
-def _provider(
-    handler: object, capture: RawCapture | None = None
-) -> TwitterApiIoProvider:
+def _provider(handler: object, capture: RawCapture | None = None) -> TwitterApiIoProvider:
     provider = TwitterApiIoProvider(api_key=FAKE_KEY, capture=capture)
     provider.client = httpx.Client(
         base_url=provider.base_url,

@@ -1,12 +1,12 @@
 """corpus — CLI.
 
-    corpus run --x paulg
-    corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
-    corpus run --x someone --dry-run
-    corpus run --x someone --also-substack example.com
-    corpus resynth out/paulg/2026-07-31
-    corpus cache stats | corpus cache clear
-    corpus budget log
+corpus run --x paulg
+corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
+corpus run --x someone --dry-run
+corpus run --x someone --also-substack example.com
+corpus resynth out/paulg/2026-07-31
+corpus cache stats | corpus cache clear
+corpus budget log
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from .budget import (
     estimate_anthropic_cost,
     estimate_x_cost,
 )
-from .cache import Cache, DEFAULT_TTL_SECONDS
+from .cache import DEFAULT_TTL_SECONDS, Cache
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
 from .models import Document, Synthesis
@@ -41,8 +41,8 @@ from .x.client import XClient
 from .x.hydrate import hydrate
 from .x.ingest import DEFAULT_EMPTY_WINDOW_TOLERANCE, ingest_timeline
 from .x.providers import ProviderError, get_provider
-from .x.validate import InvalidHandle, validate_handle
 from .x.signals import compute_signals
+from .x.validate import InvalidHandle, validate_handle
 
 app = typer.Typer(
     add_completion=False,
@@ -176,7 +176,9 @@ def run(
     max_pages: int = typer.Option(20, "--max-pages", help="Cursor pages per window."),
     include_reposts: bool = typer.Option(False, "--include-reposts"),
     replies: bool = typer.Option(True, "--replies/--no-replies"),
-    substack: str | None = typer.Option(None, "--substack", "--also-substack", help="Substack domain."),
+    substack: str | None = typer.Option(
+        None, "--substack", "--also-substack", help="Substack domain."
+    ),
     rss: list[str] = typer.Option([], "--rss", help="Feed URL. Repeatable."),
     url: list[str] = typer.Option([], "--url", help="Single page URL. Repeatable."),
     out: Path = typer.Option(Path("out"), "--out"),
@@ -220,17 +222,15 @@ def run(
     try:
         handle = validate_handle(x)
     except InvalidHandle as exc:
-        echo(f"ERROR: {exc}")
-        raise typer.Exit(code=2)
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
     try:
         since_dt = (
-            datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            if since
-            else None
+            datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc) if since else None
         )
-    except ValueError:
-        echo(f"ERROR: --since {since!r} is not a date. Expected YYYY-MM-DD.")
-        raise typer.Exit(code=2)
+    except ValueError as exc:
+        error(f"--since {since!r} is not a date. Expected YYYY-MM-DD.")
+        raise typer.Exit(code=2) from exc
 
     cache = Cache(
         ttl_seconds=cache_ttl_days * 24 * 3600 if cache_ttl_days else DEFAULT_TTL_SECONDS,
@@ -245,9 +245,7 @@ def run(
     # The logger keys on the budget's run_id, so a line in the terminal and a
     # row in `corpus budget log` can be tied together after the fact.
     global _ACTIVE_LOGGER
-    _ACTIVE_LOGGER = RunLogger(
-        budget.run_id, log_format=log_format, verbose=verbose, quiet=quiet
-    )
+    _ACTIVE_LOGGER = RunLogger(budget.run_id, log_format=log_format, verbose=verbose, quiet=quiet)
 
     # ---- resume ---------------------------------------------------------
     manifest = RunManifest.load(resume) if resume else None
@@ -260,9 +258,7 @@ def run(
         raise typer.Exit(code=2)
     if manifest is not None:
         if manifest.handle and manifest.handle != handle:
-            error(
-                f"--resume {resume} is a run for @{manifest.handle}, not @{handle}"
-            )
+            error(f"--resume {resume} is a run for @{manifest.handle}, not @{handle}")
             raise typer.Exit(code=2)
         # A resumed run's budget covers everything the target has cost, not
         # just this attempt — otherwise --budget 10 resumed three times is a $30
@@ -270,10 +266,12 @@ def run(
         budget.prior_spend = manifest.prior_spend
 
     echo(f"corpus run @{handle} (run {budget.run_id})")
-    echo(f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
-         f"· window {window_days}d"
-         + (f" · since {since}" if since else "")
-         + (" · OFFLINE" if offline else ""))
+    echo(
+        f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
+        f"· window {window_days}d"
+        + (f" · since {since}" if since else "")
+        + (" · OFFLINE" if offline else "")
+    )
     echo("")
 
     # The output directory is created up front, not after ingestion: the
@@ -304,14 +302,14 @@ def run(
         try:
             provider = get_provider(capture=_make_capture(capture_raw), log=echo)
         except (ProviderError, NotImplementedError) as exc:
-            echo(f"ERROR: {exc}")
-            raise typer.Exit(code=2)
+            error(str(exc))
+            raise typer.Exit(code=2) from exc
         client = XClient(provider, cache, budget)
         try:
             profile = client.user_info(handle)
         except ProviderError as exc:
-            echo(f"ERROR fetching profile for @{handle}: {exc}")
-            raise typer.Exit(code=2)
+            error(f"fetching profile for @{handle}: {exc}")
+            raise typer.Exit(code=2) from exc
 
         public_posts = int(
             profile.get("statusesCount")
@@ -422,7 +420,7 @@ def run(
     echo("Hydrating:")
     if client is None:
         provider = _OfflineProvider()
-        client = XClient(provider, cache, budget)  # type: ignore[arg-type]
+        client = XClient(provider, cache, budget)
     try:
         docs, hyd_stats = hydrate(
             client,
@@ -461,9 +459,7 @@ def run(
     # ---- signals ---------------------------------------------------------
     _ACTIVE_LOGGER.context.phase = "signals"
     echo("Computing signals (Python, no API calls)...")
-    signals = compute_signals(
-        docs, extra={"ingest": ingest_meta, "hydration": hyd_stats.as_dict()}
-    )
+    signals = compute_signals(docs, extra={"ingest": ingest_meta, "hydration": hyd_stats.as_dict()})
     echo(
         f"  {signals['total_documents']} documents, "
         f"{len(signals['conversation_graph'])} network handles, "
@@ -528,8 +524,10 @@ def run(
         run_meta["budget_stopped"] = budget.stopped
         if synthesis is not None:
             _write_json(out_dir / "synthesis.json", synthesis.model_dump())
-            echo(f"  wrote synthesis.json ({len(synthesis.themes)} themes, "
-                 f"{len(synthesis.positions)} positions)")
+            echo(
+                f"  wrote synthesis.json ({len(synthesis.themes)} themes, "
+                f"{len(synthesis.positions)} positions)"
+            )
         else:
             if result.raw_reduce_output:
                 (out_dir / "reduce_raw_output.txt").write_text(
@@ -698,9 +696,7 @@ def resynth(
     if result.synthesis is not None:
         _write_json(directory / "synthesis.json", result.synthesis.model_dump())
     elif result.raw_reduce_output:
-        (directory / "reduce_raw_output.txt").write_text(
-            result.raw_reduce_output, encoding="utf-8"
-        )
+        (directory / "reduce_raw_output.txt").write_text(result.raw_reduce_output, encoding="utf-8")
         echo("  dumped unparseable model output to reduce_raw_output.txt")
 
     report = render_report(
@@ -821,8 +817,7 @@ def budget_accuracy(limit: int = typer.Option(50, "--limit")) -> None:
     absolute = sum(abs(e) for e in errors) / len(errors)
     worst = max(errors, key=abs)
     echo(f"runs:          {len(errors)}")
-    echo(f"mean error:    {mean:+.1%}  (bias: estimates run "
-         f"{'low' if mean > 0 else 'high'})")
+    echo(f"mean error:    {mean:+.1%}  (bias: estimates run {'low' if mean > 0 else 'high'})")
     echo(f"mean |error|:  {absolute:.1%}  (spread, regardless of direction)")
     echo(f"worst:         {worst:+.0%}")
     if absolute > 0.30:

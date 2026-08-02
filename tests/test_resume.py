@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from fake_anthropic import FakeAnthropic
+from fake_provider import FakeProvider, load
 
 from corpus.budget import Budget
 from corpus.cache import Cache
@@ -30,8 +32,6 @@ from corpus.synthesize import MAP_MODEL, REDUCE_MODEL, run_map, synthesize
 from corpus.x.client import XClient
 from corpus.x.ingest import ingest_timeline
 from corpus.x.signals import compute_signals
-from fake_anthropic import FakeAnthropic
-from fake_provider import FakeProvider, load
 
 NOW = datetime(2024, 9, 1, tzinfo=timezone.utc)
 SINCE = datetime(2023, 12, 1, tzinfo=timezone.utc)
@@ -237,9 +237,7 @@ def test_completed_slices_are_not_re_paid_for(cache) -> None:
     )
     map_calls_second = sum(1 for c in second_client.calls if c.get("model") == MAP_MODEL)
 
-    assert map_calls_second == 0, (
-        f"re-ran {map_calls_second} map slices that were already paid for"
-    )
+    assert map_calls_second == 0, f"re-ran {map_calls_second} map slices that were already paid for"
     assert any(c.get("model") == REDUCE_MODEL for c in second_client.calls), (
         "the reduce still has to run"
     )
@@ -271,9 +269,17 @@ def test_partial_slice_reuse(cache) -> None:
             client,
             chunks,
             Budget(limit=100.0, cache=cache),
-            completed={0: {"topics": [], "claims": [], "entities": [],
-                           "argumentative_moves": [], "highest_signal_document_ids": [],
-                           "span": "prior", "document_ids": []}},
+            completed={
+                0: {
+                    "topics": [],
+                    "claims": [],
+                    "entities": [],
+                    "argumentative_moves": [],
+                    "highest_signal_document_ids": [],
+                    "span": "prior",
+                    "document_ids": [],
+                }
+            },
             log=lambda _: None,
         )
     )

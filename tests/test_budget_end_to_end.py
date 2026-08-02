@@ -18,12 +18,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fake_anthropic import FakeAnthropic
 
 from corpus.budget import ADVISORY, Budget, BudgetExceeded
 from corpus.models import Document
 from corpus.synthesize import REDUCE_MODEL, synthesize
 from corpus.x.signals import compute_signals
-from fake_anthropic import FakeAnthropic
 
 
 def big_corpus(n: int = 1200) -> list[Document]:
@@ -116,8 +116,7 @@ def test_map_concurrency_cannot_overshoot_the_limit(cache):
     run_synthesis(budget, docs, FakeAnthropic())
 
     assert budget.total <= 0.05, (
-        f"map stage spent ${budget.total:.4f} against a $0.05 budget; concurrent "
-        "slices overshot"
+        f"map stage spent ${budget.total:.4f} against a $0.05 budget; concurrent slices overshot"
     )
 
 
@@ -155,14 +154,11 @@ def test_estimator_accuracy_is_recorded(cache):
     # never happen is the reverse going unrecorded.
     run_synthesis(budget, docs, FakeAnthropic())
 
-    assert budget.estimate_misses == [], (
-        f"reservations came in low: {budget.estimate_misses}"
-    )
+    assert budget.estimate_misses == [], f"reservations came in low: {budget.estimate_misses}"
 
 
 def test_reserve_raises_before_touching_the_model(cache):
     """No call is made when the reservation cannot be granted."""
-    docs = big_corpus(2000)
     budget = Budget(limit=100.0, cache=cache)
     budget.charge("x", "ingest", 1, 99.999)  # leave almost nothing
     client = FakeAnthropic()

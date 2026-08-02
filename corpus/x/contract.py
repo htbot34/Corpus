@@ -30,8 +30,9 @@ mistaken for evidence about the provider.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 # Severity drives how a violation is reported, not whether it is reported.
 #
@@ -308,7 +309,9 @@ def resolve(payload: dict[str, Any], dotted: str) -> Any:
     return node
 
 
-def locate_items(contract: EndpointContract, payload: dict[str, Any]) -> tuple[str | None, list[Any]]:
+def locate_items(
+    contract: EndpointContract, payload: dict[str, Any]
+) -> tuple[str | None, list[Any]]:
     """Find the item array, returning (where it was found, the items).
 
     Deliberately mirrors `_tweets_from`'s probe order so the checker agrees with
@@ -414,9 +417,7 @@ def check_payload(
     return out
 
 
-def _check_pagination(
-    contract: EndpointContract, payload: dict[str, Any]
-) -> list[Violation]:
+def _check_pagination(contract: EndpointContract, payload: dict[str, Any]) -> list[Violation]:
     out: list[Violation] = []
     cursor_hit = contract.cursor.find(payload) if contract.cursor else None
     more_hit = contract.has_more.find(payload) if contract.has_more else None

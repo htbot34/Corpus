@@ -109,7 +109,7 @@ class RunManifest:
         return target
 
     @classmethod
-    def load(cls, directory: Path) -> "RunManifest | None":
+    def load(cls, directory: Path) -> RunManifest | None:
         """Read a manifest, or None if there is nothing usable there.
 
         A corrupt or future-versioned manifest returns None rather than raising:
@@ -125,7 +125,7 @@ class RunManifest:
             return None
         if not isinstance(data, dict) or data.get("version") != MANIFEST_VERSION:
             return None
-        known = {f for f in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         manifest = cls(**{k: v for k, v in data.items() if k in known})
         # JSON has no tuples; windows_walked round-trips as lists.
         manifest.windows_walked = [tuple(w) for w in manifest.windows_walked]  # type: ignore[misc]

@@ -14,8 +14,9 @@ ingestion, before synthesis:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from ..models import Document, Thread
 from .client import (
@@ -48,7 +49,7 @@ class HydrationStats:
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items()}
+        return dict(self.__dict__)
 
 
 # --------------------------------------------------------------------------
@@ -58,7 +59,8 @@ class HydrationStats:
 
 def _root_raw(doc: Document) -> dict[str, Any]:
     if doc.kind == "thread" and isinstance(doc.raw.get("root"), dict):
-        return doc.raw["root"]
+        root: dict[str, Any] = doc.raw["root"]
+        return root
     return doc.raw
 
 
@@ -96,7 +98,9 @@ def quoted_id(doc: Document) -> str | None:
 # --------------------------------------------------------------------------
 
 
-def stitch_threads(docs: list[Document], author_handle: str) -> tuple[list[Document], HydrationStats]:
+def stitch_threads(
+    docs: list[Document], author_handle: str
+) -> tuple[list[Document], HydrationStats]:
     """Collapse runs of consecutive self-replies into single thread Documents."""
     stats = HydrationStats(input_documents=len(docs))
     author = author_handle.lstrip("@").lower()

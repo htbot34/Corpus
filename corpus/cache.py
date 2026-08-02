@@ -30,6 +30,7 @@ copying one by hand.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -124,10 +125,8 @@ class Cache:
         # WAL's shared memory is unavailable — a network mount, some containers
         # — and there the rollback journal is still correct, just less
         # concurrent. Degrading is right; refusing to open the cache is not.
-        try:
+        with contextlib.suppress(sqlite3.DatabaseError):
             self.conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:
-            pass
         self.conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
         self.conn.execute("PRAGMA synchronous=NORMAL")
 
@@ -152,14 +151,12 @@ class Cache:
         ).fetchone()
         if row is None:
             return None
-        if not row["permanent"] and not self.offline:
-            if time.time() - row["fetched_at"] > self.ttl_seconds:
-                return None
+        expirable = not row["permanent"] and not self.offline
+        if expirable and time.time() - row["fetched_at"] > self.ttl_seconds:
+            return None
         return json.loads(row["payload"])
 
-    def put(
-        self, source: str, source_id: str, payload: Any, permanent: bool = False
-    ) -> None:
+    def put(self, source: str, source_id: str, payload: Any, permanent: bool = False) -> None:
         """Write an entry, never downgrading a permanent row to expirable.
 
         The permanent flag is max()'d in SQL rather than read-then-written in
@@ -227,8 +224,15 @@ class Cache:
                 "INSERT INTO estimates (ts, run_id, handle, category, estimated, actual, "
                 "posts_estimated, posts_actual, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    time.time(), run_id, handle, category, estimated, actual,
-                    posts_estimated, posts_actual, note,
+                    time.time(),
+                    run_id,
+                    handle,
+                    category,
+                    estimated,
+                    actual,
+                    posts_estimated,
+                    posts_actual,
+                    note,
                 ),
             )
             self.conn.commit()
@@ -242,9 +246,7 @@ class Cache:
 
     def spend_log(self, limit: int = 200) -> list[sqlite3.Row]:
         return list(
-            self.conn.execute(
-                "SELECT * FROM spend ORDER BY ts DESC LIMIT ?", (limit,)
-            ).fetchall()
+            self.conn.execute("SELECT * FROM spend ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
         )
 
     def spend_totals(self) -> list[sqlite3.Row]:
@@ -269,7 +271,9 @@ class Cache:
             "entries": total,
             "size_bytes": size,
             "oldest_fetch": oldest,
-            "by_source": {r["source"]: {"entries": r["n"], "permanent": r["permanent"] or 0} for r in rows},
+            "by_source": {
+                r["source"]: {"entries": r["n"], "permanent": r["permanent"] or 0} for r in rows
+            },
         }
 
     def clear(self, keep_permanent: bool = False) -> int:
@@ -291,10 +295,9 @@ class Cache:
         """
         with self._lock:
             before = self.total_bytes()
-            try:
+            # Not in WAL mode means nothing to checkpoint, which is fine.
+            with contextlib.suppress(sqlite3.DatabaseError):
                 self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except sqlite3.DatabaseError:
-                pass  # not in WAL mode; nothing to checkpoint
             # VACUUM cannot run inside a transaction, which sqlite3 opens
             # implicitly for DML.
             self.conn.commit()

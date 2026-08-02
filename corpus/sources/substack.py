@@ -7,7 +7,8 @@ subtitle only — the paywall is respected, never worked around.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..cache import Cache
 from ..models import Document
@@ -119,6 +120,7 @@ class SubstackSource:
 
         title = payload.get("title") or entry.get("title") or ""
         subtitle = payload.get("subtitle") or entry.get("subtitle") or ""
+        links: list[str]
         if paywalled or not body_html:
             body, links = subtitle, []
             paywalled = True

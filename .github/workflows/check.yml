@@ -1,0 +1,90 @@
+name: check
+
+# Runs exactly what `make check` runs locally, so CI cannot disagree with a
+# developer's machine about whether the tree is good.
+#
+# NOTHING HERE NEEDS A NETWORK ROUTE TO A PROVIDER OR AN API KEY. The suite is
+# offline by construction: every provider interaction is either a fake or an
+# httpx MockTransport. The two scripts that do touch the network
+# (scripts/verify_contract.py, `corpus run --capture-raw`) are run by hand and
+# are never invoked here — verify_contract.py additionally refuses to run when
+# CI is set, so a well-meaning future edit cannot start spending money on every
+# push.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Assert the offline invariant rather than trusting it: if a test ever
+      # tries to read a real key it will get this, and if one tries to reach the
+      # provider it will fail loudly here rather than silently passing on a
+      # developer's machine where a key happens to exist.
+      X_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check_secrets.sh inspects git history for .env, which needs more
+          # than the default shallow clone.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install
+        run: |
+          uv venv
+          uv pip install -e . pytest pytest-cov ruff mypy
+
+      - name: Lint
+        run: .venv/bin/ruff check corpus tests scripts
+
+      - name: Format
+        run: .venv/bin/ruff format --check corpus tests scripts
+
+      - name: Types
+        run: .venv/bin/mypy
+
+      - name: Secrets
+        run: bash scripts/check_secrets.sh
+
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: Coverage on the money and history paths
+        run: |
+          .venv/bin/python -m pytest -q \
+            --cov=corpus.budget --cov=corpus.x.ingest \
+            --cov=corpus.x.client --cov=corpus.x.hydrate \
+            --cov-report=term-missing --cov-report=json:coverage.json
+          .venv/bin/python scripts/check_coverage.py coverage.json
+
+      - name: Assert the suite made no network calls
+        # Belt and braces. If a future test starts reaching out, the offline
+        # guarantee is broken and this is where it should be noticed.
+        run: |
+          if grep -rn --include='*.py' -E 'api\.twitterapi\.io|api\.anthropic\.com' tests/ \
+             | grep -v 'MockTransport' | grep -v '#'; then
+            echo "::error::a test references a live endpoint"
+            exit 1
+          fi

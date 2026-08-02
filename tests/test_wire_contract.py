@@ -68,12 +68,8 @@ def _fmt(violations: list[Any]) -> str:
     ids=lambda v: v if isinstance(v, str) else v.name,
 )
 def test_fixture_satisfies_contract(contract: Any, fixture: str) -> None:
-    violations = [
-        v for v in check_payload(contract, load(fixture)) if v.severity == CRITICAL
-    ]
-    assert not violations, (
-        f"{fixture} violates the {contract.name} contract:\n{_fmt(violations)}"
-    )
+    violations = [v for v in check_payload(contract, load(fixture)) if v.severity == CRITICAL]
+    assert not violations, f"{fixture} violates the {contract.name} contract:\n{_fmt(violations)}"
 
 
 @pytest.mark.parametrize(
@@ -188,11 +184,30 @@ def test_user_info_created_at_is_iso_with_microseconds() -> None:
 
 
 CONFIRMED_USER_INFO_KEYS = {
-    "id", "name", "userName", "location", "url", "description", "entities",
-    "protected", "isVerified", "isBlueVerified", "verifiedType", "followers",
-    "following", "favouritesCount", "statusesCount", "mediaCount", "createdAt",
-    "coverPicture", "profilePicture", "canDm", "affiliatesHighlightedLabel",
-    "isAutomated", "automatedBy", "pinnedTweetIds",
+    "id",
+    "name",
+    "userName",
+    "location",
+    "url",
+    "description",
+    "entities",
+    "protected",
+    "isVerified",
+    "isBlueVerified",
+    "verifiedType",
+    "followers",
+    "following",
+    "favouritesCount",
+    "statusesCount",
+    "mediaCount",
+    "createdAt",
+    "coverPicture",
+    "profilePicture",
+    "canDm",
+    "affiliatesHighlightedLabel",
+    "isAutomated",
+    "automatedBy",
+    "pinnedTweetIds",
 }
 
 

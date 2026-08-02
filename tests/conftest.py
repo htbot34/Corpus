@@ -8,10 +8,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from corpus.budget import Budget  # noqa: E402
-from corpus.cache import Cache  # noqa: E402
-from corpus.x.client import XClient  # noqa: E402
-from fake_provider import FakeProvider  # noqa: E402
+from fake_provider import FakeProvider
+
+from corpus.budget import Budget
+from corpus.cache import Cache
+from corpus.x.client import XClient
 
 
 @pytest.fixture()

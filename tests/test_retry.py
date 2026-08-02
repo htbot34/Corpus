@@ -99,9 +99,7 @@ def test_retry_after_http_date_is_honoured(no_sleep):
     assert 40.0 <= no_sleep[0] <= 50.0
 
 
-@pytest.mark.parametrize(
-    "header", ["x-rate-limit-reset", "x-ratelimit-reset", "ratelimit-reset"]
-)
+@pytest.mark.parametrize("header", ["x-rate-limit-reset", "x-ratelimit-reset", "ratelimit-reset"])
 def test_rate_limit_reset_timestamp_is_honoured(header: str, no_sleep):
     reset = datetime.now(tz=timezone.utc) + timedelta(seconds=25)
     provider = build(

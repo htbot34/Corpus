@@ -6,6 +6,9 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+from fake_anthropic import FakeAnthropic
+from fake_provider import load
+
 from corpus.budget import Budget
 from corpus.models import Document, Synthesis
 from corpus.synthesize import (
@@ -19,8 +22,6 @@ from corpus.synthesize import (
 )
 from corpus.x.hydrate import hydrate
 from corpus.x.signals import compute_signals
-from fake_anthropic import FakeAnthropic
-from fake_provider import load
 
 
 def doc(doc_id: str, body: str, kind: str = "original", **kw) -> Document:
@@ -79,9 +80,7 @@ def test_chunks_are_chronological_and_bounded():
         for i in range(60)
     ]
     for i, d in enumerate(docs):
-        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(
-            day=1 + (i % 28)
-        )
+        d.published_at = datetime(2024, 1, 1, tzinfo=timezone.utc).replace(day=1 + (i % 28))
     chunks = chunk_documents(docs)
     assert len(chunks) > 1
     flat = [d for c in chunks for d in c]
@@ -168,9 +167,7 @@ def test_select_highlights_dedupes_and_orders():
 
 
 def run_synth(client, docs, signals, budget, **kw):
-    return asyncio.run(
-        synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw)
-    )
+    return asyncio.run(synthesize(docs, signals, budget, client=client, log=lambda _: None, **kw))
 
 
 def test_end_to_end_map_reduce(client, cache):

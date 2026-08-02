@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from fake_provider import FakeProvider, load
 
 from corpus.x.client import (
     TimestampParseError,
@@ -19,7 +20,6 @@ from corpus.x.client import (
 )
 from corpus.x.ingest import IngestCorruption, ingest_timeline
 from corpus.x.validate import InvalidHandle, validate_handle
-from fake_provider import FakeProvider, load
 
 NOW = datetime(2024, 9, 1, tzinfo=timezone.utc)
 SINCE = datetime(2023, 12, 1, tzinfo=timezone.utc)
@@ -41,14 +41,14 @@ def test_valid_handles_are_accepted(raw: str) -> None:
 @pytest.mark.parametrize(
     "raw",
     [
-        "paul g",                      # whitespace starts a new search term
-        "paulg since_time:0",          # injects an operator
-        "paulg OR from:someoneelse",   # changes the query entirely
-        'paulg"',                      # opens a phrase match
-        "paulg -filter:replies",       # negation
+        "paul g",  # whitespace starts a new search term
+        "paulg since_time:0",  # injects an operator
+        "paulg OR from:someoneelse",  # changes the query entirely
+        'paulg"',  # opens a phrase match
+        "paulg -filter:replies",  # negation
         "(paulg)",
         "paul*",
-        "x" * 16,                      # over X's 15-char limit
+        "x" * 16,  # over X's 15-char limit
         "",
         "@",
         "paul.g",
@@ -90,9 +90,7 @@ def test_ingest_validates_even_when_called_directly(client) -> None:
 
 def test_injection_never_reaches_the_provider(client, provider) -> None:
     with pytest.raises(InvalidHandle):
-        ingest_timeline(
-            client, "x OR from:victim", since=SINCE, until=NOW, log=lambda _: None
-        )
+        ingest_timeline(client, "x OR from:victim", since=SINCE, until=NOW, log=lambda _: None)
     assert provider.calls == []
 
 
@@ -212,9 +210,7 @@ def test_a_bad_timestamp_cannot_stall_the_walk(tmp_path) -> None:
     from corpus.cache import Cache
     from corpus.x.client import XClient
 
-    subject = [
-        {**t, "createdAt": "not-a-timestamp"} for t in load("tweets.json")
-    ]
+    subject = [{**t, "createdAt": "not-a-timestamp"} for t in load("tweets.json")]
     cache = Cache(path=tmp_path / "c.db")
     budget = Budget(limit=10.0, cache=cache)
     client = XClient(FakeProvider(subject=subject), cache, budget)
@@ -269,9 +265,7 @@ def test_impossible_window_result_fails_loudly(tmp_path) -> None:
     cache = Cache(path=tmp_path / "c.db")
     client = XClient(IgnoresUntilTime(), cache, Budget(limit=10.0, cache=cache))
     with pytest.raises(IngestCorruption) as exc:
-        ingest_timeline(
-            client, "testsubject", since=SINCE, until=NOW, log=lambda _: None
-        )
+        ingest_timeline(client, "testsubject", since=SINCE, until=NOW, log=lambda _: None)
     assert "until_time" in str(exc.value)
 
 

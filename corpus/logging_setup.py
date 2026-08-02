@@ -32,8 +32,9 @@ import json
 import logging
 import sys
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any
 
 LOGGER_NAME = "corpus"
 
@@ -86,7 +87,11 @@ class TextFormatter(logging.Formatter):
         if record.levelno >= logging.WARNING:
             prefix = f"{record.levelname}: "
         elif self.verbose:
-            prefix = f"[{record.elapsed:7.2f}s {record.phase:<8}] "
+            # Injected by RunContext.filter; getattr keeps this honest for a
+            # record that somehow reached the handler without passing through it.
+            elapsed = float(getattr(record, "elapsed", 0.0))
+            phase = str(getattr(record, "phase", ""))
+            prefix = f"[{elapsed:7.2f}s {phase:<8}] "
         else:
             prefix = ""
         return f"{prefix}{message}"

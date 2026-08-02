@@ -8,13 +8,14 @@ JSON shape drifts, `normalize_tweet` is the only thing that needs to change.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
 from ..budget import (
-    Budget,
     X_COST_PER_PROFILE,
     X_MIN_CHARGE_PER_REQUEST,
+    Budget,
     estimate_x_batch_cost,
     estimate_x_page_cost,
 )
@@ -149,9 +150,7 @@ def _has_media(raw: dict[str, Any]) -> bool:
         block = raw.get(key)
         if isinstance(block, dict) and block.get("media"):
             return True
-    if raw.get("media"):
-        return True
-    return False
+    return bool(raw.get("media"))
 
 
 def _expand_links(text: str, raw: dict[str, Any]) -> tuple[str, list[str]]:
@@ -173,9 +172,7 @@ def _expand_links(text: str, raw: dict[str, Any]) -> tuple[str, list[str]]:
     return text, outbound
 
 
-def normalize_tweet(
-    raw: dict[str, Any], *, timestamp_fallback: datetime | None = None
-) -> Document:
+def normalize_tweet(raw: dict[str, Any], *, timestamp_fallback: datetime | None = None) -> Document:
     """One provider tweet dict -> one Document (pre-hydration).
 
     Raises TimestampParseError if the timestamp is unparseable, unless
@@ -214,9 +211,7 @@ def normalize_tweet(
     }
 
     try:
-        published_at = parse_created_at(
-            _first(raw, "createdAt", "created_at", "timestamp")
-        )
+        published_at = parse_created_at(_first(raw, "createdAt", "created_at", "timestamp"))
     except TimestampParseError:
         if timestamp_fallback is None:
             raise
@@ -271,7 +266,8 @@ class XClient:
         key = f"profile:{handle.lower()}"
         cached = self.cache.get("x", key)
         if cached is not None:
-            return cached
+            profile: dict[str, Any] = cached
+            return profile
         if self.cache.offline:
             raise ProviderError(
                 f"--offline: no cached profile for @{handle}. Run once online first."
@@ -305,14 +301,10 @@ class XClient:
         return tweets, next_cursor, has_next
 
     def last_tweets(self, handle: str, cursor: str | None = None) -> Page:
-        with self.budget.reserved_for(
-            self._page_reservation(), "user/last_tweets"
-        ) as reservation:
+        with self.budget.reserved_for(self._page_reservation(), "user/last_tweets") as reservation:
             tweets, next_cursor, has_next = self.provider.last_tweets(handle, cursor)
             self._observe_page(len(tweets))
-            charge = self.budget.charge_x_tweets(
-                "user/last_tweets", len(tweets), note=handle
-            )
+            charge = self.budget.charge_x_tweets("user/last_tweets", len(tweets), note=handle)
             reservation.actual = charge.cost
         self._cache_tweets(tweets)
         return tweets, next_cursor, has_next

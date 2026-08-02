@@ -7,7 +7,7 @@ we need four fields from each.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from typing import Callable
+from collections.abc import Callable
 
 from ..cache import Cache
 from ..models import Document
@@ -70,9 +70,7 @@ class RSSSource:
             title = _text(item.find(f"{_ATOM}title"))
             link_node = item.find(f"{_ATOM}link")
             url = (link_node.get("href") if link_node is not None else "") or feed_url
-            published = _text(item.find(f"{_ATOM}published")) or _text(
-                item.find(f"{_ATOM}updated")
-            )
+            published = _text(item.find(f"{_ATOM}published")) or _text(item.find(f"{_ATOM}updated"))
             html = _text(item.find(f"{_ATOM}content")) or _text(item.find(f"{_ATOM}summary"))
             guid = _text(item.find(f"{_ATOM}id")) or url
         else:

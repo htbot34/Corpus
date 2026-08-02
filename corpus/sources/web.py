@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from ..cache import Cache
 from ..models import Document
@@ -55,9 +55,7 @@ class WebSource:
                 source_id=target,
                 url=target,
                 author_handle=author_handle,
-                published_at=parse_date(
-                    published_match.group(1) if published_match else None
-                ),
+                published_at=parse_date(published_match.group(1) if published_match else None),
                 title=title,
                 body=body,
                 links=links,

@@ -23,7 +23,6 @@ from corpus.budget import (
 from corpus.cache import Cache
 from corpus.cli import app
 
-
 # -- persistence ------------------------------------------------------------
 
 

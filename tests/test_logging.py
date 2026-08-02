@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import io
 import json
-import logging
 
 import pytest
 
@@ -215,12 +214,14 @@ def test_sink_is_the_callable_the_pipeline_expects() -> None:
 
 
 def test_ingestion_logs_flow_through_the_sink(tmp_path) -> None:
+    from datetime import datetime, timezone
+
+    from fake_provider import FakeProvider
+
     from corpus.budget import Budget
     from corpus.cache import Cache
     from corpus.x.client import XClient
     from corpus.x.ingest import ingest_timeline
-    from datetime import datetime, timezone
-    from fake_provider import FakeProvider
 
     log, stream = make(log_format=JSON)
     cache = Cache(path=tmp_path / "c.db")
