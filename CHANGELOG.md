@@ -514,3 +514,76 @@ ceiling turns back into a tripwire.
 alone. The reservation machinery, the retry policy, the manifest, the wire
 contract, and `BATCH_LOOKUP_MAX = 50` are all untouched — this pass is the
 report, not the pipeline underneath it.
+
+---
+
+## 2026-08-02 — Corpus-size tiers
+
+Nothing in the synthesis varied with document count, which is backwards: a thin
+corpus is exactly where inference is most likely to confabulate, because the
+model was asked the same questions with less to answer them from and no
+instruction to stop.
+
+`corpus/tiers.py` classifies the corpus from the **post-filter** document count
+and the tier is injected into the reduce prompt as ground truth. The model is
+never asked to assess its own evidence base — self-assessment is the thing
+under suspicion.
+
+| Tier | Documents | Effect |
+| --- | ---: | --- |
+| thin | under 40 | `inferred` and `reasoning` emptied on every axis; `blind_spots` and `evolution` forced empty; `coverage.confidence` forced `low`. `stated` and `core_model` survive — sourced claims, not inferences. |
+| moderate | 40–149 | Inference allowed, but each one must rest on 3 distinct sourced documents rather than 1. |
+| rich | 150+ | Unchanged. |
+
+Enforced in `prune_unsourced` and `enforce_signal_counts`, not merely asked for
+in the prompt — a thin corpus that returns a confident inference has it deleted.
+The prompt states the same rules so the model does not spend a generation
+writing what will be discarded.
+
+### Details worth knowing
+
+- **The tier is computed after filtering.** A corpus of 45 that is really 30
+  once the acknowledgements are gone is thin. Classifying before the filter
+  would call it moderate, which is exactly the case the tiers exist to catch.
+  Two tests pin this, including the mirror case where `--no-filter` moves the
+  same documents up a tier.
+- **`tier=None` means "no size restriction", not "guess one".** Neither
+  `len(valid_ids)` (the whole corpus, filtered documents included) nor
+  `len(highlights)` (capped at 60) is the post-filter count, so deriving from
+  either would silently invent a fact. `synthesize()` always passes the real
+  tier and a test pins that the wiring exists, so the fail-open default cannot
+  hide a bug.
+- **The report distinguishes "nothing found" from "we did not look".** An empty
+  `evolution` at rich reads "No view changed inside this corpus. Not
+  manufactured."; at thin it reads "Not assessed: 12 documents cannot separate a
+  before from an after." Those are different claims and only one of them is true.
+- **The confidence label stops lying.** At a tier that forces confidence, the
+  caveat reads "Confidence (set in code, not by the model)" rather than
+  "Model-assessed confidence" — the model's assessment is precisely what was
+  overridden.
+- **`--render-only` recovers the tier without run_meta.json**, from
+  `coverage.total_documents`, which is the same post-filter count Python
+  classified on.
+
+### Surfacing the secondary sources
+
+`--dry-run` now warns when the projected corpus is under the floor and names
+`--substack` / `--rss` / `--url` explicitly, along with the free levers
+(`--max-posts`, `--since`, `--empty-window-tolerance`). They were wired up and
+easy to miss, and the moment they matter most is before a thin run is paid for.
+The warning fires on the estimate block, so it also appears ahead of the spend
+confirmation on a real run — not only under `--dry-run`.
+
+The threshold is the same constant the tiers use, so the warning cannot
+disagree with the behaviour it warns about.
+
+### Fixed along the way
+
+The new CLI tests initially asserted against a profile no test had set: `corpus
+run` opens the real `~/.corpus/cache.db`, so the first dry run cached a profile
+and every later one read that instead of the fake. They now redirect
+`CORPUS_CACHE_DB` to a tmp path. The suite was leaving an entry in the
+developer's cache; it no longer does.
+
+Test suite 458 → 498. `REDUCE_SCHEMA` is unchanged at 3,251 bytes — the tier is
+a prompt input and a Python rule, not a model-emitted field.

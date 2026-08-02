@@ -15,26 +15,42 @@ Regenerate a real one with:  corpus run --x <handle>
 
 # @testsubject (STUB MODEL OUTPUT — not real analysis) — how they think
 
-_Generated 2026-08-02 22:58 UTC · 16 documents · 2024-01-08 to 2024-08-16_
+_Generated 2026-08-02 23:35 UTC · 16 documents · 2024-01-08 to 2024-08-16_
 
 > **Coverage and caveats**
 > 
 > - Date range: 2024-01-08 to 2024-08-16
 > - Documents analyzed: 15 of 16 in corpus
-> - Model-assessed confidence: **medium**
+> - Confidence (set in code, not by the model): **low**
+> - **Corpus tier: thin (15 documents). Inference is switched off** — see the note below the summary.
 > - Ingestion stopped because: fixture corpus (offline)
 > - 1 reply parents / quote targets were deleted or unavailable; those documents carry `[unavailable]` context.
 > - Dropped in enforcement: core_model 'invented belief' dropped: no valid evidence ids
 > - Dropped in enforcement: reasoning move 'invented move' dropped: example id not in corpus
-> - Dropped in enforcement: blind spot 'hand-waved blind spot' dropped: basis is not a chain
-> - Dropped in enforcement: axis 'epistemics': inference dropped, reasoning was not a chain
-> - Dropped in enforcement: axis 'politics_and_ideology' was not returned; recorded as no signal
-> - …and 2 further finding(s) dropped; see run metadata.
-> - 1 model-stated count(s) were overwritten with the values computed in Python; signals.json is authoritative.
+> - Dropped in enforcement: blind spot 'Treats their own sample as representative' dropped: thin corpus (15 documents) cannot establish a pattern
+> - Dropped in enforcement: blind spot 'hand-waved blind spot' dropped: thin corpus (15 documents) cannot establish a pattern
+> - Dropped in enforcement: axis 'institutions_and_authority': inference suppressed, thin corpus (15 documents) supports stated positions only
+> - …and 5 further finding(s) dropped; see run metadata.
+> - 2 model-stated count(s) were overwritten with the values computed in Python; signals.json is authoritative.
 
 ## Summary
 
 One. Two. Three. Four.
+
+## This corpus is too small for inference
+
+Only **15 documents** survived filtering, under the 40-document floor. At that size there is no way to tell a position someone holds from a thing they happened to say once, so everything inferential has been switched off rather than guessed at:
+
+- **Inferred positions** on every axis are suppressed. Only `stated` is shown.
+- **Blind spots** are empty — a blind spot is a pattern, and there is no
+  run of behaviour here to establish one.
+- **What moved** is empty — a change of view needs enough before and after
+  to tell them apart.
+- **Confidence** is set to `low` in code, not assessed by the model.
+
+This is a limit of the corpus, not of the subject. What is below is still sourced and still true; there is simply less of it.
+
+**To get the full analysis:** Raise `--max-posts`, drop `--since`, or widen `--empty-window-tolerance` to reach further back; and merge in their long-form writing with `--substack DOMAIN`, `--rss URL`, or `--url URL`, which cost nothing and land in the same corpus.
 
 ## The generating model
 
@@ -59,11 +75,7 @@ _load-bearing_ · [2024-08-16](https://x.com/testsubject/status/1700000000000000
 
 **What makes them update.** Someone shows them a measurement they cannot dispute.
 
-**Blind spots** _(inferred — the basis is the evidence)_
-
-- **Treats their own sample as representative**
-  - Basis: They twice answer institutional-authority claims with a counterexample from their own hiring data rather than disputing the study, which places the burden of proof on the institution rather than on the dissenter.
-  - Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
+_Blind spots not assessed: 15 documents cannot establish a pattern someone does not see in themselves._
 
 ## Where they land
 
@@ -72,10 +84,6 @@ Every requested axis appears here. `no signal` means the corpus contains nothing
 ### institutions and authority — strong signal
 
 **Stated.** Credentials are a lazy proxy for competence.
-
-**Inferred** _(medium confidence)_**.** They treat institutional legitimacy as earned per-claim.
-
-_Chain:_ They twice answer institutional-authority claims with a counterexample from their own hiring data rather than disputing the study, which places the burden of proof on the institution rather than on the dissenter.
 
 Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
@@ -89,12 +97,7 @@ Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2
 
 ## What moved
 
-### work trials
-
-- **Earlier:** two days is enough
-- **Later:** two days measures sprinting
-- **Inflection:** 2024-06-15
-- Evidence: [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
+_Not assessed: 15 documents cannot separate a before from an after. This is the corpus size, not a finding about the subject._
 
 ## Unresolved
 

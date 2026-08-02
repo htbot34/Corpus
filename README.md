@@ -77,7 +77,7 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--axes a,b,c` | all | Which worldview axes to place the subject on. Names come from `corpus/profiles.yaml`; an unknown name is an error, not a silent drop. |
 | `--map-model` / `--reduce-model` | haiku-4.5 / opus-5 | Map is extraction; reduce is judgment. Do not downgrade reduce. |
 | `--map-effort` / `--reduce-effort` | medium / high | Only sent to models that implement `effort` — Haiku rejects it outright. |
-| `--no-filter` | off | Keep low-signal documents (bare acks, link-only posts, short fragments). |
+| `--no-filter` | off | Keep low-signal documents (bare acks, link-only posts, short fragments). Also raises the tier, since the tier follows what the model sees. |
 | `--render-only` | off | `resynth` only. Rebuild `report.md` from an existing `synthesis.json`. No API calls, no spend. |
 | `--log-format` | text | `text` or `json` (one object per line). |
 | `--verbose` / `--quiet` | off | Add phase and elapsed time / warnings and errors only. |
@@ -315,6 +315,29 @@ same analytic seriousness as politics is itself a cognitive tell, and a topic fi
 delete the evidence for it. The drop count and reasons land in the report's coverage
 block; `--no-filter` disables it.
 
+### What the corpus is big enough to support
+
+Nothing used to vary with document count, which is backwards: a thin corpus is
+exactly where inference is most likely to confabulate. The tier is computed in
+Python from the **post-filter** count and injected as ground truth — the model
+is never asked to assess its own evidence base, since self-assessment is the
+thing under suspicion.
+
+| Tier | Documents | What changes |
+| --- | ---: | --- |
+| **thin** | under 40 | Inference switched off. `inferred` and `reasoning` are emptied on every axis, `blind_spots` and `evolution` come back empty, `coverage.confidence` is forced to `low`. Stated positions and `core_model` survive — those are sourced claims. |
+| **moderate** | 40–149 | Inference allowed, but every inference must rest on **3 distinct documents** instead of 1. One striking post is an anecdote, not a pattern. |
+| **rich** | 150+ | The behaviour the report was designed around. |
+
+Both halves are real: the reduce prompt states the tier's rules so the model
+does not spend a generation writing what will be deleted, and `prune_unsourced`
+deletes it anyway if it does. The report says which tier it ran at, and a thin
+one leads with a section explaining what was switched off and how to fix it.
+
+`--dry-run` warns *before* the money is spent when the projected corpus is under
+the floor, and names the secondary sources — they merge into the same corpus and
+cost nothing, being plain HTTP rather than a metered API.
+
 ### Two inference tiers, always held apart
 
 The report makes claims the subject never made — that is the point — but it never blurs
@@ -323,7 +346,8 @@ them together.
 - **`stated`** is what they actually said. It traces to real document ids or it is
   dropped, the same rule the tool has always enforced.
 - **`inferred`** is what follows from it. It requires a `reasoning` chain from specific
-  posts to the conclusion, plus a `confidence` value.
+  posts to the conclusion, plus a `confidence` value — and, below the rich tier, a
+  minimum number of distinct sourced documents.
 
 **The reasoning is the evidence for the inference.** An inferred conclusion whose chain is
 missing, too short to be a chain, or a restatement of its own conclusion is deleted in
@@ -375,7 +399,8 @@ Written to `out/{handle}/{YYYY-MM-DD}/`:
 | `corpus.json` | Every hydrated `Document`. |
 | `signals.json` | The computed metrics. |
 
-Plus `run.json` (resume state) and `run_meta.json` (what the enforcement dropped and why).
+Plus `run.json` (resume state) and `run_meta.json` (the corpus tier, and what the
+enforcement dropped and why).
 
 `corpus.json` and `signals.json` are written **before** synthesis runs, so a synthesis
 failure never costs you the data you paid for.
@@ -421,7 +446,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-430 tests, all offline. The suite covers both provider regressions (via
+498 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
