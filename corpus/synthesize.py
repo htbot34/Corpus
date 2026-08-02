@@ -35,6 +35,7 @@ from .budget import (
 )
 from .models import Axis, Document, MapChunk, Synthesis
 from .prefilter import FilterStats, filter_low_signal
+from .tiers import RICH, TierRules, classify_corpus, prompt_block
 
 # Map is extraction: find the claims, name the moves, point at the ids. It does
 # not need judgment, so it does not need an expensive model — and map is the
@@ -203,6 +204,8 @@ Use "weak" when there are one or two documents that glance at the axis, and \
 
 {axes}
 
+{tier}
+
 ## Hard rules
 
 1. Every field carrying evidence_ids must reference real document ids from the \
@@ -226,8 +229,10 @@ def build_map_system(axes: list[AxisSpec]) -> str:
     return MAP_SYSTEM_BASE + MAP_AXES_SUFFIX.format(axes=axes_prompt_block(axes))
 
 
-def build_reduce_system(axes: list[AxisSpec]) -> str:
-    return REDUCE_SYSTEM_TEMPLATE.format(axes=axes_prompt_block(axes), cap=EVIDENCE_CAP)
+def build_reduce_system(axes: list[AxisSpec], tier: TierRules) -> str:
+    return REDUCE_SYSTEM_TEMPLATE.format(
+        axes=axes_prompt_block(axes), tier=prompt_block(tier), cap=EVIDENCE_CAP
+    )
 
 
 # --------------------------------------------------------------------------
@@ -459,6 +464,7 @@ class SynthesisRun:
     corrected_counts: list[str] = field(default_factory=list)
     filter_stats: FilterStats | None = None
     analyzed_documents: int = 0
+    tier: TierRules | None = None
     raw_reduce_output: str = ""
     structured_output: bool = True  # False when the schema was refused
     error: str = ""
@@ -470,6 +476,7 @@ class SynthesisRun:
             "dropped_findings": self.dropped_findings,
             "corrected_counts": self.corrected_counts,
             "analyzed_documents": self.analyzed_documents,
+            "corpus_tier": self.tier.name if self.tier else "",
             "filter": self.filter_stats.as_dict() if self.filter_stats else {},
             "structured_output": self.structured_output,
             "error": self.error,
@@ -675,13 +682,16 @@ async def run_reduce(
     budget: Budget,
     *,
     axes: list[AxisSpec] | None = None,
+    tier: TierRules | None = None,
     model: str = REDUCE_MODEL,
     effort: str = "high",
     log: Callable[[str], None] = print,
 ) -> tuple[Synthesis | None, str, str, bool]:
     """Returns (synthesis, raw_output, error, used_structured_output)."""
     corpus = _corpus_block(map_outputs, signals, highlights)
-    system_prompt = build_reduce_system(axes if axes is not None else load_axes())
+    system_prompt = build_reduce_system(
+        axes if axes is not None else load_axes(), tier if tier is not None else RICH
+    )
     attempt_note = ""
     structured = True
 
@@ -817,7 +827,10 @@ def _is_hand_waving(reasoning: str, conclusion: str) -> bool:
 
 
 def prune_unsourced(
-    synthesis: Synthesis, valid_ids: set[str], axes: list[AxisSpec] | None = None
+    synthesis: Synthesis,
+    valid_ids: set[str],
+    axes: list[AxisSpec] | None = None,
+    tier: TierRules | None = None,
 ) -> list[str]:
     """The rules, enforced in code rather than hoped for.
 
@@ -827,10 +840,13 @@ def prune_unsourced(
     3. Evidence is capped at three ids per claim.
     4. Every requested axis appears exactly once. Missing ones come back as
        `signal: "none"` rather than silently vanishing.
+    5. What the corpus is big enough to support, per `tier`. The prompt asks
+       for the same thing; this is what makes it true.
 
     Returns human-readable notes about what was dropped, for the report.
     """
     notes: list[str] = []
+    rules = tier if tier is not None else RICH
 
     def clean(ids: list[str]) -> list[str]:
         seen: list[str] = []
@@ -859,20 +875,37 @@ def prune_unsourced(
     kept_blind_spots = []
     for spot in synthesis.reasoning.blind_spots:
         spot.evidence_ids = clean(spot.evidence_ids)
-        if not spot.evidence_ids:
+        # A blind spot is inference all the way down — there is no sourced half
+        # to keep, so a tier that forbids inference drops it whole.
+        if not rules.allow_blind_spots:
+            notes.append(
+                f"blind spot '{spot.pattern[:50]}' dropped: "
+                f"{rules.name} corpus ({rules.document_count} documents) cannot establish a pattern"
+            )
+        elif not spot.evidence_ids:
             notes.append(f"blind spot '{spot.pattern[:50]}' dropped: no valid evidence ids")
+        elif len(spot.evidence_ids) < rules.min_chain_documents:
+            notes.append(
+                f"blind spot '{spot.pattern[:50]}' dropped: {len(spot.evidence_ids)} sourced "
+                f"document(s), {rules.name} corpus requires {rules.min_chain_documents}"
+            )
         elif _is_hand_waving(spot.basis, spot.pattern):
             notes.append(f"blind spot '{spot.pattern[:50]}' dropped: basis is not a chain")
         else:
             kept_blind_spots.append(spot)
     synthesis.reasoning.blind_spots = kept_blind_spots
 
-    synthesis.axes = _enforce_axes(synthesis.axes, clean, axes, notes)
+    synthesis.axes = _enforce_axes(synthesis.axes, clean, axes, rules, notes)
 
     kept_evolution = []
     for evo in synthesis.evolution:
         evo.evidence_ids = clean(evo.evidence_ids)
-        if evo.evidence_ids:
+        if not rules.allow_evolution:
+            notes.append(
+                f"evolution entry '{evo.topic}' dropped: {rules.name} corpus "
+                f"({rules.document_count} documents) cannot separate a before from an after"
+            )
+        elif evo.evidence_ids:
             kept_evolution.append(evo)
         else:
             notes.append(f"evolution entry '{evo.topic}' dropped: no valid evidence ids")
@@ -903,10 +936,24 @@ def _blank_axis(name: str) -> Axis:
     return Axis(axis=name, signal="none", confidence="low")
 
 
+def _drop_inference(axis: Axis, note: str, notes: list[str]) -> None:
+    """Delete tier two, keep tier one.
+
+    The stated half has its own sourcing and is not collateral damage when the
+    inference fails its test. `confidence` describes the inference, so it goes
+    back to the floor along with it.
+    """
+    axis.inferred = ""
+    axis.reasoning = ""
+    axis.confidence = "low"
+    notes.append(note)
+
+
 def _enforce_axes(
     emitted: list[Axis],
     clean: Callable[[list[str]], list[str]],
     requested: list[AxisSpec] | None,
+    rules: TierRules,
     notes: list[str],
 ) -> list[Axis]:
     """Clean each axis, then reconcile against what was actually requested."""
@@ -926,12 +973,27 @@ def _enforce_axes(
             axis.signal = "none"
             axis.stated = axis.inferred = axis.reasoning = ""
             axis.confidence = "low"
+        elif axis.inferred and not rules.allow_inference:
+            _drop_inference(
+                axis,
+                f"axis '{axis.axis}': inference suppressed, {rules.name} corpus "
+                f"({rules.document_count} documents) supports stated positions only",
+                notes,
+            )
+        elif axis.inferred and len(axis.evidence_ids) < rules.min_chain_documents:
+            _drop_inference(
+                axis,
+                f"axis '{axis.axis}': inference dropped, chain rests on "
+                f"{len(axis.evidence_ids)} sourced document(s) and the {rules.name} "
+                f"corpus requires {rules.min_chain_documents}",
+                notes,
+            )
         elif axis.inferred and _is_hand_waving(axis.reasoning, axis.inferred):
-            # Tier two failed its own test. The stated tier survives on its own
-            # sourcing; only the inference goes.
-            notes.append(f"axis '{axis.axis}': inference dropped, reasoning was not a chain")
-            axis.inferred = ""
-            axis.reasoning = ""
+            _drop_inference(
+                axis,
+                f"axis '{axis.axis}': inference dropped, reasoning was not a chain",
+                notes,
+            )
 
         if axis.axis in cleaned:
             notes.append(f"axis '{axis.axis}': duplicate entry discarded")
@@ -957,14 +1019,19 @@ def enforce_signal_counts(
     synthesis: Synthesis,
     signals: dict[str, Any],
     analyzed_documents: int,
+    tier: TierRules | None = None,
 ) -> list[str]:
     """Any number we have ground truth for is overwritten.
 
     The prompt tells the model not to compute counts. This makes it true.
     `open_questions.returned_to` is left alone: it counts a model-defined
     concept, so signals.json has no counterpart to check it against.
+
+    `coverage.confidence` is a self-assessment, which is exactly the thing a
+    thin corpus is bad at — so at that tier it is set rather than believed.
     """
     notes: list[str] = []
+    rules = tier if tier is not None else RICH
 
     if synthesis.coverage.total_documents != analyzed_documents:
         notes.append(
@@ -977,6 +1044,14 @@ def enforce_signal_counts(
     if date_range and synthesis.coverage.date_range != date_range:
         notes.append(f"coverage.date_range corrected to {date_range}")
         synthesis.coverage.date_range = date_range
+
+    forced = rules.forced_confidence
+    if forced is not None and synthesis.coverage.confidence != forced:
+        notes.append(
+            f"coverage.confidence forced {synthesis.coverage.confidence} -> {forced} "
+            f"by the {rules.name} corpus rule"
+        )
+        synthesis.coverage.confidence = forced
 
     return notes
 
@@ -1026,6 +1101,12 @@ async def synthesize(
         log(f"  prefilter: {stats.summary_line()}")
 
     run.analyzed_documents = len(synth_docs)
+    # Classified from what the model will actually see, not from the corpus on
+    # disk: 45 documents that are really 30 once the acknowledgements are gone
+    # is precisely the case the tiers exist to catch. Recorded on the run even
+    # when there is nothing to synthesize, so the caller can still report it.
+    tier = classify_corpus(run.analyzed_documents)
+    run.tier = tier
     if not synth_docs:
         run.error = "no synthesizable documents"
         return run
@@ -1046,6 +1127,11 @@ async def synthesize(
     chunks = chunk_documents(synth_docs)
     run.chunks = len(chunks)
     log(f"  {len(synth_docs)} documents -> {len(chunks)} map slices ({map_model})")
+    log(f"  corpus tier: {tier.name} ({tier.document_count} documents)")
+    if tier.suppresses_inference:
+        log("    inference suppressed; stated positions only")
+    elif tier.min_chain_documents > 1:
+        log(f"    inference requires {tier.min_chain_documents} sourced documents per chain")
 
     owns_client = client is None
     if client is None:
@@ -1091,6 +1177,7 @@ async def synthesize(
             highlights,
             budget,
             axes=selected_axes,
+            tier=tier,
             model=reduce_model,
             effort=reduce_effort,
             log=log,
@@ -1105,10 +1192,12 @@ async def synthesize(
             )
         if synthesis is not None:
             valid_ids = {d.source_id for d in docs}
-            run.dropped_findings = prune_unsourced(synthesis, valid_ids, selected_axes)
+            run.dropped_findings = prune_unsourced(synthesis, valid_ids, selected_axes, tier)
             for note in run.dropped_findings:
                 log(f"  [unsourced] {note}")
-            run.corrected_counts = enforce_signal_counts(synthesis, signals, run.analyzed_documents)
+            run.corrected_counts = enforce_signal_counts(
+                synthesis, signals, run.analyzed_documents, tier
+            )
             for note in run.corrected_counts:
                 log(f"  [counts] {note}")
             run.synthesis = synthesis
