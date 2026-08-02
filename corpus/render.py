@@ -1,7 +1,18 @@
 """report.md rendering.
 
-Themes ranked by corpus share, every claim hyperlinked to its source post,
-coverage caveats in a callout at the top, spend summary at the bottom.
+Cognition-first: the generating model up top, then the machinery, then where
+the corpus does and does not let you locate them. Evidence is capped at three
+links per claim so the page reads as analysis with citations rather than a
+citation dump with commentary.
+
+Interpretation of the computed metrics belongs inside the analysis, not in
+tables. That someone's most-linked domain is their own site is a fact about
+epistemic self-reliance; it is not a table row.
+
+The coverage callout is unchanged from the production-hardening pass: every
+caveat it raises (hiatus truncation, unparseable timestamps, the ingested
+share, the schema-rejection degrade) is about whether the corpus is
+trustworthy, which the redesign did not touch.
 """
 
 from __future__ import annotations
@@ -10,6 +21,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .models import Document, Synthesis
+from .synthesize import EVIDENCE_CAP
+
+ROLE_LABELS = {
+    "load_bearing": "load-bearing",
+    "derived": "derived",
+    "held_lightly": "held lightly",
+}
 
 
 def _link_map(docs: list[Document]) -> dict[str, Document]:
@@ -17,19 +35,18 @@ def _link_map(docs: list[Document]) -> dict[str, Document]:
 
 
 def _cite(ids: list[str], links: dict[str, Document]) -> str:
-    """Render evidence ids as markdown links to the source posts."""
+    """Render evidence ids as markdown links to the source posts.
+
+    Capped here as well as in `prune_unsourced`, because `--render-only` runs
+    against whatever synthesis.json is on disk — including one edited by hand.
+    """
     out = []
-    for doc_id in ids[:8]:
+    for doc_id in ids[:EVIDENCE_CAP]:
         doc = links.get(doc_id)
         if doc is None:
             continue
-        label = doc.published_at.strftime("%Y-%m-%d")
-        out.append(f"[{label}]({doc.url})")
-    if not out:
-        return "_no source_"
-    extra = len(ids) - len(out)
-    suffix = f" +{extra} more" if extra > 0 else ""
-    return ", ".join(out) + suffix
+        out.append(f"[{doc.published_at.strftime('%Y-%m-%d')}]({doc.url})")
+    return ", ".join(out) if out else "_no source_"
 
 
 def _callout(lines: list[str]) -> str:
@@ -49,7 +66,7 @@ def render_report(
     out: list[str] = []
     generated = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    out.append(f"# @{handle} — corpus synthesis")
+    out.append(f"# @{handle} — how they think")
     out.append("")
     out.append(f"_Generated {generated} · {len(docs)} documents · {signals.get('date_range', '')}_")
     out.append("")
@@ -59,14 +76,26 @@ def render_report(
     cov = synthesis.coverage if synthesis else None
     if cov:
         caveats.append(f"- Date range: {cov.date_range or signals.get('date_range', 'unknown')}")
-        caveats.append(f"- Documents synthesized: {cov.total_documents or len(docs)}")
-        caveats.append(f"- Kinds included: {', '.join(cov.kinds_included) or 'n/a'}")
+        caveats.append(
+            f"- Documents analyzed: {cov.total_documents or len(docs)} of {len(docs)} in corpus"
+        )
         caveats.append(f"- Model-assessed confidence: **{cov.confidence}**")
         for gap in cov.gaps:
             caveats.append(f"- Gap: {gap}")
     else:
         caveats.append(f"- Date range: {signals.get('date_range', 'unknown')}")
         caveats.append(f"- Documents ingested: {len(docs)}")
+
+    filt = run_meta.get("filter") or {}
+    if filt.get("dropped"):
+        reasons = ", ".join(
+            f"{k.replace('_', ' ')} {v}" for k, v in sorted(filt.get("by_reason", {}).items())
+        )
+        caveats.append(
+            f"- {filt['dropped']} low-signal document(s) filtered before synthesis "
+            f"({reasons}). Structural only — nothing was filtered by subject. "
+            "Re-run with `--no-filter` to include them."
+        )
 
     ingest = run_meta.get("ingest", {})
     if ingest.get("empty_windows"):
@@ -144,8 +173,13 @@ def render_report(
         caveats.append("- **Budget was exhausted; these results are partial.**")
     if run_meta.get("synthesis_error"):
         caveats.append(f"- Synthesis problem: {run_meta['synthesis_error']}")
-    for note in run_meta.get("dropped_findings", [])[:5]:
-        caveats.append(f"- Dropped as unsourced: {note}")
+    dropped_findings = run_meta.get("dropped_findings", [])
+    for note in dropped_findings[:5]:
+        caveats.append(f"- Dropped in enforcement: {note}")
+    if len(dropped_findings) > 5:
+        caveats.append(
+            f"- …and {len(dropped_findings) - 5} further finding(s) dropped; see run metadata."
+        )
     if run_meta.get("structured_output") is False:
         caveats.append(
             "- The provider refused the output schema as too large for "
@@ -189,153 +223,129 @@ def render_report(
     out.append(synthesis.summary)
     out.append("")
 
-    # ---- themes ----------------------------------------------------------
-    out.append("## Themes")
+    # ---- core model, the centrepiece -------------------------------------
+    out.append("## The generating model")
     out.append("")
-    themes = sorted(synthesis.themes, key=lambda t: -t.share_of_corpus)
-    if not themes:
-        out.append("_No themes survived sourcing._")
-    for theme in themes:
-        flag = " _(thin evidence)_" if theme.low_evidence else ""
+    if not synthesis.core_model:
+        out.append("_No belief survived sourcing. The corpus is too thin to reconstruct a model._")
+        out.append("")
+    else:
         out.append(
-            f"### {theme.name} — {theme.share_of_corpus:.1%} of corpus "
-            f"({theme.post_count} posts, {theme.trajectory}){flag}"
+            "The beliefs below are ordered by how much else hangs off them. "
+            "`generates` is what follows if the belief is held."
         )
         out.append("")
-        out.append(f"First seen {theme.first_seen or '?'} · last seen {theme.last_seen or '?'}")
+    order = {"load_bearing": 0, "derived": 1, "held_lightly": 2}
+    for belief in sorted(synthesis.core_model, key=lambda b: order.get(b.role, 3)):
+        out.append(f"### {belief.belief}")
         out.append("")
-        out.append(f"Evidence: {_cite(theme.evidence_ids, links)}")
+        out.append(
+            f"_{ROLE_LABELS.get(belief.role, belief.role)}_ · "
+            f"{_cite(belief.evidence_ids, links)}"
+        )
+        out.append("")
+        for downstream in belief.generates:
+            out.append(f"- → {downstream}")
+        if belief.generates:
+            out.append("")
+
+    # ---- reasoning -------------------------------------------------------
+    reasoning = synthesis.reasoning
+    out.append("## How they reason")
+    out.append("")
+    if reasoning.moves:
+        out.append("**Moves they make**")
+        out.append("")
+        for move in reasoning.moves:
+            out.append(f"- {move.move} — {_cite([move.example_id], links)}")
+        out.append("")
+    for label, value in (
+        ("What counts as evidence", reasoning.what_counts_as_evidence),
+        ("Under disagreement", reasoning.under_disagreement),
+        ("What makes them update", reasoning.updates_when),
+    ):
+        if value:
+            out.append(f"**{label}.** {value}")
+            out.append("")
+    if reasoning.blind_spots:
+        out.append("**Blind spots** _(inferred — the basis is the evidence)_")
+        out.append("")
+        for spot in reasoning.blind_spots:
+            out.append(f"- **{spot.pattern}**")
+            out.append(f"  - Basis: {spot.basis}")
+            out.append(f"  - Evidence: {_cite(spot.evidence_ids, links)}")
         out.append("")
 
-    # ---- positions -------------------------------------------------------
-    out.append("## Positions")
+    # ---- axes ------------------------------------------------------------
+    out.append("## Where they land")
     out.append("")
-    if not synthesis.positions:
-        out.append("_No positions survived sourcing._")
-    for pos in synthesis.positions:
-        flag = " _(thin evidence)_" if pos.low_evidence else ""
-        out.append(f"- **{pos.claim}**{flag}")
-        out.append(f"  - Confidence: `{pos.confidence}` · Source: {_cite(pos.evidence_ids, links)}")
-        if pos.contradicted_by_ids:
-            out.append(f"  - Contradicted by: {_cite(pos.contradicted_by_ids, links)}")
+    out.append(
+        "Every requested axis appears here. `no signal` means the corpus contains "
+        "nothing bearing on it — that is a finding, not a gap in the analysis."
+    )
     out.append("")
+    silent = [a for a in synthesis.axes if a.signal == "none"]
+    for axis in synthesis.axes:
+        if axis.signal == "none":
+            continue
+        out.append(f"### {axis.axis.replace('_', ' ')} — {axis.signal} signal")
+        out.append("")
+        if axis.stated:
+            out.append(f"**Stated.** {axis.stated}")
+            out.append("")
+        if axis.inferred:
+            out.append(f"**Inferred** _({axis.confidence} confidence)_**.** {axis.inferred}")
+            out.append("")
+            out.append(f"_Chain:_ {axis.reasoning}")
+            out.append("")
+        out.append(f"Evidence: {_cite(axis.evidence_ids, links)}")
+        out.append("")
+    if silent:
+        out.append(
+            "**No signal:** "
+            + ", ".join(a.axis.replace("_", " ") for a in silent)
+            + ". Nothing in this corpus locates them on "
+            + ("these axes." if len(silent) > 1 else "this axis.")
+        )
+        out.append("")
 
-    # ---- evolution (differentiating field) --------------------------------
-    out.append("## Evolution")
+    # ---- evolution -------------------------------------------------------
+    out.append("## What moved")
     out.append("")
     if not synthesis.evolution:
-        out.append("_No view changes found in this corpus. Not manufactured._")
-    for evo in synthesis.evolution:
-        flag = " _(thin evidence)_" if evo.low_evidence else ""
-        out.append(f"### {evo.topic}{flag}")
+        out.append("_No view changed inside this corpus. Not manufactured._")
         out.append("")
-        out.append(f"- **Earlier:** {evo.earlier_view}")
-        out.append(f"- **Later:** {evo.later_view}")
-        out.append(f"- **Inflection:** {evo.inflection_date or 'unclear'}")
+    for evo in synthesis.evolution:
+        out.append(f"### {evo.topic}")
+        out.append("")
+        out.append(f"- **Earlier:** {evo.earlier}")
+        out.append(f"- **Later:** {evo.later}")
+        out.append(f"- **Inflection:** {evo.inflection or 'unclear'}")
         out.append(f"- Evidence: {_cite(evo.evidence_ids, links)}")
         out.append("")
 
-    # ---- performance gap (differentiating field) --------------------------
-    out.append("## Performance gap")
+    # ---- open questions --------------------------------------------------
+    out.append("## Unresolved")
     out.append("")
-    pg = synthesis.performance_gap
-    if not pg.posts_most_about:
-        out.append("_Posting subject and traction subject align. No gap to report._")
-    else:
-        out.append(f"- **Posts most about:** {pg.posts_most_about}")
-        out.append(f"- **Gets most traction on:** {pg.gets_most_traction_on}")
-        out.append(f"- **Interpretation:** {pg.interpretation}")
-        out.append(f"- Evidence: {_cite(pg.evidence_ids, links)}")
-    out.append("")
-
-    # ---- argument style --------------------------------------------------
-    out.append("## How they argue")
-    out.append("")
-    for move in synthesis.argument_style.typical_moves:
-        out.append(f"- {move}")
-    if synthesis.argument_style.how_they_handle_disagreement:
-        out.append("")
-        out.append(
-            f"**Under disagreement:** {synthesis.argument_style.how_they_handle_disagreement}"
-        )
-    out.append("")
-    out.append(f"Evidence: {_cite(synthesis.argument_style.evidence_ids, links)}")
-    out.append("")
-
-    # ---- network ---------------------------------------------------------
-    out.append("## Network")
-    out.append("")
-    if synthesis.network:
-        out.append("| Handle | Exchanges | Relationship | Evidence |")
-        out.append("| --- | ---: | --- | --- |")
-        for edge in synthesis.network:
+    if synthesis.open_questions:
+        for question in synthesis.open_questions:
             out.append(
-                f"| [@{edge.handle}](https://x.com/{edge.handle}) | {edge.exchange_count} "
-                f"| {edge.relationship} | {_cite(edge.evidence_ids, links)} |"
+                f"- {question.question} _(returned to {question.returned_to}×)_ — "
+                f"{_cite(question.evidence_ids, links)}"
             )
     else:
-        out.append("_No conversational network found._")
+        out.append("_Nothing they return to without settling._")
     out.append("")
 
-    # ---- reading diet ----------------------------------------------------
-    out.append("## Reading diet")
+    # ---- misreadings -----------------------------------------------------
+    out.append("## How to misread this")
     out.append("")
-    if synthesis.reading_diet:
-        out.append("| Domain | Shares | What it suggests |")
-        out.append("| --- | ---: | --- |")
-        for entry in synthesis.reading_diet:
-            out.append(f"| {entry.domain} | {entry.share_count} | {entry.what_it_suggests} |")
+    if synthesis.misreadings:
+        for entry in synthesis.misreadings:
+            out.append(f"- **{entry.misreading}**")
+            out.append(f"  - Why that is wrong: {entry.why_wrong}")
+            out.append(f"  - Evidence: {_cite(entry.evidence_ids, links)}")
     else:
-        out.append("_No outbound links in this corpus._")
-    out.append("")
-
-    # ---- open loops ------------------------------------------------------
-    out.append("## Open loops")
-    out.append("")
-    if synthesis.open_loops:
-        for loop in synthesis.open_loops:
-            out.append(
-                f"- {loop.question} _(returned to {loop.returned_to_count}×)_ — "
-                f"{_cite(loop.evidence_ids, links)}"
-            )
-    else:
-        out.append("_None found._")
-    out.append("")
-
-    # ---- voice -----------------------------------------------------------
-    out.append("## Voice")
-    out.append("")
-    out.append(f"**Register:** {synthesis.voice.register}")
-    out.append("")
-    if synthesis.voice.hobbyhorses:
-        out.append("**Hobbyhorses:** " + ", ".join(synthesis.voice.hobbyhorses))
-    if synthesis.voice.tells:
-        out.append("")
-        out.append("**Tells:** " + ", ".join(synthesis.voice.tells))
-    out.append("")
-
-    # ---- hooks -----------------------------------------------------------
-    out.append("## Hooks")
-    out.append("")
-    for hook in synthesis.hooks:
-        out.append(f'- **"{hook.opener}"**')
-        if hook.anchor_url:
-            out.append(f"  - Anchor: {hook.anchor_url}")
-        if hook.why_it_works:
-            out.append(f"  - Why: {hook.why_it_works}")
-    if not synthesis.hooks:
-        out.append("_None specific enough to this corpus to be worth keeping._")
-    out.append("")
-
-    # ---- avoid -----------------------------------------------------------
-    out.append("## Avoid")
-    out.append("")
-    for avoid_entry in synthesis.avoid:
-        out.append(
-            f"- **{avoid_entry.topic_or_framing}** — {avoid_entry.reason} "
-            f"{_cite(avoid_entry.evidence_ids, links)}"
-        )
-    if not synthesis.avoid:
         out.append("_Nothing flagged._")
     out.append("")
 
@@ -343,6 +353,11 @@ def render_report(
     out.append("---")
     out.append("")
     out.append("## Computed signals (Python, not the model)")
+    out.append("")
+    out.append(
+        "_Inputs to the analysis above, not findings in themselves. "
+        "Every number here is arithmetic done in code._"
+    )
     out.append("")
     cadence = signals.get("cadence", {})
     out.append(
@@ -363,13 +378,17 @@ def render_report(
             "- Kind mix: "
             + ", ".join(f"{k} {v:.0%}" for k, v in sorted(mix.items(), key=lambda x: -x[1]))
         )
-    reg = signals.get("register_split", {})
-    if reg:
+    graph = signals.get("conversation_graph", [])[:6]
+    if graph:
         out.append(
-            "- Register: "
-            + "; ".join(
-                f"{k} {v['mean_word_count']} words/post" for k, v in reg.items() if v.get("n")
-            )
+            "- Most-replied handles: "
+            + ", ".join(f"@{g['handle']} ({g['exchange_count']})" for g in graph)
+        )
+    domains = signals.get("outbound_domains", [])[:6]
+    if domains:
+        out.append(
+            "- Most-linked domains: "
+            + ", ".join(f"{d['domain']} ({d['share_count']})" for d in domains)
         )
     drift = signals.get("vocabulary_drift", [])
     if drift:

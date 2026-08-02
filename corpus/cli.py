@@ -4,7 +4,8 @@ corpus run --x paulg
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
 corpus run --x someone --dry-run
 corpus run --x someone --also-substack example.com
-corpus resynth out/paulg/2026-07-31
+corpus resynth out/paulg/2026-08-02
+    corpus resynth out/paulg/2026-08-02 --render-only   # re-render, zero API calls
 corpus cache stats | corpus cache clear
 corpus budget log
 """
@@ -33,9 +34,10 @@ from .budget import (
 from .cache import DEFAULT_TTL_SECONDS, Cache
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
+from .axes import AxisError, select_axes
 from .models import Document, Synthesis
 from .render import render_report
-from .synthesize import synthesize
+from .synthesize import MAP_MODEL, REDUCE_MODEL, synthesize
 from .x.capture import RawCapture
 from .x.client import XClient
 from .x.hydrate import hydrate
@@ -187,8 +189,16 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Estimate and plan only."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the spend confirmation."),
     skip_synthesis: bool = typer.Option(False, "--skip-synthesis"),
+    axes: str | None = typer.Option(
+        None, "--axes", help="Comma-separated worldview axes. Default: all in profiles.yaml."
+    ),
+    map_model: str = typer.Option(MAP_MODEL, "--map-model"),
+    reduce_model: str = typer.Option(REDUCE_MODEL, "--reduce-model"),
     map_effort: str = typer.Option("medium", "--map-effort", help="low|medium|high|xhigh|max"),
     reduce_effort: str = typer.Option("high", "--reduce-effort"),
+    no_filter: bool = typer.Option(
+        False, "--no-filter", help="Keep low-signal documents (acks, link-only, fragments)."
+    ),
     cache_ttl_days: int = typer.Option(7, "--cache-ttl-days"),
     capture_raw: Path | None = typer.Option(
         None,
@@ -222,6 +232,11 @@ def run(
     try:
         handle = validate_handle(x)
     except InvalidHandle as exc:
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
+    try:
+        selected_axes = select_axes(axes)
+    except AxisError as exc:
         error(str(exc))
         raise typer.Exit(code=2) from exc
     try:
@@ -506,8 +521,12 @@ def run(
                 docs,
                 signals,
                 budget,
+                axes=selected_axes,
+                map_model=map_model,
+                reduce_model=reduce_model,
                 map_effort=map_effort,
                 reduce_effort=reduce_effort,
+                prefilter=not no_filter,
                 completed_slices=completed or None,
                 on_slice=_slice_done,
                 log=echo,
@@ -522,12 +541,15 @@ def run(
         run_meta["dropped_findings"] = result.dropped_findings
         run_meta["structured_output"] = result.structured_output
         run_meta["corrected_counts"] = result.corrected_counts
+        run_meta["filter"] = result.filter_stats.as_dict() if result.filter_stats else {}
+        run_meta["analyzed_documents"] = result.analyzed_documents
         run_meta["budget_stopped"] = budget.stopped
         if synthesis is not None:
             _write_json(out_dir / "synthesis.json", synthesis.model_dump())
+            with_signal = sum(1 for a in synthesis.axes if a.signal != "none")
             echo(
-                f"  wrote synthesis.json ({len(synthesis.themes)} themes, "
-                f"{len(synthesis.positions)} positions)"
+                f"  wrote synthesis.json ({len(synthesis.core_model)} core beliefs, "
+                f"{with_signal}/{len(synthesis.axes)} axes with signal)"
             )
         else:
             if result.raw_reduce_output:
@@ -551,6 +573,9 @@ def run(
         run_meta=run_meta,
     )
     (out_dir / "report.md").write_text(report, encoding="utf-8")
+    # Written so `resynth --render-only` can reproduce the caveat block later
+    # without re-deriving anything.
+    _write_json(out_dir / "run_meta.json", run_meta)
 
     # ---- estimate accuracy (3.6) ----------------------------------------
     # An estimator nobody checks is decoration, so every run leaves a row —
@@ -657,12 +682,86 @@ def _fetch_secondary(
 # --------------------------------------------------------------------------
 
 
+# Fields that only ever existed in the pre-cognition schema. Their presence is
+# how a stale synthesis.json is recognised without guessing from a validation
+# error, which could equally mean a truncated file.
+LEGACY_SYNTHESIS_FIELDS = ("themes", "hooks", "performance_gap", "reading_diet")
+
+MIGRATION_HINT = (
+    "synthesis.json was produced by the pre-cognition schema (found: {found}).\n"
+    "  It cannot be re-rendered — the new report needs fields the old run never\n"
+    "  produced. corpus.json is unchanged and still valid, so re-run\n"
+    "  `corpus resynth {directory}` to regenerate synthesis.json under the new\n"
+    "  schema. That costs Anthropic tokens but no X spend: nothing is re-fetched."
+)
+
+
+def load_synthesis(path: Path) -> Synthesis:
+    """Read a synthesis.json, or fail with a migration message you can act on."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        found = [f for f in LEGACY_SYNTHESIS_FIELDS if f in payload]
+        if found and "core_model" not in payload:
+            raise ValueError(MIGRATION_HINT.format(found=", ".join(found), directory=path.parent))
+    return Synthesis.model_validate(payload)
+
+
+def _render_only(
+    directory: Path, handle: str, docs: list[Document], signals: dict[str, Any]
+) -> None:
+    """Regenerate report.md from what is already on disk. No client, no spend.
+
+    This exists so iterating on the report's shape is free. A formatting change
+    that costs a reduce call is a formatting change you do not make.
+    """
+    synthesis_path = directory / "synthesis.json"
+    if not synthesis_path.exists():
+        error(f"--render-only needs {synthesis_path}, which does not exist.")
+        echo(f"  Run `corpus resynth {directory}` first to produce it.")
+        raise typer.Exit(code=2)
+
+    try:
+        synthesis = load_synthesis(synthesis_path)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
+
+    meta_path = directory / "run_meta.json"
+    run_meta: dict[str, Any] = {
+        "ingest": signals.get("ingest", {}),
+        "hydration": signals.get("hydration", {}),
+    }
+    if meta_path.exists():
+        run_meta.update(json.loads(meta_path.read_text(encoding="utf-8")))
+
+    report = render_report(
+        handle=handle,
+        synthesis=synthesis,
+        docs=docs,
+        signals=signals,
+        budget_lines=["(--render-only: no API calls, nothing spent)"],
+        run_meta=run_meta,
+    )
+    (directory / "report.md").write_text(report, encoding="utf-8")
+    echo(f"Re-rendered {directory / 'report.md'} from synthesis.json — $0.0000 spent.")
+    raise typer.Exit(code=0)
+
+
 @app.command()
 def resynth(
     directory: Path = typer.Argument(..., help="An existing out/<handle>/<date> directory."),
     budget_limit: float = typer.Option(10.00, "--budget"),
+    axes: str | None = typer.Option(None, "--axes"),
+    map_model: str = typer.Option(MAP_MODEL, "--map-model"),
+    reduce_model: str = typer.Option(REDUCE_MODEL, "--reduce-model"),
     map_effort: str = typer.Option("medium", "--map-effort"),
     reduce_effort: str = typer.Option("high", "--reduce-effort"),
+    no_filter: bool = typer.Option(False, "--no-filter"),
+    render_only: bool = typer.Option(
+        False,
+        "--render-only",
+        help="Rebuild report.md from the existing synthesis.json. Zero API calls.",
+    ),
 ) -> None:
     """Re-run synthesis on a cached corpus. No fetching, no X spend."""
     corpus_path = directory / "corpus.json"
@@ -675,14 +774,34 @@ def resynth(
     signals = json.loads(signals_path.read_text())
     handle = signals.get("author_handle") or (docs[0].author_handle if docs else "unknown")
 
+    if render_only:
+        _render_only(directory, handle, docs, signals)
+        return
+
+    try:
+        selected_axes = select_axes(axes)
+    except AxisError as exc:
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
+
     cache = Cache()
     budget = Budget(limit=budget_limit, cache=cache)
     echo(f"resynth @{handle}: {len(docs)} documents, no fetching (run {budget.run_id})")
+    echo(f"  axes: {', '.join(a.name for a in selected_axes)}")
     echo("")
 
     result = asyncio.run(
         synthesize(
-            docs, signals, budget, map_effort=map_effort, reduce_effort=reduce_effort, log=echo
+            docs,
+            signals,
+            budget,
+            axes=selected_axes,
+            map_model=map_model,
+            reduce_model=reduce_model,
+            map_effort=map_effort,
+            reduce_effort=reduce_effort,
+            prefilter=not no_filter,
+            log=echo,
         )
     )
     run_meta = {
@@ -692,11 +811,14 @@ def resynth(
         "dropped_findings": result.dropped_findings,
         "corrected_counts": result.corrected_counts,
         "structured_output": result.structured_output,
+        "filter": result.filter_stats.as_dict() if result.filter_stats else {},
+        "analyzed_documents": result.analyzed_documents,
         "budget_stopped": budget.stopped,
     }
 
     if result.synthesis is not None:
         _write_json(directory / "synthesis.json", result.synthesis.model_dump())
+        _write_json(directory / "run_meta.json", run_meta)
     elif result.raw_reduce_output:
         (directory / "reduce_raw_output.txt").write_text(result.raw_reduce_output, encoding="utf-8")
         echo("  dumped unparseable model output to reduce_raw_output.txt")
