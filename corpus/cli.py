@@ -31,6 +31,7 @@ from .budget import (
     estimate_x_cost,
 )
 from .cache import Cache, DEFAULT_TTL_SECONDS
+from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .models import Document, Synthesis
 from .render import render_report
 from .synthesize import synthesize
@@ -54,8 +55,37 @@ app.add_typer(budget_app, name="budget")
 load_dotenv()
 
 
+# The active run's logger, if a run is in progress.
+#
+# A module global rather than a threaded-through parameter: this is a CLI with
+# one run per process, and the alternative is rewriting every echo() call site
+# in this file to carry a logger it would only ever pass along. Commands that
+# are pure output (cache stats, budget log) leave it None and print directly —
+# their output is a result, not a log.
+_ACTIVE_LOGGER: RunLogger | None = None
+
+
 def echo(msg: str = "") -> None:
-    typer.echo(msg)
+    """Emit a line — through the run logger when one is active."""
+    if _ACTIVE_LOGGER is not None:
+        _ACTIVE_LOGGER.logger.info(msg)
+    else:
+        typer.echo(msg)
+
+
+def warn(msg: str) -> None:
+    """A line --quiet must never suppress."""
+    if _ACTIVE_LOGGER is not None:
+        _ACTIVE_LOGGER.logger.warning(msg)
+    else:
+        typer.echo(f"WARNING: {msg}")
+
+
+def error(msg: str) -> None:
+    if _ACTIVE_LOGGER is not None:
+        _ACTIVE_LOGGER.logger.error(msg)
+    else:
+        typer.echo(f"ERROR: {msg}")
 
 
 @dataclass
@@ -163,8 +193,20 @@ def run(
         metavar="DIR",
         help="Dump every raw provider response to DIR verbatim, before normalization.",
     ),
+    log_format: str = typer.Option(
+        TEXT, "--log-format", help="text (default, human-readable) | json (one object per line)"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Include phase and elapsed time on every line."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Warnings and errors only. Never hides a budget stop."
+    ),
 ) -> None:
     """Ingest, hydrate, and synthesize one person's public writing."""
+    if log_format not in LOG_FORMATS:
+        typer.echo(f"ERROR: --log-format must be one of {', '.join(LOG_FORMATS)}")
+        raise typer.Exit(code=2)
     # Validate at the boundary, where the error can name the input and the user
     # can still fix it. An unvalidated handle does not fail downstream — it
     # silently changes what the search query means.
@@ -192,6 +234,13 @@ def run(
         echo(f"ERROR: --budget-mode must be one of {', '.join(BUDGET_MODES)}")
         raise typer.Exit(code=2)
     budget = Budget(limit=budget_limit, cache=cache, mode=budget_mode)
+
+    # The logger keys on the budget's run_id, so a line in the terminal and a
+    # row in `corpus budget log` can be tied together after the fact.
+    global _ACTIVE_LOGGER
+    _ACTIVE_LOGGER = RunLogger(
+        budget.run_id, log_format=log_format, verbose=verbose, quiet=quiet
+    )
 
     echo(f"corpus run @{handle} (run {budget.run_id})")
     echo(f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
@@ -242,7 +291,7 @@ def run(
         echo(f"    Anthropic synthesis:    ~${llm_cost:.3f}")
         echo(f"    total:                  ~${x_cost + llm_cost:.3f} of ${budget_limit:.2f} budget")
         if x_cost + llm_cost > budget_limit:
-            echo("  WARNING: the estimate exceeds the budget. The run will stop early.")
+            warn("the estimate exceeds the budget; the run will stop early")
         echo("")
 
         if dry_run:
@@ -257,6 +306,7 @@ def run(
 
         # ---- ingest ------------------------------------------------------
         echo("Ingesting (sliding time window):")
+        _ACTIVE_LOGGER.context.phase = "ingest"
         raw_tweets, ingest_stats = ingest_timeline(
             client,
             handle,
@@ -293,10 +343,11 @@ def run(
     echo("")
 
     if not raw_tweets:
-        echo("ERROR: no posts ingested. Nothing to synthesize.")
+        error("no posts ingested. Nothing to synthesize.")
         raise typer.Exit(code=1)
 
     # ---- hydrate ---------------------------------------------------------
+    _ACTIVE_LOGGER.context.phase = "hydrate"
     echo("Hydrating:")
     if client is None:
         provider = _OfflineProvider()
@@ -332,6 +383,7 @@ def run(
         echo("")
 
     # ---- signals ---------------------------------------------------------
+    _ACTIVE_LOGGER.context.phase = "signals"
     echo("Computing signals (Python, no API calls)...")
     signals = compute_signals(
         docs, extra={"ingest": ingest_meta, "hydration": hyd_stats.as_dict()}
@@ -367,6 +419,7 @@ def run(
         run_meta["synthesis_error"] = "budget exhausted before synthesis"
         echo("Budget exhausted before synthesis; corpus preserved.")
     else:
+        _ACTIVE_LOGGER.context.phase = "synthesize"
         echo("Synthesizing (map -> reduce):")
         result = asyncio.run(
             synthesize(
@@ -393,12 +446,13 @@ def run(
                     result.raw_reduce_output, encoding="utf-8"
                 )
                 echo("  dumped unparseable model output to reduce_raw_output.txt")
-            echo(f"  SYNTHESIS FAILED: {result.error}")
+            error(f"synthesis failed: {result.error}")
             if not budget.stopped:
                 exit_code = 1
     echo("")
 
     # ---- report + spend --------------------------------------------------
+    _ACTIVE_LOGGER.context.phase = "render"
     report = render_report(
         handle=handle,
         synthesis=synthesis,
@@ -417,8 +471,10 @@ def run(
 
     if budget.stopped:
         echo("")
-        echo("WARNING: the budget was exhausted. Results are partial but every paid")
-        echo("byte was written to disk. Re-run with a higher --budget to continue.")
+        warn(
+            "the budget was exhausted. Results are partial, but every paid byte "
+            "was written to disk. Re-run with a higher --budget to continue."
+        )
         raise typer.Exit(code=0)  # partial results preserved, not a failure
 
     cache.close()
