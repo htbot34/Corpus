@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from corpus.x.providers import BATCH_LOOKUP_MAX
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 _SINCE = re.compile(r"since_time:(\d+)")
@@ -124,7 +126,9 @@ class FakeProvider:
 
     def tweets_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         self.batch_calls.append(list(ids))
-        assert len(ids) <= 100, "batch lookup must be capped at 100 ids"
+        assert len(ids) <= BATCH_LOOKUP_MAX, (
+            f"batch lookup must be capped at {BATCH_LOOKUP_MAX} ids, got {len(ids)}"
+        )
         return [self._by_id[i] for i in ids if i in self._by_id]
 
     def close(self) -> None:

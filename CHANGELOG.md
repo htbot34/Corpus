@@ -1,7 +1,7 @@
 # Changelog
 
 Everything below is the production-readiness pass over the initial one-shot
-build. It starts from 6,145 lines and 83 passing tests, and ends at 394 tests
+build. It starts from 6,145 lines and 83 passing tests, and ends at 399 tests
 with `make check` green.
 
 Two findings shaped it more than the rest, and both are the same shape: a
@@ -12,9 +12,11 @@ that was wrong.
   schema as too large for constrained decoding. Every test passed because the
   stub client returns canned JSON and never submits a schema. Found by running
   it live; see [2026-08-02 — Phase 4](#phase-4--verification).
-- **The X fixtures are still synthetic.** The capture that would have replaced
-  them could not run here. What that leaves unverified is stated rather than
-  glossed; see [Phase 1](#phase-1--wire-contract).
+- **The X fixtures are still synthetic**, because the capture could not run
+  here. A live run later confirmed most of the ingestion path anyway — and found
+  the batch ceiling was 50, not the documented 100. What remains unverified is
+  stated rather than glossed; see [Phase 1](#phase-1--wire-contract) and the
+  [2026-08-02 entry](#2026-08-02--live-run-the-batch-ceiling-is-50-not-100).
 
 ---
 
@@ -60,8 +62,11 @@ environmental: no `X_API_KEY` was present, and the network policy denies
 while control hosts return `200`. A key was supplied later; the network route
 was not, and cannot be changed from inside the container.
 
-So the tweet endpoints remain **unverified**, and the repo says so everywhere
-rather than implying otherwise.
+The tweet endpoints were therefore **unverified** at the end of this phase, and
+the repo said so everywhere rather than implying otherwise. A live run on
+2026-08-02 later confirmed `advanced_search` and measured the `tweets_by_ids`
+ceiling — see the entry at the end of this file. The fixtures themselves are
+still synthetic.
 
 ### Added
 - `--capture-raw DIR` — dumps every raw provider response verbatim, one JSON
@@ -338,12 +343,48 @@ themes, 12 positions, 2 evolution entries, and 4 hooks.
 
 ---
 
+## 2026-08-02 — Live run: the batch ceiling is 50, not 100
+
+A live `corpus run` reached the end of ingestion and then failed hydration with:
+
+```
+400 {"detail":"max 50 tweet_ids per request, please batch into multiple calls"}
+```
+
+The documented ceiling was 100 and the code batched at 100 in three places.
+Now one constant — `BATCH_LOOKUP_MAX = 50` in `providers.py` — used by the
+client-side cap, the chunking in `client.py`, the hydrate docstring and log
+line, the fake provider, and the tests. Pinned by `test_the_batch_ceiling_is_fifty`.
+
+**The rest of ingestion worked.** That run exercised `advanced_search`, the
+`since_time:`/`until_time:` window walk, `_tweets_from`, `_cursor_from`, and
+`normalize_tweet` against real payloads without error. The batch ceiling was the
+only mismatch, and it surfaced as a clean 400 *after* `corpus.json` was already
+on disk — nothing corrupted, nothing to re-fetch, which is the "paid data
+survives" property working.
+
+`advanced_search` is now **CONFIRMED** and `tweets_by_ids` **PARTIALLY
+CONFIRMED** in `docs/wire-contract.md` and `corpus/x/contract.py`.
+`test_unverified_endpoints_are_declared_unverified` fired exactly as designed
+and was updated with the docs, as it is meant to be.
+
+Two things the confirmations deliberately do *not* claim, because "ran without
+error" is weak evidence where every reader has a fallback:
+
+- Which of `_tweets_from`'s four candidate array locations actually matched, or
+  which cursor field name. Not recorded.
+- That `isReply` / `quoted_tweet` / `retweeted_tweet` were read correctly.
+  `normalize_tweet` can only raise on a bad timestamp; a renamed classification
+  field yields a wrong `kind`, silently.
+
+---
+
 ## Still outstanding
 
-- The tweet endpoints are unverified. `docs/wire-contract.md` lists exactly what
-  a capture must answer.
+- The tweet-object field names are probed, not observed — see the 2026-08-02
+  entry above. `last_tweets` is unexercised entirely.
 - `_cursor_from`'s `bool(cursor)` fallback would cost ~20x per window if the
   provider returns a cursor on the last page. Correct output, silent cost.
-- The 100-id batch ceiling and the deleted-parent response are documented, not
-  measured.
+- The deleted-or-protected-parent response is still unverified. (The batch
+  ceiling was measured on 2026-08-02: 50.)
 - Estimator accuracy has no live data yet.

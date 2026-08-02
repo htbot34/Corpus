@@ -379,15 +379,19 @@ python scripts/verify_contract.py --dry-run  # free, prints the plan
 
 Honest failure over polish, so these are stated rather than buried:
 
-- **The tweet endpoints are unverified.** `advanced_search`, `last_tweets`, and
-  `tweets_by_ids` are described from documentation, not observation. The open questions —
-  including whether `since_time:`/`until_time:` are honoured at all, which is the most
-  expensive thing in the file to be wrong about — are listed as a checklist in
-  [`docs/wire-contract.md`](docs/wire-contract.md).
+- **The tweet-object field names are still only probed.** A live ingestion on
+  2026-08-02 confirmed `advanced_search` and the `since_time:`/`until_time:` window walk
+  work end to end, but `_tweets_from` and `_cursor_from` do not record *which* of their
+  candidate names matched, and `normalize_tweet` cannot fail on a renamed `isReply` or
+  `quoted_tweet` — it just produces the wrong `kind`, silently. A `--capture-raw` run
+  closes this in one pass. `last_tweets` is unexercised entirely.
 - **`_cursor_from` falls back to `bool(cursor)`.** If the provider returns a cursor on the
   last page, every window pages to `--max-pages` and pays for it. Correct output, ~20x the
   cost, and nothing would flag it. First item under Pagination in the wire contract.
-- **The 100-id batch ceiling is documented, not measured.** So is the response for a
-  deleted or protected parent, which `hydrate.py` assumes is simply absent from the array.
+- **The deleted-or-protected-parent response is unverified.** `hydrate.py` assumes such
+  a parent is simply absent from the returned array; if it comes back as an object with an
+  error marker, that string is spliced into `context` and read as ground truth by the
+  synthesis prompt. (The batch ceiling *was* documented-not-measured, and it was wrong:
+  50, not 100. Fixed and pinned.)
 - **Estimator accuracy is unproven against real runs.** The machinery to check it exists
   (`corpus budget accuracy`); it has no live data yet.

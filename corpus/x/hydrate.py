@@ -27,6 +27,7 @@ from .client import (
     _tweet_id,
     normalize_tweet,
 )
+from .providers import BATCH_LOOKUP_MAX
 
 UNAVAILABLE = "[unavailable]"
 
@@ -167,7 +168,8 @@ def hydrate_context(
 ) -> list[Document]:
     """Populate context/context_author/context_url on replies and quotes.
 
-    Batched in groups of 100 by the client. A deleted or protected parent gets
+    Batched by the client at the provider's measured ceiling
+    (BATCH_LOOKUP_MAX). A deleted or protected parent gets
     context "[unavailable]" and the document is kept — a reply we cannot
     contextualize is still evidence of cadence and register.
     """
@@ -192,7 +194,7 @@ def hydrate_context(
     to_fetch = [i for i in dict.fromkeys(needed) if i not in inline_quotes]
     fetched: dict[str, dict[str, Any]] = {}
     if to_fetch:
-        log(f"  hydrating {len(to_fetch)} parent/quote targets in batches of 100")
+        log(f"  hydrating {len(to_fetch)} parent/quote targets in batches of {BATCH_LOOKUP_MAX}")
         fetched = client.tweets_by_ids(to_fetch)
         stats.parents_fetched = len(fetched)
     lookup: dict[str, dict[str, Any]] = {**inline_quotes, **fetched}

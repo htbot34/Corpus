@@ -250,13 +250,37 @@ def test_tweets_by_ids_deduplicates_requested_ids(client, provider) -> None:
     assert provider.batch_calls == [[tid]]
 
 
-def test_batch_lookup_is_capped_at_100(client) -> None:
-    from corpus.x.providers import TwitterApiIoProvider
+def test_batch_lookup_is_capped_at_the_measured_ceiling(client) -> None:
+    """50, measured on the wire. The documented figure of 100 returned a 400."""
+    from corpus.x.providers import BATCH_LOOKUP_MAX, TwitterApiIoProvider
 
     provider = TwitterApiIoProvider.__new__(TwitterApiIoProvider)
     with pytest.raises(ProviderError) as exc:
-        TwitterApiIoProvider.tweets_by_ids(provider, [str(i) for i in range(101)])
-    assert "100 ids" in str(exc.value)
+        TwitterApiIoProvider.tweets_by_ids(provider, [str(i) for i in range(BATCH_LOOKUP_MAX + 1)])
+    assert str(BATCH_LOOKUP_MAX) in str(exc.value)
+
+
+def test_the_batch_ceiling_is_fifty() -> None:
+    """Pinned against the live 400 that measured it.
+
+        400 {"detail":"max 50 tweet_ids per request, please batch into
+        multiple calls"}
+
+    Raising this without re-measuring puts the 400 back.
+    """
+    from corpus.x.providers import BATCH_LOOKUP_MAX
+
+    assert BATCH_LOOKUP_MAX == 50
+
+
+def test_hydration_chunks_below_the_ceiling(client, provider) -> None:
+    """The cap in providers.py is a backstop; client.py must not reach it."""
+    from corpus.x.providers import BATCH_LOOKUP_MAX
+
+    client.tweets_by_ids([str(900000 + i) for i in range(BATCH_LOOKUP_MAX * 2 + 7)])
+    assert provider.batch_calls, "no batch call was made"
+    assert all(len(batch) <= BATCH_LOOKUP_MAX for batch in provider.batch_calls)
+    assert len(provider.batch_calls) == 3, "should be exactly three chunks"
 
 
 # -- close ------------------------------------------------------------------

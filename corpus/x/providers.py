@@ -31,6 +31,16 @@ from .capture import RawCapture
 
 TWITTERAPI_IO_BASE = "https://api.twitterapi.io"
 
+# Maximum ids per /twitter/tweets call. MEASURED, not documented: a live run on
+# 2026-08-02 failed hydration with
+#
+#   400 {"detail":"max 50 tweet_ids per request, please batch into multiple calls"}
+#
+# after batching at 100, which was the documented figure. The cap is enforced
+# client-side as well as respected by the chunking in client.py, so a caller
+# reaching the provider directly gets a clear error rather than a 400.
+BATCH_LOOKUP_MAX = 50
+
 # Raw page: (tweets, next_cursor, has_next_page)
 Page = tuple[list[dict[str, Any]], str | None, bool]
 
@@ -385,8 +395,10 @@ class TwitterApiIoProvider:
     def tweets_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         if not ids:
             return []
-        if len(ids) > 100:
-            raise ProviderError("batch tweet lookup takes at most 100 ids per call")
+        if len(ids) > BATCH_LOOKUP_MAX:
+            raise ProviderError(
+                f"batch tweet lookup takes at most {BATCH_LOOKUP_MAX} ids per call, got {len(ids)}"
+            )
         payload = self._get("/twitter/tweets", {"tweet_ids": ",".join(ids)})
         return self._tweets_from(payload)
 

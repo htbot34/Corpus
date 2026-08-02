@@ -11,21 +11,36 @@ documentation**. The distinction is the whole point of the document.
 | | Status |
 | --- | --- |
 | `user_info` | **CONFIRMED** 2026-07-31 against the live API |
-| `advanced_search` | **UNVERIFIED** — documented shapes only |
-| `last_tweets` | **UNVERIFIED** — documented shapes only |
-| `tweets_by_ids` | **UNVERIFIED** — documented shapes only |
+| `advanced_search` | **CONFIRMED** 2026-08-02 — a full ingestion ran end to end |
+| `tweets_by_ids` | **PARTIALLY CONFIRMED** 2026-08-02 — batch ceiling measured at 50 |
+| `last_tweets` | **UNVERIFIED** — not exercised by `corpus run`; documented shapes only |
 
-> **Why three of four are still unverified.** The capture run specified in
-> Phase 1.2 has not been executed. Two independent blockers, both environmental:
-> no `X_API_KEY` is present in this environment (there is no `.env` file), and
-> the network policy denies egress to `api.twitterapi.io:443` — the proxy
-> answers `403` to `CONNECT`, while a control host returns `200`. See
-> [Open questions](#open-questions) for exactly what the capture must answer;
-> the section is written as a checklist so filling it in is mechanical.
+> **What the 2026-08-02 live run established.** A real `corpus run` reached the
+> end of ingestion against the live API. That exercised, on real payloads and
+> without error: `advanced_search`, the `since_time:`/`until_time:` window walk,
+> `_tweets_from`, `_cursor_from`, and `normalize_tweet`. The **only** mismatch
+> was the `/twitter/tweets` batch ceiling — documented as 100, actually 50 — and
+> it surfaced as a clean 400 during hydration rather than as corrupt data.
 >
-> Until then, the tweet-endpoint rows below state **what the code assumes**.
-> That is useful — it is the thing to diff a capture against — but it is not
-> evidence about twitterapi.io.
+> That is a substantial upgrade in confidence: the sliding-window design, the
+> array and cursor probing, and the tweet-object field names all survived
+> contact with reality.
+>
+> **Read the confirmations narrowly, though.** "Ran without error" is weaker
+> evidence for some of these than for others, because most of the readers
+> involved cannot fail — they fall back. Specifically:
+>
+> - `_tweets_from` found *a* tweet array, but which of its four candidate
+>   locations matched was not recorded. Same for `_cursor_from`.
+> - `normalize_tweet` can only raise on an unparseable timestamp. That timestamps
+>   parsed is real evidence; that `isReply`, `quoted_tweet`, or `retweeted_tweet`
+>   were read *correctly* is not — a renamed field there produces a wrong `kind`,
+>   silently, which is exactly the failure this document exists to catch.
+>
+> Those remain open below. A `--capture-raw` run would close them in one pass,
+> and this environment still has no network route to `api.twitterapi.io` (the
+> gateway answers `403` to `CONNECT`), so the captures have to come from a
+> machine that does.
 
 ---
 
@@ -82,12 +97,15 @@ Both formats are now pinned by test:
 
 ---
 
-## `advanced_search` — UNVERIFIED
+## `advanced_search` — CONFIRMED (behaviour), field names still probed
 
 **`GET /twitter/tweet/advanced_search?query=<q>&queryType=Latest&cursor=<c>`**
 
-This is the endpoint the entire history walk runs on, and it is entirely
-unverified. Everything below is what the code does, not what the provider does.
+This is the endpoint the entire history walk runs on, and on 2026-08-02 a real
+run walked a real account's history through it to completion. The table below is
+still written as "what the code assumes" because the probe order means several
+of these entries could be satisfied by a fallback rather than the first
+candidate — see the note at the top.
 
 | What | Code assumes | Where |
 | --- | --- | --- |
@@ -115,15 +133,33 @@ nesting is itself a documented-only claim.
 
 ---
 
-## `tweets_by_ids` — UNVERIFIED
+## `tweets_by_ids` — PARTIALLY CONFIRMED
 
 **`GET /twitter/tweets?tweet_ids=<id>,<id>,...`**
 
-| What | Code assumes | Where |
+| What | Status | Where |
 | --- | --- | --- |
-| Parameter | `tweet_ids`, comma-joined, no spaces | `providers.py:tweets_by_ids` |
-| Batch ceiling | 100 per call, enforced client-side | `providers.py:173` |
-| Missing parent | **Absent from the returned array** | `hydrate.py` renders `[unavailable]` |
+| Parameter | **CONFIRMED** — `tweet_ids`, comma-joined, no spaces. The 400 below is a batch-size complaint, not a parameter one, so the parameter was understood. | `providers.py:tweets_by_ids` |
+| Batch ceiling | **MEASURED 50**, not the documented 100 | `providers.BATCH_LOOKUP_MAX` |
+| Missing parent | assumed **absent from the returned array** — still unverified | `hydrate.py` renders `[unavailable]` |
+
+### The batch ceiling — measured 2026-08-02
+
+A live run failed hydration with:
+
+```
+400 {"detail":"max 50 tweet_ids per request, please batch into multiple calls"}
+```
+
+The documented figure was 100, and the code batched at 100 in three places. It
+is now one constant, `BATCH_LOOKUP_MAX = 50` in `providers.py`, used by the
+client-side cap and by the chunking in `client.py`, and pinned by
+`test_the_batch_ceiling_is_fifty`.
+
+Worth noting how this failed: as a clean 400 during hydration, *after* ingestion
+had completed and `corpus.json` was already on disk. Nothing was corrupted and
+nothing had to be re-fetched — which is the "paid data survives" property
+working as designed.
 
 The missing-parent assumption is load-bearing and untested. If a deleted or
 protected parent comes back as an *object* carrying an error marker rather than
@@ -201,13 +237,13 @@ currently makes without evidence.
 
 **Batching**
 
-- [ ] Does `/twitter/tweets` accept comma-joined `tweet_ids`?
-- [ ] Real batch ceiling — is it 100, or lower, or higher?
+- [x] **Does `/twitter/tweets` accept comma-joined `tweet_ids`?** Yes — measured 2026-08-02. The 400 complained about the batch *size*, not the parameter.
+- [x] **Real batch ceiling — is it 100, or lower, or higher?** **50.** Measured 2026-08-02 from `{"detail":"max 50 tweet_ids per request, please batch into multiple calls"}`. The documented figure of 100 was wrong.
 - [ ] What happens on a batch containing one bad id: whole-request error, or partial results?
 
 **The expensive one**
 
-- [ ] **Are `since_time:` / `until_time:` honoured as documented?** If they are silently ignored, every window returns the same recent page, dedupe eats it, and `ingest.py` walks backwards forever paying full price for zero new posts. `scripts/verify_contract.py` checks this directly by asserting returned timestamps fall inside the requested window.
+- [x] **Are `since_time:` / `until_time:` honoured as documented?** Effectively yes — measured 2026-08-02. A full ingestion completed against a real account, which it could not have done if the operators were ignored: the walk would have re-read the same recent page every window, dedupe would have eaten it, and the run would have stopped on the empty-window rule with a tiny corpus. Not yet confirmed at the level of "every returned timestamp falls inside the requested window" — `scripts/verify_contract.py` asserts exactly that and is the way to close it properly.
 
 ---
 

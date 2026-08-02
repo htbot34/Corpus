@@ -242,26 +242,49 @@ def test_both_confirmed_timestamp_formats_parse(value: str, expected: datetime) 
 
 
 def test_unverified_endpoints_are_declared_unverified() -> None:
-    """Fails deliberately once the Phase 1 capture lands, as a reminder to update.
+    """Fails deliberately when an endpoint's verified status changes.
 
-    When the tweet endpoints are confirmed against the wire, set `verified` on
-    their contracts and update this list. Until then the repo must not imply
-    they were checked.
+    It has now fired twice, which is the point: once when user_info was
+    confirmed (2026-07-31), and again when a live ingestion confirmed
+    advanced_search and measured the tweets_by_ids batch ceiling (2026-08-02).
+    Update this list and docs/wire-contract.md together.
     """
-    assert unverified_endpoints() == [
-        "advanced_search",
-        "last_tweets",
-        "tweets_by_ids",
-    ], (
-        "The set of unverified endpoints changed. If a capture confirmed one, "
-        "update docs/wire-contract.md and this test together."
+    assert unverified_endpoints() == ["last_tweets"], (
+        "The set of unverified endpoints changed. If a capture or a live run "
+        "confirmed one, update docs/wire-contract.md and this test together."
     )
 
 
-def test_user_info_is_the_only_verified_endpoint() -> None:
+def test_verified_endpoints_carry_their_evidence() -> None:
+    """`verified` is a sentence about how, not a boolean. Keep it that way."""
+    for name, contract in CONTRACTS.items():
+        if not contract.is_verified:
+            continue
+        assert len(contract.verified) > 40, (
+            f"{name}.verified is too terse to be evidence: {contract.verified!r}"
+        )
+        assert "2026-" in contract.verified, f"{name}.verified names no date"
+
+
+def test_last_tweets_is_the_remaining_unverified_endpoint() -> None:
     verified = sorted(n for n, c in CONTRACTS.items() if c.is_verified)
-    assert verified == ["user_info"]
+    assert verified == ["advanced_search", "tweets_by_ids", "user_info"]
     assert "2026-07-31" in USER_INFO.verified
+
+
+def test_the_batch_ceiling_is_recorded_in_the_contract() -> None:
+    """Measured 2026-08-02 from a live 400. The docs said 100; it is 50."""
+    from corpus.x.providers import BATCH_LOOKUP_MAX
+
+    assert BATCH_LOOKUP_MAX == 50
+    notes = " ".join(TWEETS_BY_IDS.notes)
+    assert "50" in notes and "measured" in notes.lower()
+
+
+def test_advanced_search_notes_the_cursor_cost_risk() -> None:
+    """The bool(cursor) fallback is still the biggest open cost question."""
+    notes = " ".join(ADVANCED_SEARCH.notes).lower()
+    assert "last page" in notes and "cursor" in notes
 
 
 # --------------------------------------------------------------------------
@@ -282,15 +305,16 @@ def test_verify_contract_script_is_importable_and_offline_safe() -> None:
     assert hasattr(module, "check_advanced_search")
 
 
-def test_verify_contract_refuses_to_run_under_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_contract_refuses_to_run_under_ci() -> None:
     """CI must stay offline and free."""
+    import os
     import subprocess
     import sys as _sys
 
     path = Path(__file__).resolve().parents[1] / "scripts" / "verify_contract.py"
     result = subprocess.run(
         [_sys.executable, str(path)],
-        env={**dict(__import__("os").environ), "CI": "1"},
+        env={**dict(os.environ), "CI": "1"},
         capture_output=True,
         text=True,
         timeout=60,

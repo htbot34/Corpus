@@ -6,6 +6,7 @@ from fake_provider import load
 
 from corpus.x.client import normalize_tweet
 from corpus.x.hydrate import UNAVAILABLE, hydrate, stitch_threads
+from corpus.x.providers import BATCH_LOOKUP_MAX
 
 
 def docs_from_fixture():
@@ -114,10 +115,10 @@ def test_no_replies_flag(client):
     assert stats.replies_dropped > 0
 
 
-def test_hydration_batches_at_100(client):
+def test_hydration_batches_at_the_provider_ceiling(client):
     hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
     for batch in client.provider.batch_calls:
-        assert len(batch) <= 100
+        assert len(batch) <= BATCH_LOOKUP_MAX
 
 
 def test_hydrated_parents_cached_permanently(client, cache):

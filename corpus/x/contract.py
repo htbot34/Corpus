@@ -236,7 +236,13 @@ ADVANCED_SEARCH = EndpointContract(
     name="advanced_search",
     path="/twitter/tweet/advanced_search",
     params=("query", "queryType", "cursor"),
-    verified="",  # UNVERIFIED — see docs/wire-contract.md
+    verified=(
+        "2026-08-02, a full `corpus run` ingestion completed against a live "
+        "account. Behaviour confirmed (the window walk terminates and collects, "
+        "which it could not do if since_time:/until_time: were ignored). Field "
+        "names still only probed — _tweets_from and _cursor_from do not record "
+        "which candidate matched."
+    ),
     envelope=(),
     array_locations=("tweets", "data.tweets", "data", "results"),
     items=TWEET_FIELDS,
@@ -256,9 +262,15 @@ ADVANCED_SEARCH = EndpointContract(
     notes=(
         "Uses since_time:/until_time: (unix seconds) inside the query string. "
         "The date-level since:/until: operators are not honoured by the "
-        "underlying index. Whether the unix-second operators are honoured as "
-        "documented is UNVERIFIED and is the single most expensive thing in "
-        "this file to be wrong about.",
+        "underlying index. The unix-second operators ARE effectively honoured — "
+        "a full ingestion completed on 2026-08-02, which is impossible if they "
+        "are ignored, since every window would return the same recent page and "
+        "the run would stop on the empty-window rule with almost nothing. Not "
+        "yet confirmed per-tweet; scripts/verify_contract.py asserts that "
+        "returned timestamps fall inside the requested window.",
+        "Whether a cursor is returned on the LAST page is still unverified, and "
+        "the bool(cursor) fallback in _cursor_from makes that a silent ~20x cost "
+        "bug if it is.",
     ),
 )
 
@@ -277,15 +289,22 @@ TWEETS_BY_IDS = EndpointContract(
     name="tweets_by_ids",
     path="/twitter/tweets",
     params=("tweet_ids",),
-    verified="",  # UNVERIFIED
+    verified=(
+        "2026-08-02, partially. The tweet_ids parameter and the comma-joined "
+        "form are confirmed; the batch ceiling was measured at 50 by a live 400. "
+        "The deleted/protected-parent response is still unverified."
+    ),
     array_locations=("tweets", "data.tweets", "data", "results"),
     items=TWEET_FIELDS,
     notes=(
-        "tweet_ids is sent comma-joined. The 100-id ceiling in providers.py is "
-        "from documentation, not measurement — UNVERIFIED. So is the response "
-        "for a deleted or protected parent, which hydrate.py renders as "
-        "'[unavailable]' on the assumption that it is simply absent from the "
-        "returned array rather than present with an error marker.",
+        "tweet_ids is sent comma-joined — confirmed 2026-08-02.",
+        "Batch ceiling MEASURED at 50, not the documented 100. A live run "
+        'failed with: 400 {"detail":"max 50 tweet_ids per request, please '
+        'batch into multiple calls"}. See providers.BATCH_LOOKUP_MAX.',
+        "The response for a deleted or protected parent is still UNVERIFIED. "
+        "hydrate.py renders '[unavailable]' on the assumption that it is simply "
+        "absent from the returned array rather than present with an error "
+        "marker.",
     ),
 )
 

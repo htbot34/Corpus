@@ -21,7 +21,7 @@ from ..budget import (
 )
 from ..cache import Cache
 from ..models import Document
-from .providers import Page, ProviderError, XProvider
+from .providers import BATCH_LOOKUP_MAX, Page, ProviderError, XProvider
 
 _TCO = re.compile(r"https?://t\.co/\w+")
 _SELF_HOSTS = ("twitter.com", "x.com", "mobile.twitter.com")
@@ -312,7 +312,7 @@ class XClient:
     # -- hydration --------------------------------------------------------
 
     def tweets_by_ids(self, ids: Iterable[str]) -> dict[str, dict[str, Any]]:
-        """Batch-fetch tweets by id, in groups of 100, cache-first.
+        """Batch-fetch tweets by id, in provider-sized groups, cache-first.
 
         Hydrated tweets are cached permanently: an old tweet's text does not
         change, so paying for it twice is pure waste.
@@ -331,8 +331,8 @@ class XClient:
             # Not fatal: unavailable parents are marked "[unavailable]" upstream.
             return found
 
-        for start in range(0, len(missing), 100):
-            batch = missing[start : start + 100]
+        for start in range(0, len(missing), BATCH_LOOKUP_MAX):
+            batch = missing[start : start + BATCH_LOOKUP_MAX]
             # Reserve as though every id resolves; a deleted parent that comes
             # back empty simply reconciles down.
             with self.budget.reserved_for(
