@@ -325,9 +325,25 @@ thing under suspicion.
 
 | Tier | Documents | What changes |
 | --- | ---: | --- |
-| **thin** | under 40 | Inference switched off. `inferred` and `reasoning` are emptied on every axis, `blind_spots` and `evolution` come back empty, `coverage.confidence` is forced to `low`. Stated positions and `core_model` survive — those are sourced claims. |
+| **thin** | under 40 | Inference switched off. `inferred` and `reasoning` are emptied on every axis, `blind_spots` and `evolution` come back empty, `coverage.confidence` is forced to `low`. Beliefs survive with their evidence, but `role` and `generates` are cleared — see below. |
 | **moderate** | 40–149 | Inference allowed, but every inference must rest on **3 distinct documents** instead of 1. One striking post is an anecdote, not a pattern. |
 | **rich** | 150+ | The behaviour the report was designed around. |
+
+**The cut runs through `core_model`, not around it.** A belief traced to real
+posts is a sourced claim and survives with its evidence. But `role` and
+`generates` describe where a belief sits relative to the others, and that is an
+inference about structure — so at thin they are cleared to `role:
+"unclassified"` and an empty `generates`. Not `held_lightly`: that asserts they
+voice the view but do not defend it, which a thin corpus does not know either,
+and forcing it would trade one confabulation for another. `"unclassified"` is
+deliberately absent from the wire schema's enum, so grammar-constrained decoding
+physically cannot produce it — the value means "code cleared this" and nothing
+else.
+
+The report renames that section **"Beliefs, without the structure"** and says so
+in a line above the list. A flat list under "The generating model" would read as
+a considered tree that happens to have no branches, which is a stronger claim
+than the corpus supports, made by omission.
 
 Both halves are real: the reduce prompt states the tier's rules so the model
 does not spend a generation writing what will be deleted, and `prune_unsourced`
@@ -446,7 +462,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-498 tests, all offline. The suite covers both provider regressions (via
+506 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so

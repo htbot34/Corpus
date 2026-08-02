@@ -531,7 +531,7 @@ under suspicion.
 
 | Tier | Documents | Effect |
 | --- | ---: | --- |
-| thin | under 40 | `inferred` and `reasoning` emptied on every axis; `blind_spots` and `evolution` forced empty; `coverage.confidence` forced `low`. `stated` and `core_model` survive — sourced claims, not inferences. |
+| thin | under 40 | `inferred` and `reasoning` emptied on every axis; `blind_spots` and `evolution` forced empty; `coverage.confidence` forced `low`. Beliefs survive with their evidence; `role` and `generates` are cleared. |
 | moderate | 40–149 | Inference allowed, but each one must rest on 3 distinct sourced documents rather than 1. |
 | rich | 150+ | Unchanged. |
 
@@ -587,3 +587,32 @@ developer's cache; it no longer does.
 
 Test suite 458 → 498. `REDUCE_SCHEMA` is unchanged at 3,251 bytes — the tier is
 a prompt input and a Python rule, not a model-emitted field.
+
+### The cut runs through `core_model`, not around it
+
+A belief traced to real posts is a sourced claim. `role` and `generates`
+describe where that belief sits relative to the others, which is an inference
+about structure — the same kind of claim `blind_spots` makes, and unsupportable
+for the same reason at the same size.
+
+At thin the beliefs and their evidence survive; `role` becomes `"unclassified"`
+and `generates` is emptied.
+
+- **Not `held_lightly`.** That asserts they voice the view but do not defend it,
+  which is itself a claim about the belief. A thin corpus does not know that
+  either, so forcing it would trade one confabulation for another.
+- **`"unclassified"` is absent from `REDUCE_SCHEMA`'s enum** while present in the
+  pydantic `Literal`. Grammar-constrained decoding therefore cannot produce it:
+  the model has three roles in its vocabulary and this fourth one means "code
+  cleared this". It costs nothing — the schema is unchanged at 3,251 bytes.
+- **On the prompt-guided fallback path the grammar is not enforcing that**, so an
+  `"unclassified"` arriving from the model at a tier that allows structure is
+  recorded as `derived` and noted. It must not become a way to opt out of a
+  decision the corpus is big enough to support.
+- **The report renames the section "Beliefs, without the structure"** and leads
+  with "This is a list, not a model." A flat list under "The generating model"
+  reads as a considered tree that happens to have no branches — a stronger claim
+  than the corpus supports, made by omission. The role line and the `generates`
+  arrows are dropped rather than printed empty.
+
+Test suite 499 → 506.

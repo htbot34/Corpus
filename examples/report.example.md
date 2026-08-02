@@ -15,7 +15,7 @@ Regenerate a real one with:  corpus run --x <handle>
 
 # @testsubject (STUB MODEL OUTPUT — not real analysis) — how they think
 
-_Generated 2026-08-02 23:35 UTC · 16 documents · 2024-01-08 to 2024-08-16_
+_Generated 2026-08-02 23:47 UTC · 16 documents · 2024-01-08 to 2024-08-16_
 
 > **Coverage and caveats**
 > 
@@ -25,12 +25,12 @@ _Generated 2026-08-02 23:35 UTC · 16 documents · 2024-01-08 to 2024-08-16_
 > - **Corpus tier: thin (15 documents). Inference is switched off** — see the note below the summary.
 > - Ingestion stopped because: fixture corpus (offline)
 > - 1 reply parents / quote targets were deleted or unavailable; those documents carry `[unavailable]` context.
+> - Dropped in enforcement: core_model 'Process quality is measurable and most people refu': structure cleared, thin corpus (15 documents) cannot place a belief
 > - Dropped in enforcement: core_model 'invented belief' dropped: no valid evidence ids
 > - Dropped in enforcement: reasoning move 'invented move' dropped: example id not in corpus
 > - Dropped in enforcement: blind spot 'Treats their own sample as representative' dropped: thin corpus (15 documents) cannot establish a pattern
 > - Dropped in enforcement: blind spot 'hand-waved blind spot' dropped: thin corpus (15 documents) cannot establish a pattern
-> - Dropped in enforcement: axis 'institutions_and_authority': inference suppressed, thin corpus (15 documents) supports stated positions only
-> - …and 5 further finding(s) dropped; see run metadata.
+> - …and 6 further finding(s) dropped; see run metadata.
 > - 2 model-stated count(s) were overwritten with the values computed in Python; signals.json is authoritative.
 
 ## Summary
@@ -42,6 +42,8 @@ One. Two. Three. Four.
 Only **15 documents** survived filtering, under the 40-document floor. At that size there is no way to tell a position someone holds from a thing they happened to say once, so everything inferential has been switched off rather than guessed at:
 
 - **Inferred positions** on every axis are suppressed. Only `stated` is shown.
+- **Beliefs are listed without structure.** Each one is sourced, but which
+  are load-bearing and what each generates is not assessed.
 - **Blind spots** are empty — a blind spot is a pattern, and there is no
   run of behaviour here to establish one.
 - **What moved** is empty — a change of view needs enough before and after
@@ -52,16 +54,13 @@ This is a limit of the corpus, not of the subject. What is below is still source
 
 **To get the full analysis:** Raise `--max-posts`, drop `--since`, or widen `--empty-window-tolerance` to reach further back; and merge in their long-form writing with `--substack DOMAIN`, `--rss URL`, or `--url URL`, which cost nothing and land in the same corpus.
 
-## The generating model
+## Beliefs, without the structure
 
-The beliefs below are ordered by how much else hangs off them. `generates` is what follows if the belief is held.
+**This is a list, not a model.** Each belief below is traced to real posts and stands on its own. What is missing is the structure: which beliefs are load-bearing, which follow from others, and what each one generates. Placing a belief relative to the others is an inference, and 15 documents cannot support it — so the order here carries no meaning and the `generates` lists are empty rather than guessed.
 
 ### Process quality is measurable and most people refuse to measure it
 
-_load-bearing_ · [2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
-
-- → hostility to interview puzzles
-- → preference for work trials
+[2024-08-16](https://x.com/testsubject/status/1700000000000000170), [2024-08-14](https://x.com/testsubject/status/1700000000000000165)
 
 ## How they reason
 

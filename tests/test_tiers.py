@@ -157,12 +157,65 @@ def test_thin_forces_coverage_confidence_low():
     assert any("confidence forced" in n for n in notes)
 
 
-def test_thin_leaves_core_model_alone():
-    """`core_model` beliefs are sourced claims, not inferences. Suppressing them
-    would leave a thin report with nothing in it at all."""
+def test_thin_keeps_the_beliefs_and_clears_their_structure():
+    """The cut runs through `core_model`, not around it.
+
+    A belief traced to real posts is a sourced claim and survives. Where it
+    sits relative to the other beliefs — `role` and `generates` — is an
+    inference about structure, and a thin corpus cannot support it.
+    """
+    synthesis = fresh()
+    belief = synthesis.core_model[0]
+    assert belief.role == "load_bearing" and belief.generates, "fixture must have structure"
+
+    notes = prune_unsourced(synthesis, IDS, AXES, classify_corpus(12))
+
+    assert synthesis.core_model, "the sourced half must survive a thin corpus"
+    kept = synthesis.core_model[0]
+    assert kept.belief.startswith("Process quality is measurable")
+    assert kept.evidence_ids, "the evidence goes with the belief"
+    assert kept.role == "unclassified"
+    assert kept.generates == []
+    assert any("structure cleared" in n for n in notes)
+
+
+def test_unclassified_is_not_held_lightly():
+    """ "Held lightly" asserts they voice the view but do not defend it, which is
+    itself a claim about the belief. A thin corpus does not know that either, so
+    forcing it would trade one confabulation for another."""
     synthesis = fresh()
     prune_unsourced(synthesis, IDS, AXES, classify_corpus(12))
-    assert synthesis.core_model, "the sourced half must survive a thin corpus"
+    assert synthesis.core_model[0].role != "held_lightly"
+
+
+def test_the_model_cannot_emit_unclassified_itself():
+    """It is absent from the wire enum, so grammar-constrained decoding cannot
+    produce it. The value means "code cleared this" and nothing else."""
+    from corpus.synthesize import REDUCE_SCHEMA
+
+    enum = REDUCE_SCHEMA["properties"]["core_model"]["items"]["properties"]["role"]["enum"]
+    assert enum == ["load_bearing", "derived", "held_lightly"]
+    assert "unclassified" not in enum
+
+
+def test_an_unclassified_role_from_the_model_is_not_honoured():
+    """Only reachable on the prompt-guided fallback path, where the grammar is
+    not enforcing the enum. It must not become a way to opt out of a decision
+    the corpus is big enough to support."""
+    synthesis = fresh()
+    synthesis.core_model[0].role = "unclassified"
+    notes = prune_unsourced(synthesis, IDS, AXES, classify_corpus(900))
+    assert synthesis.core_model[0].role == "derived"
+    assert any("not the model's to assign" in n for n in notes)
+
+
+def test_moderate_and_rich_keep_the_belief_structure():
+    for count in (90, 900):
+        synthesis = fresh()
+        prune_unsourced(synthesis, IDS, AXES, classify_corpus(count))
+        belief = synthesis.core_model[0]
+        assert belief.role == "load_bearing", count
+        assert belief.generates, count
 
 
 # -- moderate: three sources per chain -------------------------------------
@@ -373,7 +426,7 @@ def test_thin_report_explains_itself_and_names_the_remedy(client):
     assert "--rss" in report and "--substack" in report and "--url" in report
     assert "--max-posts" in report
     # And place it above the analysis it qualifies.
-    assert report.index("too small for inference") < report.index("## The generating model")
+    assert report.index("too small for inference") < report.index("## Beliefs, without")
 
 
 def test_moderate_report_states_the_stricter_bar(client):
@@ -550,3 +603,56 @@ def test_the_forced_label_checks_the_value_it_describes(client):
     )
     assert "Model-assessed confidence: **high**" in report
     assert "set in code" not in report
+
+
+def test_thin_report_calls_the_flat_list_a_flat_list(client):
+    """A flat list under "The generating model" reads as a considered tree that
+    happens to have no branches. That is a stronger claim than the corpus
+    supports, made by omission."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    synthesis = fresh(" ".join(f"[id: {d.source_id}]" for d in docs[:2]))
+    prune_unsourced(synthesis, {d.source_id for d in docs}, AXES, classify_corpus(12))
+
+    report = render_report(
+        handle="t",
+        synthesis=synthesis,
+        docs=docs,
+        signals={},
+        budget_lines=[],
+        run_meta={"analyzed_documents": 12, "corpus_tier": "thin"},
+    )
+    assert "## Beliefs, without the structure" in report
+    assert "## The generating model" not in report
+    assert "**This is a list, not a model.**" in report
+    assert "12 documents cannot support it" in report
+    # The belief and its evidence are still there.
+    assert "### Process quality is measurable" in report
+    assert "](https://x.com/testsubject/status/" in report
+    # But no role claim and no arrows.
+    assert "_load-bearing_" not in report
+    assert "→" not in report
+    # And the thin notice names it among what was switched off.
+    assert "Beliefs are listed without structure" in report
+
+
+def test_rich_report_still_presents_the_model_as_a_model(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="t",
+        synthesis=fresh(" ".join(f"[id: {d.source_id}]" for d in docs[:2])),
+        docs=docs,
+        signals={},
+        budget_lines=[],
+        run_meta={"analyzed_documents": 900, "corpus_tier": "rich"},
+    )
+    assert "## The generating model" in report
+    assert "This is a list, not a model" not in report
+    assert "_load-bearing_" in report
+    assert "→ hostility to interview puzzles" in report
+
+
+def test_the_thin_prompt_asks_for_beliefs_without_structure():
+    block = prompt_block(classify_corpus(12))
+    assert "`core_model` beliefs are still expected" in block
+    assert "leave `generates` as an **empty list**" in block
+    assert 'overwritten with "unclassified"' in block

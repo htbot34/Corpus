@@ -98,7 +98,9 @@ def test_render_only_rebuilds_the_report_with_zero_api_calls(tmp_path, client):
     assert result.exit_code == 0, result.output
     assert "$0.0000 spent" in result.output
     report = (directory / "report.md").read_text(encoding="utf-8")
-    assert "## The generating model" in report
+    # Assert on the belief itself rather than the section header: the header
+    # varies with the corpus tier, and this test is about --render-only.
+    assert "Process quality is measurable" in report
     assert "no API calls" in report
 
 
@@ -167,7 +169,7 @@ def test_resynth_itself_still_works_against_an_old_corpus(tmp_path, client, monk
 
     migrated = load_synthesis(directory / "synthesis.json")
     assert migrated.core_model
-    assert "## The generating model" in (directory / "report.md").read_text()
+    assert "Process quality is measurable" in (directory / "report.md").read_text()
 
 
 def test_a_current_synthesis_loads_without_complaint(tmp_path):

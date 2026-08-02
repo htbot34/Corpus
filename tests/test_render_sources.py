@@ -39,6 +39,9 @@ def test_report_has_caveats_at_the_top_and_spend_at_the_bottom(client):
                 "cursor_repeat_breaks": 1,
             },
             "hydration": hyd.as_dict(),
+            # Pinned so the section headers below do not move with the tier.
+            "analyzed_documents": 400,
+            "corpus_tier": "rich",
         },
     )
     header, _, rest = report.partition("## Summary")
