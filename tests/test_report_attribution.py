@@ -121,6 +121,10 @@ def test_the_report_says_what_search_ran_and_what_it_held() -> None:
     assert "6 verified, 1 ingested, 2 held" in report
     assert "unconfirmed.md" in report
     assert "about* the subject" in report
+    # Held candidates were fetched and scored; the scoring is what held them.
+    # "could not be verified" would blame the fetch.
+    assert "not confirmed as theirs" in report
+    assert "could not be verified" not in report
 
 
 def test_a_run_that_never_searched_says_nothing_about_search() -> None:

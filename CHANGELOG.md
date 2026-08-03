@@ -1020,9 +1020,25 @@ reports no usage, so no spend assertion moved.
   written from documentation and says so in its own `_provenance` field; one
   capture run replaces it with evidence.
 
+### Found by looking at the output
+
+A smoke run over the finished pipeline caught a bug the unit tests could not:
+the verification pass refused to fetch a candidate whose *snippet* carried
+neither the name nor a signal, and a page that was unmistakably theirs — author
+metadata, employer named, linking to their GitHub — was held with "nothing
+beyond the name" because its snippet happened to say none of that. The floor
+bought no attribution and cost real coverage; the query had already connected
+the result to the target, and a fetch is free and capped. Every candidate that
+is not rejected outright is now fetched, and the snippet only decides who goes
+first when the cap binds.
+
+The report also said those candidates "could not be verified" when most of
+them were fetched and scored, and the scoring is what held them. Blaming the
+fetch was the wrong story.
+
 ### Housekeeping
 
-- Test suite 638 → 770, still all offline.
+- Test suite 638 → 772, still all offline.
 - No new dependencies.
 - `Fetcher`, `kind_for`, and `suffix_match` made public in `discovery.py` so
   Phase 2 reuses one fetch cap rather than growing a second.

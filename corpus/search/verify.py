@@ -160,14 +160,21 @@ class SearchPhaseResult:
         }
 
 
-def _clears_fetch_floor(score: CandidateScore) -> bool:
-    """Is this worth one HTTP request?
+def snippet_promise(score: CandidateScore) -> tuple[int, bool]:
+    """How promising a snippet looks, for deciding fetch *order*.
 
-    Something has to connect the page to the target before we spend a request
-    on it. A snippet with neither the name nor a single signal is a result the
-    search engine returned for reasons of its own.
+    Deliberately not a floor. An earlier version refused to fetch a candidate
+    whose snippet carried neither the name nor a signal, and that silently
+    dropped correct sources: a search result is 150 characters a model chose
+    to quote, and a page can be unmistakably theirs — declared author,
+    employer named, linking to their GitHub — while its snippet mentions none
+    of it. The query already connected the result to the target; requiring the
+    snippet to say so again bought no attribution and cost real coverage.
+
+    So every candidate that was not rejected outright gets fetched, and this
+    only decides who goes first when `--max-verify-fetches` binds.
     """
-    return score.name_present or bool(score.signals)
+    return score.independent_count, score.name_present
 
 
 def detect_common_name(scores: list[CandidateScore]) -> tuple[bool, int]:
@@ -271,8 +278,8 @@ def search_for_sources(
         candidates.values(),
         key=lambda c: (
             c.score.outcome == "rejected" if c.score else True,
-            -(c.score.independent_count if c.score else 0),
-            not (c.score.name_present if c.score else False),
+            -snippet_promise(c.score)[0] if c.score else 0,
+            not (snippet_promise(c.score)[1] if c.score else False),
             c.url,
         ),
     )
@@ -287,13 +294,11 @@ def search_for_sources(
                 candidate.skipped = "rejected before fetching"
                 _file(result, candidate)
                 continue
-            if score is not None and not _clears_fetch_floor(score):
-                candidate.skipped = "below the fetch floor: nothing connected it to the target"
-                _file(result, candidate)
-                continue
-
             body = fetcher.get(candidate.url)
             if body is None:
+                # A dead host, or the fetch cap. Either way the page was never
+                # read, so it is held on the snippet alone — which can never
+                # be enough.
                 candidate.skipped = "could not be fetched; held on the snippet alone"
                 _file(result, candidate)
                 continue

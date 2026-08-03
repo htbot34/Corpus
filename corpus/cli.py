@@ -1137,8 +1137,8 @@ def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
         )
     if result.held:
         warn(
-            f"{len(result.held)} candidate(s) could not be verified. They are NOT in "
-            "this corpus; see unconfirmed.md."
+            f"{len(result.held)} candidate(s) were not confirmed as theirs. They are NOT "
+            "in this corpus; see unconfirmed.md."
         )
     if result.context:
         echo(

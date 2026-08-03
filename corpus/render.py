@@ -138,9 +138,12 @@ def _search_lines(search: dict[str, Any]) -> list[str]:
             + (f" Adding {fields} to the card would narrow it." if fields else "")
         )
     if search.get("held"):
+        # "not confirmed as theirs", not "could not be verified": most of these
+        # were fetched and scored, and the scoring is what held them. Saying
+        # the fetch failed would blame the wrong thing.
         lines.append(
-            f"- {len(search['held'])} search candidate(s) could not be verified and are "
-            "**not** in this corpus. They are listed in `unconfirmed.md`, with what "
+            f"- {len(search['held'])} search candidate(s) were **not confirmed as theirs** "
+            "and are not in this corpus. They are listed in `unconfirmed.md`, with what "
             "matched and what did not."
         )
     if search.get("context"):

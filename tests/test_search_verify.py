@@ -185,13 +185,61 @@ def test_a_data_broker_is_rejected_without_spending_a_request(cache: Cache) -> N
     assert result.rejected[0].skipped == "rejected before fetching"
 
 
-def test_a_result_with_nothing_connecting_it_is_not_fetched(cache: Cache) -> None:
-    provider = EverythingProvider([hit("https://unrelated.example/x", snippet="a page")])
+def test_a_page_whose_snippet_says_nothing_is_still_fetched(cache: Cache) -> None:
+    """The regression this file exists to prevent a second time.
+
+    An earlier version refused to fetch a candidate whose snippet carried
+    neither the name nor a signal — and silently dropped correct sources,
+    because a snippet is 150 characters a model chose to quote and a page can
+    be unmistakably theirs while its snippet mentions none of it. The query
+    already connected the result to the target.
+    """
+    url = "https://thinking.example/rubrics"
+    provider = EverythingProvider(
+        [hit(url, snippet="Rubrics beat interviews.", title="On rubrics")]
+    )
+    seed(cache, url, GOOD_PAGE)
 
     result = search_for_sources(card(), cache, client_for(provider, cache), log=lambda _m: None)
 
+    assert [c.url for c in result.candidates] == [url], (
+        "a corroborated page was dropped because its snippet was uninformative"
+    )
+    assert result.candidates[0].verified
+
+
+def test_the_fetch_cap_bounds_the_verification_pass(cache: Cache) -> None:
+    """What actually limits the work: a cap on requests, not a guess about
+    snippets. Nothing is seeded here, so every candidate needs a real request
+    and the cap is what stops the third one."""
+    provider = EverythingProvider(
+        [hit(f"https://site{i}.example/p", snippet="Jane Smith") for i in range(5)]
+    )
+
+    result = search_for_sources(
+        card(), cache, client_for(provider, cache), max_fetches=2, log=lambda _m: None
+    )
+
+    assert result.fetches == 2
+    assert any("fetch cap" in e for e in result.errors)
+    assert len(result.held) == 5, "everything unread is held, never quietly dropped"
+    assert all(not c.verified for c in result.held)
+
+
+def test_a_cached_page_does_not_count_against_the_fetch_cap(cache: Cache) -> None:
+    """A cache hit costs nothing, so it is not what the cap is protecting."""
+    provider = EverythingProvider(
+        [hit(f"https://site{i}.example/p", snippet="Jane Smith") for i in range(5)]
+    )
+    for i in range(5):
+        seed(cache, f"https://site{i}.example/p", "<html><body><p>hello</p></body></html>")
+
+    result = search_for_sources(
+        card(), cache, client_for(provider, cache), max_fetches=2, log=lambda _m: None
+    )
+
     assert result.fetches == 0
-    assert "below the fetch floor" in result.held[0].skipped
+    assert result.verified_count == 5
 
 
 def test_a_source_phase_one_already_found_is_corroboration_not_a_new_source(
