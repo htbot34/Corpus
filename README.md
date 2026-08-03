@@ -1,15 +1,23 @@
 # corpus
 
-Ingests a person's entire public X history, hydrates it into readable context, and
-reconstructs **how they think** — the load-bearing beliefs that generate their
-positions, the moves they make when they argue, and where they land on worldview
-axes even when they never say so directly.
+Finds a person's public writing wherever it lives, and reconstructs **how they
+think** — the load-bearing beliefs that generate their positions, the moves they
+make when they argue, and where they land on worldview axes even when they never
+say so directly.
 
 It is not a topic summary. A report that tells you what someone posts about is a
 report you could have written from their profile page.
 
-X is the primary and usually only source. Substack, RSS, and single web pages are
-optional bolt-ons that merge into the same corpus, never the focus.
+X used to be the primary and usually only source. It is now one optional source
+among many, because it turned out not to be reliable: a live test against a public
+account with 706 statuses and 308 followers returned **zero posts** from every
+endpoint and query shape — `last_tweets`, `advanced_search` with and without time
+bounds, `filter:replies`. The provider has no coverage for low-follower accounts.
+The same person's blog, GitHub, and talks were all readable.
+
+So you identify a person, the tool finds what they have published, and the same
+synthesis pipeline runs over the combined corpus. `--x` is optional and a run with
+no X anchor works end to end.
 
 This is a personal research tool with exactly one user. No web UI, no auth, no
 multi-tenancy, no scheduler. It optimizes for signal quality, cost visibility, and
@@ -31,21 +39,29 @@ cp .env.example .env    # then fill in the two keys
 
 | Variable | Required | What it does |
 | --- | --- | --- |
-| `X_API_KEY` | yes | twitterapi.io key, sent as the `X-API-Key` header. New keys get ~$1 trial credit, enough for ~6,000 posts. |
+| `X_API_KEY` | only for X | twitterapi.io key, sent as the `X-API-Key` header. New keys get ~$1 trial credit, enough for ~6,000 posts. Not needed for a run with no X anchor. |
 | `X_PROVIDER` | no | Provider selector. Defaults to `twitterapi_io`. |
 | `X_BASE_URL` | no | Override the provider base URL (proxy, testing). |
 | `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes. |
+| `GITHUB_TOKEN` | no | Raises the GitHub API rate limit from 60/hr to 5,000/hr. Discovery reads at most two public endpoints per target, which fits in the anonymous allowance. |
 | `CORPUS_CACHE_DB` | no | SQLite cache path. Defaults to `~/.corpus/cache.db`. |
+| `CORPUS_PROFILES` | no | Where saved targets live. Defaults to `./profiles.yaml` if present, else `~/.corpus/profiles.yaml`. |
 
 ---
 
 ## Usage
 
 ```bash
-corpus run --x paulg
+# Who are we reading? Anchors are what make everything after this safe.
+corpus profile --name "Jane Smith" --employer "Acme Corp" --github jsmith --site https://janesmith.com
+corpus profile --target janesmith          # show one
+corpus profile                             # list them all
+
+corpus run --target janesmith
+corpus run --x paulg                                  # X only, as before
+corpus run --github jsmith --site https://janesmith.com   # no X at all
+corpus run --target janesmith --dry-run               # the discovery plan, free
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
-corpus run --x someone --dry-run
-corpus run --x someone --also-substack example.com
 corpus run --x paulg --axes politics_and_ideology,defense_intel_natsec
 corpus run --x paulg --resume out/paulg/2026-08-02   # pick up where a dead run stopped
 corpus resynth out/paulg/2026-08-02                  # re-synthesize, no X fetch
@@ -61,6 +77,12 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 
 | Flag | Default | Notes |
 | --- | --- | --- |
+| `--target KEY` | unset | A saved identity card from `profiles.yaml`. Flags override it and never write back. |
+| `--x` / `--github` / `--site` / `--substack` | unset | Anchors: things confirmed to be theirs. At least one identifier is required. |
+| `--name` / `--employer` / `--role` / `--location` | unset | Scored against what discovery finds. `--location` disambiguates a common name. |
+| `--discover` / `--no-discover` | on | Follow links out from the anchors. Free, never fatal. Anchors are read either way. |
+| `--max-fetches` | 25 | Ceiling on discovery's plain-HTTP requests. Not a money guard — there is no money here — but a guard against a hostile link graph. |
+| `--rss URL` / `--url URL` | unset | Repeatable, read directly, not crawled. Anchor-attributed. |
 | `--max-posts` | 3000 | Ingestion stop condition. |
 | `--since YYYY-MM-DD` | unset | History floor. |
 | `--budget` | 10.00 | Hard stop in dollars, enforced **before** each call. Partial results are always preserved. |
@@ -72,7 +94,7 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--no-replies` | off | Replies are included by default and are usually the better corpus. |
 | `--include-reposts` | off | When kept, reposts only ever support amplification claims. |
 | `--refresh` / `--offline` | off | Bypass the cache / run from cache only. |
-| `--dry-run` | off | Print the estimate and stop before any paid fetch. |
+| `--dry-run` | off | Print the discovery plan and the estimate, then stop before any *paid* fetch. Discovery and the free sources still run — that is what makes the estimate mean anything on a run with no X anchor. |
 | `--resume PATH` | unset | Continue a previous run from its `run.json`. |
 | `--axes a,b,c` | all | Which worldview axes to place the subject on. Names come from `corpus/profiles.yaml`; an unknown name is an error, not a silent drop. |
 | `--map-model` / `--reduce-model` | haiku-4.5 / opus-5 | Map is extraction; reduce is judgment. Do not downgrade reduce. |
@@ -82,6 +104,117 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--log-format` | text | `text` or `json` (one object per line). |
 | `--verbose` / `--quiet` | off | Add phase and elapsed time / warnings and errors only. |
 | `--capture-raw DIR` | unset | Dump every raw provider response verbatim, before normalization. |
+
+---
+
+## Finding the writing
+
+### The failure mode this is all built around
+
+Automated search on a name returns other people. A tool that produces confident,
+well-formatted reports and silently attributes a stranger's blog post to the
+target is **worse than no tool**, because the output is indistinguishable from a
+correct one.
+
+Every decision below serves attribution confidence. Where coverage and
+attribution conflict, attribution wins.
+
+### The identity card
+
+You supply the anchors; everything discovered is scored against them.
+
+```yaml
+# profiles.yaml
+targets:
+  janesmith:
+    name: Jane Smith
+    employer: Acme Corp
+    role: VP Engineering
+    location: Seattle          # optional, disambiguates a common name
+    anchors:                   # confirmed to be her
+      x: janesmith
+      github: jsmith
+      site: https://janesmith.com
+      substack: janesmith.substack.com
+    exclude:                   # known false positives
+      - https://linkedin.com/in/jane-smith-attorney
+```
+
+Written by `corpus profile` and safe to hand-edit; saving preserves the rest of
+the file. Anchors are validated where they are written down rather than where
+they are used — an anchor reaches a URL through several callers, and each of them
+getting it right independently is how one of them gets it wrong. An unknown
+anchor kind is an error naming the valid ones, the same rule an unknown axis name
+follows.
+
+The file is deliberately *not* `corpus/profiles.yaml`, which ships in the wheel
+and holds the axes. Targets are personal notes about real people; a `pip install
+-U` must not be able to delete them.
+
+### Attribution, on every document
+
+| Tier | Means | Ingested by default |
+| --- | --- | :-: |
+| `anchor` | A URL or handle you supplied. Certain. | yes |
+| `linked` | Reached by following a link from an anchor. | yes |
+| `corroborated` | Found by search, matching two or more identity signals. | yes |
+| `name_match` | The name matched and nothing else. | **no** |
+
+`name_match` candidates are recorded in `discovery.json` with what matched and
+what did not, and the report says how many were held back. `report.md` shows the
+attribution mix in its coverage block — and stays silent when everything is an
+anchor, because a line reading "100% certain" on every report teaches the reader
+to skip the one where it matters. A finding resting *only* on corroborated
+evidence is flagged at the citation.
+
+### Phase 1: link-following
+
+No search, highest confidence, and it costs nothing. From each anchor:
+
+- **X bio** URL and description links, plus the pinned post — read out of the
+  profile the run already paid for, so the bio itself is free.
+- **GitHub** profile `blog` field and bio, plus the profile README.
+- **Substack** about page.
+- **A personal site**: its outbound links, its declared
+  `<link rel="alternate">` feed, and failing that up to six probes —
+  `/feed`, `/rss.xml`, `/atom.xml`, then `/blog`, `/writing`, `/essays`.
+
+A site that advertises its own feed costs one request; only a site that does not
+gets probed. Once a feed is in hand the homepage is dropped, because a homepage
+with the feed in hand is a nav bar with a photograph.
+
+**What makes a link `linked` rather than a lead.** "Reached from an anchor" is not
+enough on its own: a personal site links to other people's blogs constantly. So
+surfaces are split in two.
+
+- **Declared** surfaces are fields a person filled in about themselves — a GitHub
+  `blog` field, an X bio URL. A link there *is* a claim of ownership, so it is
+  `linked` unconditionally.
+- **Page** surfaces are prose — a profile README, an about page, a homepage. A
+  link there is `linked` only with a corroborating signal (it sits on a host the
+  card already anchors, or the host or path carries their name) and is otherwise
+  held as `name_match`.
+
+Without that split, a profile README — mostly other people's projects, badges,
+and papers — would put half of someone's reading list in the corpus.
+
+Discovery is never fatal. A dead host, a redirect loop, or a hit fetch cap
+degrades the corpus and is reported; it does not end a run, because discovery
+happens before anything has been paid for.
+
+### What is deliberately not built
+
+- **No LinkedIn scraping.** Automated access is blocked and against their terms.
+- **No personal Facebook profiles.** Not public data.
+- **No authenticated scraping of any platform.** No session cookies, no
+  logged-in session reuse.
+- **No aggregation of non-public personal data** — addresses, phone numbers,
+  family, financial records, data-broker output.
+
+This tool reads what a person chose to publish under their own name. That
+constraint is not a limitation to route around; it is what makes the tool
+legitimate. An anchor or a link to one of the above is refused with the reason
+rather than quietly dropped.
 
 ---
 
@@ -159,6 +292,34 @@ bulk of the tokens, which is why it runs on Haiku.
 
 The default `--budget 10.00` comfortably covers a 10,000-post run. `--dry-run` prints
 the estimate for a specific target after one profile lookup (~$0.0002).
+
+### The split by phase
+
+Every estimate now breaks four ways, because a single total cannot tell you which
+phase surprised you. At 1,000 posts:
+
+```
+    discovery (plain HTTP):   $0.000  (4 request(s))
+    fetch — X data:          ~$0.225
+    map:                     ~$0.150
+    reduce:                  ~$0.295
+    total:                   ~$0.670 of $10.00 budget
+```
+
+Reduce is the larger half at that size and barely moves with corpus size, while
+map scales linearly — which is exactly why the split is worth printing.
+
+**Discovery is $0.000 and that is not rounding.** Phase 1 is plain HTTP against
+public pages, cached, with one exception: the pinned-post read goes through the
+metered X API, which is why it only happens when a client is available and never
+under `--dry-run`.
+
+Discovery and every non-X source are read *before* the estimate and before the
+spend confirmation. They are free, and on a run with no X anchor an estimate that
+ignored them would be an estimate of nothing.
+
+Budget **$1.50–$3.00 per target** once search lands. X-only runs are still under
+a dollar.
 
 ### Where the cost was taken out
 
@@ -412,8 +573,9 @@ Written to `out/{handle}/{YYYY-MM-DD}/`:
 | --- | --- |
 | `report.md` | The generating model, the reasoning machinery, the axes (including the silent ones), what moved, what is unresolved, and how to misread it. Every claim hyperlinked to its source post, coverage caveats in a callout at the top, spend summary at the bottom. |
 | `synthesis.json` | The validated schema, for piping into downstream drafting. |
-| `corpus.json` | Every hydrated `Document`. |
+| `corpus.json` | Every hydrated `Document`, each carrying its attribution and the basis for it. |
 | `signals.json` | The computed metrics. |
+| `discovery.json` | The identity card, every candidate found, why each one was believed — and the `name_match` candidates that were held back rather than ingested. |
 
 Plus `run.json` (resume state) and `run_meta.json` (the corpus tier, and what the
 enforcement dropped and why).
@@ -429,19 +591,21 @@ fields the new report needs — and gets a migration message pointing at plain
 
 ---
 
-## Secondary sources
+## Sources other than X
 
 One file each in `corpus/sources/`, merging into the same corpus.
 
-- `--substack DOMAIN` — paginates `/api/v1/archive`, fetches bodies via
+- `--substack DOMAIN` — an anchor. Paginates `/api/v1/archive`, fetches bodies via
   `/api/v1/posts/{slug}`, falls back to `/feed`. Paywalled posts keep title and
-  subtitle only.
-- `--rss URL` — any feed: Medium, Ghost, WordPress, personal blogs.
-- `--url URL` — a single page, readability-style extraction.
+  subtitle only. Its about page is crawled like any other anchor.
+- `--rss URL` — any feed: Medium, Ghost, WordPress, personal blogs. Repeatable,
+  read directly, not crawled.
+- `--url URL` — a single page, readability-style extraction. Repeatable, not crawled.
 
-All three are free (plain HTTP, no metered API) and non-fatal: a failure logs and the
-run continues on X alone. Adding a platform should mean one new file in `sources/`. If
-it requires editing `synthesize.py`, the abstraction is wrong.
+All are free (plain HTTP, no metered API) and non-fatal: any failure — including a
+transport error, which is not a `SourceError` — is converted, logged, and skipped.
+Adding a platform should mean one new file in `sources/`. If it requires editing
+`synthesize.py`, the abstraction is wrong.
 
 ---
 
@@ -449,8 +613,9 @@ it requires editing `synthesize.py`, the abstraction is wrong.
 
 Public content published under the person's own name only. No private or protected
 accounts, no follower graph enumeration, no DMs, no authentication bypass, no paywall
-circumvention. An adapter that would require any of that fails with an explanation
-instead.
+circumvention, no LinkedIn or Facebook scraping, and no aggregation of non-public
+personal data. An adapter that would require any of that fails with an explanation
+instead. See [What is deliberately not built](#what-is-deliberately-not-built).
 
 ---
 
@@ -462,7 +627,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-506 tests, all offline. The suite covers both provider regressions (via
+584 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
@@ -534,3 +699,28 @@ Honest failure over polish, so these are stated rather than buried:
   50, not 100. Fixed and pinned.)
 - **Estimator accuracy is unproven against real runs.** The machinery to check it exists
   (`corpus budget accuracy`); it has no live data yet.
+
+### The discovery layer is half-built, on purpose
+
+Phase 1 landed first because it costs nothing and may cover most targets, and
+that was worth finding out before adding a search bill. What is not here yet:
+
+- **`sources/github.py`.** Discovery already *finds* a GitHub profile and reads
+  its bio and README for links, but there is no adapter to ingest commit
+  messages, PR comments, issue comments, or repo prose. Those are the
+  highest-signal GitHub content by a distance — technical reasoning under
+  disagreement — and a discovered `github` candidate is currently reported as
+  "no adapter yet" rather than silently dropped.
+- **Phase 2 search.** No search vendor and no scoring against found pages, so
+  nothing ever reaches `corroborated` today. `--max-searches` does not exist yet
+  and `discovery.json` records `"searches": 0` so its absence is explicit rather
+  than inferred.
+- **`unconfirmed.md` and `--accept-unconfirmed`.** Held `name_match` candidates
+  land in `discovery.json` and are counted in the report; there is no
+  accept-back path yet.
+- **`transcripts.py` and `paste.py`.** No YouTube captions, no podcast
+  transcripts, and no local-file source — which is also the intended path for
+  LinkedIn content you copy by hand.
+- **Cross-source tiering.** The thin/moderate/rich tiers still count documents
+  only. A corpus that is 95% one source is weaker than the same count spread
+  across four, and nothing says so yet.

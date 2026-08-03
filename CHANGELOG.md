@@ -616,3 +616,158 @@ and `generates` is emptied.
   arrows are dropped rather than printed empty.
 
 Test suite 499 → 506.
+
+---
+
+## 2026-08-03 — Discovery, phase 1: X stops being the assumption
+
+The tool required an X handle and treated X as primary. That assumption was
+wrong, and a live test is what settled it: a public account with **706 statuses
+and 308 followers returned zero posts** from every endpoint and query shape —
+`last_tweets`, `advanced_search` with and without time bounds, `filter:replies`.
+The provider has no coverage for low-follower accounts. The same person's blog,
+GitHub, and talks were readable the whole time.
+
+New shape: you identify a person, the tool finds their public writing wherever
+it lives, and the existing synthesis pipeline runs over the combined corpus.
+`--x` is optional and a run with zero X anchors works end to end. Nothing in
+the synthesis half changed.
+
+This entry covers steps 1 and 2 of the build order. Phase 2 search,
+`sources/github.py`, `unconfirmed.md`, transcripts, paste, and cross-source
+tiering are not here — see [The discovery layer is half-built, on
+purpose](README.md#the-discovery-layer-is-half-built-on-purpose). Link-following
+went first because it costs nothing and may cover most targets, which was worth
+finding out before adding a search bill.
+
+### The failure mode everything else serves
+
+Automated search on a name returns other people. A tool that produces confident,
+well-formatted reports and silently attributes a stranger's blog post to the
+target is worse than no tool, because the output is indistinguishable from a
+correct one. Where coverage and attribution conflict, attribution wins.
+
+### The identity card
+
+`corpus/identity.py`, plus `corpus profile` to write it. Name, employer, role,
+location, the anchors confirmed to be theirs, and the known false positives.
+Targets live in a `profiles.yaml` resolved from `$CORPUS_PROFILES`, then the
+working directory, then `~/.corpus` — deliberately not the package's own
+`profiles.yaml`, which holds the axes and ships in the wheel.
+
+- **Anchors are validated where they are written down**, not where they are
+  used. An anchor reaches a URL through several callers, and each of them
+  getting it right independently is how one of them gets it wrong.
+- **An unknown anchor kind is an error naming the valid ones**, the same rule
+  `--axes` follows: a typo that silently drops an anchor produces a report that
+  looks complete and is not.
+- **LinkedIn, Facebook, and Instagram are refused at that same boundary**, with
+  the reason, rather than three phases later in the middle of a paid run.
+- **Saving is read-modify-write.** The file is hand-edited, and an appender
+  produces two `targets:` keys, of which YAML keeps one.
+
+### Attribution on every document
+
+`Document` gains `attribution`, `attribution_basis`, and
+`attribution_confidence`. Four tiers: `anchor` (you supplied it), `linked`
+(reached from an anchor), `corroborated` (search plus two identity signals),
+`name_match` (the name and nothing else — never ingested by default).
+
+- **The default is `anchor`**, because every document written before this
+  existed came from a handle the user typed. An older `corpus.json` therefore
+  loads with the true value rather than a plausible-looking one.
+- **`Thread.collapse()` carries it through.** Threads are the best documents in
+  an X corpus, and a silent downgrade to the field default would be the worst
+  place to lose provenance.
+- **`sources.base.attribute()` stamps a batch after the fact** rather than
+  threading provenance through `SecondarySource.fetch`. An adapter cannot know
+  how its target was arrived at: the same Substack fetch is an anchor when the
+  user typed the domain and `linked` when discovery found it in a GitHub bio.
+- **`REDUCE_SCHEMA` is unchanged at 3,251 bytes.** Attribution is a property of
+  the corpus and the report, not a field the model emits.
+
+### Phase 1: link-following
+
+`corpus/discovery.py`. From each anchor: the X bio and pinned post, the GitHub
+`blog` field, bio, and profile README, the Substack about page, and a personal
+site's links, declared feed, or probe paths. Everything is cached, so a second
+run over the same target is free.
+
+**The scoring turns on one distinction.** "Reached by following a link from an
+anchor" is not sufficient: a personal site links to other people's blogs
+constantly.
+
+- *Declared* surfaces are fields a person filled in about themselves — a GitHub
+  `blog` field, an X bio URL. A link there is a claim of ownership, so it is
+  `linked` unconditionally.
+- *Page* surfaces are prose — a profile README, an about page, a homepage. A
+  link there is `linked` only with a corroborating signal, and otherwise held as
+  `name_match`.
+
+Without that split, a profile README — mostly other people's projects, badges,
+and papers — would put half of someone's reading list in the corpus.
+`test_a_readme_link_to_a_stranger_is_held_not_ingested` is the test that names
+it.
+
+Other decisions worth stating:
+
+- **A declared feed beats probing.** A site advertising
+  `<link rel="alternate">` costs one request; only a site that does not gets the
+  six probe paths. The homepage is then dropped, because a homepage with the
+  feed in hand is a nav bar with a photograph.
+- **The pinned-post read is the only metered call in the phase**, so it happens
+  only when a client is handed in and never under `--dry-run`. Omit it and the
+  phase is free outright.
+- **A profile link back to an anchor corroborates without becoming a source.**
+  `github.com/jsmith` on their own site is evidence, not writing.
+- **Discovery is never fatal.** A dead host, a redirect loop, or a hit fetch cap
+  degrades the corpus and is reported. It runs before anything has been paid
+  for and must not be the reason a run dies.
+
+### Wiring
+
+- `--x` optional; a run with no X anchor never constructs a provider and needs
+  no `X_API_KEY`.
+- `--no-discover` means "do not follow links", **not** "do not read what I gave
+  you". Anchors are read either way; conflating the two would make the flag
+  useless.
+- `--substack` becomes a card anchor, so its about page is crawled. `--rss` and
+  `--url` stay direct source flags: both repeatable, neither crawled, and "read
+  this page" is a different statement from "this person owns this domain".
+- **Discovery and every non-X source are read before the estimate and before the
+  spend prompt**, because both are free and because on a zero-X run an estimate
+  that ignored them would be an estimate of nothing.
+- The estimate splits four ways — discovery, fetch, map, reduce. A total cannot
+  tell you which phase surprised you.
+- New `discovery.json` records the card, every candidate, why each was believed,
+  and the held `name_match` candidates. A source the run declined to read is
+  written down rather than forgotten.
+- `report.md` shows the attribution mix in coverage and flags a finding resting
+  only on corroborated evidence. It stays **silent** on an all-anchor corpus: a
+  line reading "100% certain" on every report teaches the reader to skip the one
+  where it matters.
+- The report title is the person, not the handle, when there is no X account.
+
+### Found on the way through
+
+`_fetch_one` now converts any adapter failure into a `SourceError`. Adapters
+wrapped HTTP status codes but not transport failures — a DNS miss, a TLS error,
+a proxy 403 — and those arrived as httpx exceptions that no caller caught,
+killing a run that should have degraded. Surfaced by a test whose feed was not
+seeded, which is the honest way to find it.
+
+### Housekeeping
+
+- Test suite 506 → 584, still all offline. The discovery tests replace
+  `http_client` with something that fails the test if it is ever constructed, so
+  the suite cannot quietly acquire a network dependency.
+- `estimate_anthropic_split` was factored out of `estimate_anthropic_cost`,
+  which now calls it. Same arithmetic, reported per phase.
+- No new dependencies.
+
+### Not changed, deliberately
+
+`ingest.py`'s window-completion logic, the reservation machinery, the retry
+policy, the manifest, the wire contract, `BATCH_LOOKUP_MAX = 50`, and every
+schema the model sees. This pass is about finding the corpus, not about what
+happens to it afterwards.
