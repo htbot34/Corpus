@@ -152,7 +152,7 @@ def _host(url: str) -> str:
     return (urlparse(url).hostname or "").lower().removeprefix("www.")
 
 
-def _suffix_match(host: str, needles: Iterable[str]) -> str:
+def suffix_match(host: str, needles: Iterable[str]) -> str:
     for needle in needles:
         if host == needle or host.endswith("." + needle):
             return needle
@@ -189,11 +189,11 @@ def _looks_like_feed(body: str) -> bool:
     return "<rss" in head or "<feed" in head or ("<?xml" in head and "<channel" in body[:2000])
 
 
-def _kind_for(url: str) -> str:
+def kind_for(url: str) -> str:
     """Which adapter should read this URL."""
     host = _host(url)
     path = urlparse(url).path.lower()
-    if host.endswith(".substack.com") or _suffix_match(host, ("substack.com",)):
+    if host.endswith(".substack.com") or suffix_match(host, ("substack.com",)):
         return "substack"
     if path.endswith((".xml", ".rss", ".atom")) or path.rstrip("/").endswith(
         ("/feed", "/rss", "/atom")
@@ -290,7 +290,7 @@ class _Surface:
 # --------------------------------------------------------------------------
 
 
-class _Fetcher:
+class Fetcher:
     """Cached GETs with a hard ceiling and no exceptions escaping.
 
     Discovery runs before anything has been paid for and must never be the
@@ -413,7 +413,7 @@ def _pinned_surfaces(
     return [_Surface("their pinned post", declared=True, links=links)]
 
 
-def _github_surfaces(login: str, fetcher: _Fetcher) -> tuple[list[_Surface], list[str]]:
+def _github_surfaces(login: str, fetcher: Fetcher) -> tuple[list[_Surface], list[str]]:
     """The GitHub profile: the `blog` field is declared, the README is a page.
 
     A profile README is written by its owner, but it is prose — full of links
@@ -453,7 +453,7 @@ def _github_surfaces(login: str, fetcher: _Fetcher) -> tuple[list[_Surface], lis
     return surfaces, signals
 
 
-def _page_surface(url: str, label: str, fetcher: _Fetcher) -> _Surface | None:
+def _page_surface(url: str, label: str, fetcher: Fetcher) -> _Surface | None:
     body = fetcher.get(url)
     if body is None:
         return None
@@ -520,15 +520,15 @@ def score_link(
     host = _host(clean)
     if not host:
         return None, ""
-    if _suffix_match(host, INFRA_HOSTS):
+    if suffix_match(host, INFRA_HOSTS):
         return None, ""
 
-    refused = _suffix_match(host, REFUSED_HOSTS)
+    refused = suffix_match(host, REFUSED_HOSTS)
     if refused:
         return None, f"{clean}: not read — {REFUSED_HOSTS[refused]}"
 
-    is_platform = bool(_suffix_match(host, BLOG_PLATFORMS))
-    if not is_platform and _suffix_match(host, PROFILE_HOSTS):
+    is_platform = bool(suffix_match(host, BLOG_PLATFORMS))
+    if not is_platform and suffix_match(host, PROFILE_HOSTS):
         # A profile page, not writing. It still corroborates the card when it
         # carries a handle we already trust.
         match = _path_carries(clean, card.name_keys())
@@ -546,7 +546,7 @@ def score_link(
     if name_match:
         signals.append(f"host or path carries '{name_match}'")
 
-    kind = _kind_for(clean)
+    kind = kind_for(clean)
     if signals:
         # Within the tier: more agreeing signals is more confidence, but a
         # linked find is never promoted past linked by being very linked.
@@ -631,7 +631,7 @@ def _seed_candidates(card: IdentityCard) -> list[Candidate]:
     return seeds
 
 
-def _probe_site(url: str, card: IdentityCard, fetcher: _Fetcher) -> list[Candidate]:
+def _probe_site(url: str, card: IdentityCard, fetcher: Fetcher) -> list[Candidate]:
     """Resolve a site root to whatever it publishes.
 
     The declared feed is checked first and short-circuits everything: a site
@@ -746,7 +746,7 @@ def discover_from_anchors(
     would confuse two different decisions.
     """
     result = DiscoveryResult()
-    fetcher = _Fetcher(cache, max_fetches if follow_links else 0, log)
+    fetcher = Fetcher(cache, max_fetches if follow_links else 0, log)
     anchor_hosts = card.anchor_hosts()
 
     try:
