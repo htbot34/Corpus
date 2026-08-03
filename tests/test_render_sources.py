@@ -223,6 +223,105 @@ def test_cut_sections_are_gone(client):
         assert heading not in report
 
 
+# -- attribution ------------------------------------------------------------
+
+
+def test_an_all_anchor_corpus_gets_no_attribution_line(client):
+    """The unmarked case must be the certain one. A line reading "100% certain"
+    on every report trains the reader to skip the one where it matters."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert "- Attribution:" not in report
+
+
+def test_a_mixed_corpus_shows_the_mix_and_names_the_weak_half(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    docs[1].attribution = "linked"
+    docs[2].attribution = "corroborated"
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert "- Attribution:" in report
+    assert "1 linked" in report
+    assert "1 corroborated" in report
+    assert "matched rather than supplied" in report
+
+
+def test_a_finding_resting_only_on_corroborated_evidence_is_flagged(client):
+    """Corroborated is good enough to ingest and not good enough to let a claim
+    stand on it silently."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    synthesis = _synthesis([docs[0].source_id])
+    synthesis.core_model[0].evidence_ids = [docs[0].source_id]
+    docs[0].attribution = "corroborated"
+    report = render_report(
+        handle="testsubject",
+        synthesis=synthesis,
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert "corroborated sources only" in report
+
+
+def test_one_anchor_among_the_evidence_removes_the_flag(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    synthesis = _synthesis([d.source_id for d in docs[:2]])
+    synthesis.core_model[0].evidence_ids = [docs[0].source_id, docs[1].source_id]
+    docs[0].attribution = "corroborated"  # docs[1] stays an anchor
+    report = render_report(
+        handle="testsubject",
+        synthesis=synthesis,
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    belief_block = report.split("### Process quality is measurable")[1].split("###")[0]
+    assert "corroborated sources only" not in belief_block
+
+
+def test_held_candidates_are_named_in_the_coverage_block(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="testsubject",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={"discovery": {"held": [{"url": "https://someone-else.example"}]}},
+    )
+    assert "matched the name and nothing else" in report
+    assert "discovery.json" in report
+
+
+def test_the_title_names_the_person_when_there_is_no_handle(client):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    report = render_report(
+        handle="janesmith",
+        subject="Jane Smith",
+        synthesis=_synthesis([d.source_id for d in docs[:2]]),
+        docs=docs,
+        signals=compute_signals(docs),
+        budget_lines=[],
+        run_meta={},
+    )
+    assert report.startswith("# Jane Smith — how they think")
+
+
 # -- secondary sources ------------------------------------------------------
 
 
