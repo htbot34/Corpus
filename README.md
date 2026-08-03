@@ -42,7 +42,8 @@ cp .env.example .env    # then fill in the two keys
 | `X_API_KEY` | only for X | twitterapi.io key, sent as the `X-API-Key` header. New keys get ~$1 trial credit, enough for ~6,000 posts. Not needed for a run with no X anchor. |
 | `X_PROVIDER` | no | Provider selector. Defaults to `twitterapi_io`. |
 | `X_BASE_URL` | no | Override the provider base URL (proxy, testing). |
-| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes. |
+| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes, and for Phase 2 search via the server-side `web_search` tool. One key, no second vendor. |
+| `SEARCH_PROVIDER` | no | Search provider selector. Defaults to `anthropic_search`. `exa` and `brave` are stubs naming what to add. |
 | `GITHUB_TOKEN` | no | Raises the GitHub API rate limit from 60/hr to 5,000/hr. Discovery reads at most two public endpoints per target, which fits in the anonymous allowance. |
 | `CORPUS_CACHE_DB` | no | SQLite cache path. Defaults to `~/.corpus/cache.db`. |
 | `CORPUS_PROFILES` | no | Where saved targets live. Defaults to `./profiles.yaml` if present, else `~/.corpus/profiles.yaml`. |
@@ -60,7 +61,9 @@ corpus profile                             # list them all
 corpus run --target janesmith
 corpus run --x paulg                                  # X only, as before
 corpus run --github jsmith --site https://janesmith.com   # no X at all
-corpus run --target janesmith --dry-run               # the discovery plan, free
+corpus run --target janesmith --dry-run               # the plan and the queries, free
+corpus run --target janesmith --no-search             # anchors and link-following only
+corpus run --target janesmith --max-searches 20       # look harder, ~$0.01 a query
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
 corpus run --x paulg --axes politics_and_ideology,defense_intel_natsec
 corpus run --x paulg --resume out/paulg/2026-08-02   # pick up where a dead run stopped
@@ -71,6 +74,10 @@ corpus cache clear --keep-permanent
 corpus cache vacuum
 corpus budget log
 corpus budget accuracy                  # how wrong --dry-run has been, historically
+
+# Everything search found and could not prove lands in unconfirmed.md. Tick the
+# boxes next to what really is theirs, then hand the file back:
+corpus run --target janesmith --accept-unconfirmed out/janesmith/2026-08-03/unconfirmed.md
 ```
 
 ### Options that matter
@@ -82,6 +89,10 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--name` / `--employer` / `--role` / `--location` | unset | Scored against what discovery finds. `--location` disambiguates a common name. |
 | `--discover` / `--no-discover` | on | Follow links out from the anchors. Free, never fatal. Anchors are read either way. |
 | `--max-fetches` | 25 | Ceiling on discovery's plain-HTTP requests. Not a money guard — there is no money here — but a guard against a hostile link graph. |
+| `--search` / `--no-search` | on | Phase 2: find sources the anchors do not reach. Costs ~$0.01 per query. Never ingests what it cannot verify. |
+| `--max-searches` | 12 | Billable queries per run, reported in the estimate and the report. Cached queries are free and do not count. |
+| `--max-verify-fetches` | 20 | Pages fetched to verify search candidates. Free, plain HTTP. |
+| `--accept-unconfirmed PATH` | unset | Read back an edited `unconfirmed.md`: ticked entries are ingested as `corroborated`, unticked ones go into the card's `exclude` list. |
 | `--rss URL` / `--url URL` | unset | Repeatable, read directly, not crawled. Anchor-attributed. |
 | `--max-posts` | 3000 | Ingestion stop condition. |
 | `--since YYYY-MM-DD` | unset | History floor. |
@@ -104,6 +115,7 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 | `--log-format` | text | `text` or `json` (one object per line). |
 | `--verbose` / `--quiet` | off | Add phase and elapsed time / warnings and errors only. |
 | `--capture-raw DIR` | unset | Dump every raw provider response verbatim, before normalization. |
+| `--capture-search DIR` | unset | Dump every raw search response verbatim, before it is interpreted. |
 
 ---
 
@@ -161,7 +173,8 @@ and holds the axes. Targets are personal notes about real people; a `pip install
 | `name_match` | The name matched and nothing else. | **no** |
 
 `name_match` candidates are recorded in `discovery.json` with what matched and
-what did not, and the report says how many were held back. `report.md` shows the
+what did not, written to `unconfirmed.md` as an editable checklist, and counted
+in the report. `report.md` shows the
 attribution mix in its coverage block — and stays silent when everything is an
 anchor, because a line reading "100% certain" on every report teaches the reader
 to skip the one where it matters. A finding resting *only* on corroborated
@@ -202,6 +215,113 @@ and papers — would put half of someone's reading list in the corpus.
 Discovery is never fatal. A dead host, a redirect loop, or a hit fetch cap
 degrades the corpus and is reported; it does not end a run, because discovery
 happens before anything has been paid for.
+
+### Phase 2: search
+
+Phase 1 only reaches what the anchors already point at. Phase 2 looks for what
+they do not — and it is the phase that can find the wrong person, so almost all
+of it is machinery for not doing that.
+
+**Never a bare name.** Queries are built from the identity card, and a query
+whose field is missing is skipped rather than emitted with an empty slot:
+
+```
+"Jane Smith" "Acme Corp" Seattle      # location boosts the two highest-yield queries
+"@janesmith"                          # people cite handles
+jsmith github
+"Jane Smith" "VP Engineering"
+"Jane Smith" blog OR essay OR writing Seattle
+"Jane Smith" author OR byline
+"Jane Smith" interview OR podcast OR transcript
+"Jane Smith" talk OR keynote OR conference
+"Jane Smith" "Acme Corp" site:news.ycombinator.com
+```
+
+Precision first, because `--max-searches` truncates from the end: a cap of 3
+buys the employer and handle queries, not the conference sweep. Results are
+cached by query string **permanently** — iterating on the scoring must not cost
+a dollar a lap.
+
+**Two passes, because a snippet is not evidence.** A snippet is 150 characters
+a model chose to quote on a page nobody has read, and every strong signal lives
+in the page. So *discover* scores snippets only to decide what is worth
+fetching, and *verify* fetches the survivors and scores those. Only the second
+pass can promote anything; a candidate that was never fetched is held no matter
+how good its snippet looked.
+
+**Scoring is deterministic Python** — no model call, no network, no clock. The
+file that decides whether a stranger's essay is attributed to the subject can be
+read, argued with, and tested for free.
+
+| Signal | Weight |
+| --- | --- |
+| Page links to a known anchor | strong |
+| Domain is or subdomains an anchor domain | strong |
+| Structured author metadata matches the name (`<meta name="author">`, JSON-LD, OpenGraph, feed `<author>`) | strong |
+| Two or more anchor handles co-occur on the page | strong |
+| Employer named on the page | moderate |
+| Role matches | moderate |
+| Name in the byline rather than the body | moderate |
+| Location matches | weak |
+
+The negatives are the half that makes it work, because **absence of confirmation
+is not the same as presence of contradiction** and a scorer with only positive
+signals accepts the wrong person cheerfully — it never finds a reason not to.
+
+| Negative | Effect |
+| --- | --- |
+| Matches an `exclude` entry | reject |
+| Aggregator, directory, or people-search domain | reject |
+| Name appears only as a citation of someone else's work | reject |
+| Page is *about* them rather than *by* them | recorded as context, never a corpus document |
+| Page states a **different** employer for this name | strong — demotes to held |
+| Page states a different location or a clearly different field | moderate — demotes to held |
+
+Negatives are checked *before* the positives are counted, and any unresolved one
+demotes: a page with three strong signals and one contradiction goes to a human.
+"Unresolved" is doing real work there — a page naming a different employer is a
+contradiction *unless* it also names the right one, in which case it is a page
+that mentions two companies. Each negative names what would resolve it.
+
+Two or more independent strong-or-moderate signals with no negatives →
+`corroborated`, and ingested. Anything else → `name_match`, and held.
+**`linked` is unreachable from search by construction**: it means "reached from
+a declared field on an anchor", and no quantity of search evidence turns into a
+self-declaration.
+
+Signals that are two views of one fact count once. A `<meta name="author">` tag
+and a visible "By Jane Smith" are usually the same byline rendered twice, and
+counting both would manufacture corroboration out of a single claim — which is
+exactly how a threshold of two gets defeated.
+
+### When the name is too common
+
+If eight or more distinct domains match the name with no other signal, the phase
+**stops rather than guessing**. Nothing is ingested, nothing further is even
+fetched, and the run says which card fields would narrow it — `employer` first,
+then `location`, then `role`. A tool that guesses on "John Smith" is a liability.
+
+### The unconfirmed workflow
+
+Everything held lands in `out/{target}/{date}/unconfirmed.md`, one checkbox per
+candidate with what found it, what matched, what did not, and what the page says:
+
+```markdown
+- [ ] https://someblog.example/about
+      Found by: query `"Jane Smith" "Acme Corp"`
+      Matched: their name is in the byline
+      Did not match: the page puts this name at 'Beta Industries', not Acme Corp
+      Snippet: ...
+```
+
+Hand it back with `--accept-unconfirmed PATH`. **Ticked** entries are ingested as
+`corroborated` with basis `user-confirmed` — a person is better evidence than any
+signal in the scorer, which is why the path exists. **Unticked** entries are
+written into the card's `exclude` list so they never resurface.
+
+That asymmetry makes an *unedited* file dangerous, since it would reject every
+candidate forever. So the file says so at the top, and a run given a file with
+nothing ticked asks before acting on it.
 
 ### What is deliberately not built
 
@@ -258,6 +378,7 @@ Two independent meters: X data and Anthropic tokens. Both are tracked per call i
 | Tweet read (twitterapi.io) | $0.15 / 1,000 |
 | Profile read (twitterapi.io) | $0.18 / 1,000 |
 | Minimum charge per request | $0.00015 |
+| Web search (Anthropic server-side tool) | $10 / 1,000 searches, plus the tokens the results consume |
 | `claude-haiku-4-5-20251001` (map) | $1 / $5 per MTok |
 | `claude-opus-5` (reduce) | $5 / $25 per MTok |
 | `claude-sonnet-5` | $2 / $10 per MTok (introductory, through 2026-08-31; $3 / $15 after) |
@@ -319,8 +440,14 @@ Discovery and every non-X source are read *before* the estimate and before the
 spend confirmation. They are free, and on a run with no X anchor an estimate that
 ignored them would be an estimate of nothing.
 
-Budget **$1.50–$3.00 per target** once search lands. X-only runs are still under
-a dollar.
+Budget **$1.50–$3.00 per target** with search on. X-only runs are still under a
+dollar, and `--no-search` keeps a run there.
+
+Search is the most expensive thing per call in the tool: $0.01 a query means the
+default `--max-searches 12` is ~$0.12 in fees before a token. It is also the only
+cost a cache can remove entirely, which is why results are cached by query string
+permanently — a re-run at a higher cap pays only for the queries it has not
+already run.
 
 ### Where the cost was taken out
 
@@ -577,6 +704,7 @@ Written to `out/{handle}/{YYYY-MM-DD}/`:
 | `corpus.json` | Every hydrated `Document`, each carrying its attribution and the basis for it. |
 | `signals.json` | The computed metrics. |
 | `discovery.json` | The identity card, every candidate found, why each one was believed — and the `name_match` candidates that were held back rather than ingested. |
+| `unconfirmed.md` | Every search candidate that could not be verified, as an editable checklist. Hand it back with `--accept-unconfirmed`. |
 
 Plus `run.json` (resume state) and `run_meta.json` (the corpus tier, and what the
 enforcement dropped and why).
@@ -689,7 +817,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-638 tests, all offline. The suite covers both provider regressions (via
+770 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
@@ -762,10 +890,11 @@ Honest failure over polish, so these are stated rather than buried:
 - **Estimator accuracy is unproven against real runs.** The machinery to check it exists
   (`corpus budget accuracy`); it has no live data yet.
 
-### The discovery layer is half-built, on purpose
+### Both discovery phases are built; here is what they still cannot do
 
 Phase 1 landed first because it costs nothing and may cover most targets, and
-that was worth finding out before adding a search bill. What is not here yet:
+that was worth finding out before adding a search bill. Phase 2 followed. What
+is still missing or unproven:
 
 - **Commit messages, in practice.** `sources/github.py` extracts and filters
   them, but GitHub's events feed no longer carries a `commits` array — see the
@@ -778,16 +907,26 @@ that was worth finding out before adding a search bill. What is not here yet:
   `IssueCommentEvent`, which *was* captured — but that the path returns a bare
   array of them is assumed. Declared unverified in the contract and pinned by a
   test.
-- **Phase 2 search.** No search vendor and no scoring against found pages, so
-  nothing ever reaches `corroborated` today. `--max-searches` does not exist yet
-  and `discovery.json` records `"searches": 0` so its absence is explicit rather
-  than inferred.
-- **`unconfirmed.md` and `--accept-unconfirmed`.** Held `name_match` candidates
-  land in `discovery.json` and are counted in the report; there is no
-  accept-back path yet.
+- **The search fixture is written from documentation, not captured.** Same
+  status as the tweet-endpoint fixtures, and stated in the fixture itself:
+  `tests/fixtures/web_search_response.json` proves the parser and the fixture
+  agree, not that either matches the API. One `--capture-search` run closes it.
+- **The scoring thresholds are judgement, not measurement.** Two independent
+  signals for `corroborated`, eight domains for a common name, 80% for source
+  concentration: round numbers chosen for where the failure mode changes, like
+  the corpus tiers, and the code says so rather than implying precision it does
+  not have. They are worth revisiting against a few dozen real targets.
+- **The `about them, not by them` detector is heuristic.** Author metadata
+  naming someone else is solid; the URL markers and the third-person-quotation
+  count are judgement calls that will occasionally hold a real page. It errs
+  toward holding, which is the direction this tool errs everywhere.
 - **`transcripts.py` and `paste.py`.** No YouTube captions, no podcast
   transcripts, and no local-file source — which is also the intended path for
   LinkedIn content you copy by hand.
-- **Cross-source tiering.** The thin/moderate/rich tiers still count documents
-  only. A corpus that is 95% one source is weaker than the same count spread
-  across four, and nothing says so yet.
+- **Cross-source tiering is stated, not enforced.** A corpus more than 80% one
+  source is now counted in Python, injected into the reduce prompt as ground
+  truth, and stated in the report's coverage block. It is deliberately *not* a
+  rule that deletes axes: "fewer than 40 documents" is arithmetic, while "a
+  GitHub-only corpus cannot speak to their politics" is a judgement about
+  subject matter, and encoding that as enforcement would be the topical
+  filtering this tool refuses everywhere else.

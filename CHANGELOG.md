@@ -865,3 +865,164 @@ the full sha now.
 - `gh_captures/` deleted and gitignored alongside `captures/`. The blobs remain
   in git history, where they were committed before this session.
 - No new dependencies.
+
+---
+
+## 2026-08-03 — Phase 2: search, and proving a candidate belongs
+
+Phase 1 follows links out from the anchors. It costs nothing, and on a target
+with a good GitHub bio it may be all you need — which is why it shipped first.
+Phase 2 is the other half: finding sources the user does not already know
+about.
+
+Almost all of it is machinery for not attributing a stranger's essay to the
+subject. A tool that produces confident, well-formatted reports and silently
+gets the person wrong is worse than no tool, because the output is
+indistinguishable from a correct one. Where coverage and attribution
+conflicted, attribution won, every time.
+
+### The scoring model is the part that matters
+
+`corpus/search/scoring.py` is deterministic Python: no model call, no network,
+no clock. Same inputs, same verdict, every time, and fully testable for free.
+That is not an optimization — it is what makes the decision auditable, and the
+decision is whether someone else's writing enters a corpus attributed to the
+subject.
+
+The rule the file serves: **absence of confirmation is not the same as presence
+of contradiction.** A scorer built only from positive signals accepts the wrong
+person cheerfully, because it never finds a reason not to. So negatives are
+first-class, checked *before* the positives are counted, and any unresolved one
+demotes — a page carrying three strong signals and one contradiction goes to a
+human rather than into the corpus.
+
+"Unresolved" does real work there. A page naming a different employer for this
+name is a contradiction *unless* the page also names the right one, in which
+case it is a page that mentions two companies. Each negative records what would
+have resolved it, so the report can say why a page was held rather than only
+that it was.
+
+Two decisions worth stating because they are where a threshold of two gets
+defeated:
+
+- **Signals that are two views of one fact count once.** A `<meta
+  name="author">` tag and a visible "By Jane Smith" are usually the same byline
+  rendered twice, and counting both manufactures corroboration out of a single
+  claim.
+- **Structured author metadata is kept apart from a name in the body.** The
+  first is a declaration of authorship by the publisher; the second is as
+  likely to be a citation of someone else's work, and on a page *about* a
+  person it is certain to be.
+
+`linked` is unreachable from search by construction, and pinned by a test. It
+means "reached from a declared field on an anchor", and no quantity of search
+evidence turns into a self-declaration.
+
+### A snippet is not evidence
+
+Two passes. *Discover* scores snippets only to decide what is worth fetching
+and to throw out what is disqualified by its URL alone. *Verify* fetches the
+survivors and scores against the fetched page. Only the second can promote
+anything; a candidate never fetched is held however good its snippet looked.
+
+That ordering pays twice: a candidate disqualified on its URL is never fetched,
+which saves a request and — in the case of a people-search site — avoids making
+one at all.
+
+### The pages that look most relevant are often the least usable
+
+A profile piece, an interview write-up, and a conference bio are all *about*
+the target. They rank highly for a name search, they read as relevant to any
+name-matching scorer, and they contain the interviewer's prose rather than the
+subject's reasoning. They are recorded as context and never enter the corpus.
+
+### Common names stop the phase rather than steering it
+
+Past eight distinct domains matching the name with no other signal, nothing is
+ingested, nothing further is fetched, and the run names which card fields would
+narrow it. Distinct *domains*, not results: ten pages on one news site is one
+publication writing about one person; ten pages on ten domains is ten people.
+A tool that guesses on "John Smith" is a liability.
+
+### unconfirmed.md, and the way back in
+
+Everything held becomes an editable checklist with what found it, what matched,
+what did not, and what the page says. Ticked entries are ingested as
+`corroborated` with basis `user-confirmed` — a person is better evidence than
+any signal in the scorer. Unticked entries go into the card's `exclude` list.
+
+That asymmetry makes an unedited file dangerous, since it would reject every
+candidate forever, so the file says so at the top and a run given a file with
+nothing ticked asks first.
+
+### The provider seam
+
+`corpus/search/providers.py` mirrors `corpus/x/providers.py`, which has
+survived one provider change well. `anthropic_search` is implemented against
+the server-side `web_search_20250305` tool using the key synthesis already
+needs; `exa` and `brave` are stubs naming the exact env var and endpoint to
+add.
+
+Two properties of that tool shaped the file. **Billing is per search, not per
+call** — `usage.server_tool_use.web_search_requests` at $10/1,000, and an
+errored search is not billed — so `max_uses` is pinned to 1, which is what
+makes the reservation exact rather than a guess about what the model will
+decide to do. And **there is no snippet field**: the readable text comes from
+the model's citations, where `cited_text` is a verbatim quotation and is not
+billed as tokens.
+
+An errored search is a **200** with an error object where the result list
+belongs. A caller that only catches exceptions sees silence; the parser returns
+those errors, and the run reports them — otherwise "no web presence" and "the
+rate limiter said no" produce the same report.
+
+### Two bugs from the live @paulg run
+
+Both the same shape: the report contradicting itself a few lines apart, with
+the honest version in the caveats.
+
+**An axis with one glancing mention had a `weak signal`.** The
+`defense_intel_natsec` axis reported weak on one tangential AI-influence-ops
+exchange plus a shared link to a .gov visa portal, while the coverage block
+said, correctly, that there were no documents on the subject beyond one
+glancing exchange. `weak` now requires at least two documents of *substantive
+engagement*, and a shared link with no commentary is not engagement — that
+judgement already existed in `prefilter.classify`, so it is exposed as
+`is_substantive_engagement` rather than reimplemented. The prompt states the
+rule; `_enforce_axes` makes it true.
+
+**The header said `94 documents` and the coverage block said `90 of 94`.** The
+Python count correction fires on `coverage.total_documents`; the header read
+`len(docs)`. It now reads the corrected count.
+
+### The suite was quietly online, and is not any more
+
+Search running by default meant four CLI test files were making real HTTPS
+calls to api.anthropic.com and passing anyway, because a failed search is
+deliberately non-fatal. Green, "offline", and network-dependent. A conftest
+guard now fails any test that builds a live client for search — it caught 16 —
+and the CLI fixtures use a provider that answers with nothing and, importantly,
+reports no usage, so no spend assertion moved.
+
+### Also
+
+- **Source concentration.** Past 80% from one source the report says so and
+  says what that source can speak to, and the same fact is injected into the
+  reduce prompt as ground truth. Deliberately *not* enforced in code: "fewer
+  than 40 documents" is arithmetic, "a GitHub-only corpus cannot speak to their
+  politics" is a judgement about subject matter, and encoding that as a rule
+  that deletes axes would be the topical filtering this tool refuses
+  everywhere else.
+- **The report says what search did** — queries run, results seen, verified,
+  ingested, held. A run that searched and found nothing and a run that never
+  searched otherwise look identical.
+- `--capture-search DIR`, mirroring `--capture-raw`. The search fixture is
+  written from documentation and says so in its own `_provenance` field; one
+  capture run replaces it with evidence.
+
+### Housekeeping
+
+- Test suite 638 → 770, still all offline.
+- No new dependencies.
+- `Fetcher`, `kind_for`, and `suffix_match` made public in `discovery.py` so
+  Phase 2 reuses one fetch cap rather than growing a second.
