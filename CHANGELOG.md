@@ -1249,3 +1249,97 @@ repo — the rule `gh_captures/` already followed.
 - Test suite 792 → 808, still all offline. Three of the new tests fail against
   the old gate, which is the only reason to trust them.
 - `make check` green again.
+
+---
+
+## 2026-08-03 — Weigh the signals, don't count them
+
+The dustinw run, with pages readable this time, finally produced calibration
+data: 50 candidates, 12 pages read, 2 corroborated, 24 held. `links_to_anchor`
+— a strong signal — fired six times and promoted twice. The cause was
+arithmetic, in `scoring.py`: `count_independent` dropped weak signals and then
+counted strong and moderate identically, and `CORROBORATION_THRESHOLD = 2`
+counted signals rather than weighing them. Two moderate agreements promoted;
+one strong self-declaration did not. The weights existed and decided nothing.
+
+### Corroboration is now points
+
+A strong signal is worth 2 points, a moderate 1, a weak 0.5, and 2.0 points
+with no unresolved blocking negative → `corroborated`. One strong
+self-declaration is enough; so are two moderate agreements; weak signals
+assist without ever promoting on their own.
+
+Nothing else about the model moved:
+
+- `_SIGNAL_GROUPS` deduplication holds, at the strongest member's weight. A
+  `<meta name="author">` tag plus a visible byline is one claim worth 2.0
+  points — never a strong plus a moderate summing to 3.0.
+- The negatives still short-circuit every promotion path, including the new
+  single-strong-signal one; the tests pin `about_not_by` and `citation_only`
+  against a page that would otherwise promote on a furniture link alone.
+- `linked` stays unreachable: confidence is reworked for points but keeps the
+  0.8 ceiling under linked's 0.85, and
+  `test_search_can_never_promote_to_linked` passes unchanged.
+- `CandidateScore.missing` now states points and the per-weight worth, so an
+  unconfirmed.md line says what actually happened instead of counting signals
+  the scorer no longer counts. `corroboration_points` lands in
+  `discovery.json` beside the verdict, and the live checker's calibration
+  table is in points too.
+
+### The judgement inside `links_to_anchor`
+
+At a flat strong weight, one anchor link now promotes — which means a
+stranger's blog post that mentions the target once and links their GitHub
+would be ingested at full corroborated confidence. A page *about* someone
+links their profiles too. So the weight is split by placement:
+
+- **Strong** when the page also declares the anchor handle as its own
+  (`facts.handles`), or the link sits in the page's own furniture — an author
+  or byline block, the header, the footer (`PageFacts.declared_links`, a new
+  ~40-line stdlib parser in `pagefacts.py`).
+- **Moderate** when it is a bare inline link in body prose.
+
+This is the declared-field-versus-page-prose distinction the attribution
+model already treats as load-bearing (a GitHub `blog` field is a
+self-declaration; a link in a README body is prose), applied one level down.
+It is a judgement, not a measurement: nobody has counted how often real
+stranger pages carry furniture links. It errs toward holding, which is the
+direction this tool errs everywhere.
+
+Because promotion can rest on it, the furniture detector is deliberately
+conservative, and an adversarial review pass earned each bound with a
+concrete page that would otherwise have been wrongly ingested:
+
+- `<body>` and `<html>` are never furniture. WordPress stamps
+  `author author-<slug>` onto `<body>` on author archive pages, and themes
+  add `single-author` sitewide — a marker that swallows the page would turn
+  every prose link on half the blogs on the internet into a declaration.
+- Class markers match on tokens, not substrings: `post-author` and
+  `byline__name` are bylines; `authorization-notice` and
+  `authoritative-guide` are not.
+- A furniture element must actually close before its links count, so an
+  unclosed `<div class="author">` cannot claim the rest of the page, and a
+  class-marked block that closes with more than ~400 characters of text
+  inside it is a wrapper wearing the class, not a byline.
+- One declaration is one fact: when the declared handle is what makes the
+  anchor link strong, `declared_handle` does not fire again for the same
+  claim — 2.0 points, not 3.0.
+
+### The fetch ceiling stops manufacturing holds
+
+`DEFAULT_MAX_VERIFY_FETCHES` 20 → 40. The dustinw run needed 27 page reads
+and the old cap left 14 of its 24 holds unread — a ceiling that stops the
+pass from reading pages it has already decided to read measures nothing but
+itself. `scripts/verify_search_contract.py` now imports the default instead
+of restating it, so the two cannot drift.
+
+And the report's coverage block now says what the fetch story was: the
+ceiling, how many holds were never read, and that publishers and aggregators
+block roughly half of candidate fetches (12 of 27 pages were readable on the
+dustinw run). A reader who sees "24 held" with no fetch story reads it as
+"24 rejected", and neither number means that.
+
+### Housekeeping
+
+- Test suite 808 → 816, still all offline.
+- No new dependencies.

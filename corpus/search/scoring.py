@@ -22,9 +22,11 @@ resolve it.
 
 The tiers
 ---------
-* Two or more independent strong-or-moderate signals, no negatives →
-  `corroborated`. Ingested.
-* One signal, or any unresolved negative → `name_match`. Held for a human.
+* Signals score by weight — strong 2 points, moderate 1, weak 0.5 —
+  deduplicated so two views of one fact count once. 2.0 points or more with
+  no negatives → `corroborated`. Ingested. One strong self-declaration is
+  enough; so are two moderate agreements; weak signals only ever assist.
+* Fewer points, or any unresolved negative → `name_match`. Held for a human.
 * A page *about* them rather than *by* them → recorded as context, never a
   corpus document. A profile piece, an interview write-up, and a conference
   bio contain none of their reasoning.
@@ -52,8 +54,14 @@ STRONG = "strong"
 MODERATE = "moderate"
 WEAK = "weak"
 
-#: Independent strong-or-moderate signals needed to reach `corroborated`.
-CORROBORATION_THRESHOLD = 2
+#: Corroboration points needed to reach `corroborated`. Signals are weighed
+#: rather than counted: counting made two moderate agreements promote while
+#: one strong self-declaration did not, which is backwards — the weights
+#: exist because the signals are not interchangeable.
+CORROBORATION_THRESHOLD = 2.0
+
+#: What one signal of each weight is worth toward the threshold.
+SIGNAL_POINTS = {STRONG: 2.0, MODERATE: 1.0, WEAK: 0.5}
 
 # Data brokers and people-search sites. Rejected on sight, and not only because
 # their pages are worthless as writing: aggregating non-public personal data is
@@ -295,10 +303,11 @@ class CandidateScore:
         base = ATTRIBUTION_CONFIDENCE[self.attribution]
         if self.outcome != "corroborated":
             return base
-        # More agreeing signals is more confidence within the tier, never
+        # More agreeing evidence is more confidence within the tier, never
         # across it: a corroborated match is not promoted by being very
-        # corroborated.
-        extra = max(0, self.independent_count - CORROBORATION_THRESHOLD)
+        # corroborated. The 0.8 ceiling stays under linked's 0.85 for
+        # exactly that reason.
+        extra = max(0.0, self.points - CORROBORATION_THRESHOLD)
         return min(0.8, base + 0.05 * extra)
 
     @property
@@ -310,6 +319,10 @@ class CandidateScore:
         return count_independent(self.signals)
 
     @property
+    def points(self) -> float:
+        return corroboration_points(self.signals)
+
+    @property
     def matched(self) -> list[str]:
         return [s.detail for s in self.signals]
 
@@ -319,10 +332,11 @@ class CandidateScore:
         out = [n.detail for n in self.negatives]
         if not self.fetched:
             out.append("the page was not fetched, so only the snippet was scored")
-        if self.independent_count < CORROBORATION_THRESHOLD and not self.negatives:
+        if self.points < CORROBORATION_THRESHOLD and not self.negatives:
             out.append(
-                f"only {self.independent_count} independent signal(s); "
-                f"{CORROBORATION_THRESHOLD} are needed without a human saying otherwise"
+                f"only {self.points:g} corroboration point(s) — a strong signal is "
+                f"worth 2, a moderate 1, a weak 0.5 — and {CORROBORATION_THRESHOLD:g} "
+                "are needed without a human saying otherwise"
             )
         return out
 
@@ -338,6 +352,7 @@ class CandidateScore:
             "outcome": self.outcome,
             "attribution": self.attribution,
             "attribution_confidence": round(self.confidence, 3),
+            "corroboration_points": self.points,
             "query": self.query,
             "fetched": self.fetched,
             "signals": [
@@ -362,13 +377,33 @@ _SIGNAL_GROUPS: dict[str, str] = {
 
 
 def count_independent(signals: list[Signal]) -> int:
-    """Strong-and-moderate signals, deduplicated by what they actually claim."""
+    """Strong-and-moderate signals, deduplicated by what they actually claim.
+
+    Not what decides promotion — `corroboration_points` is — but still the
+    number the common-name check wants: "no signal at all" is a fact about a
+    page whatever the weights are.
+    """
     seen: set[str] = set()
     for signal in signals:
         if signal.weight == WEAK:
             continue
         seen.add(_SIGNAL_GROUPS.get(signal.name, signal.name))
     return len(seen)
+
+
+def corroboration_points(signals: list[Signal]) -> float:
+    """Evidence by weight, deduplicated by what each signal actually claims.
+
+    A group still counts once, at its strongest member's weight: `<meta
+    name="author">` and a visible byline are one claim about authorship
+    however many ways the page renders it — one strong signal, never a
+    strong plus a moderate.
+    """
+    best: dict[str, float] = {}
+    for signal in signals:
+        claim = _SIGNAL_GROUPS.get(signal.name, signal.name)
+        best[claim] = max(best.get(claim, 0.0), SIGNAL_POINTS[signal.weight])
+    return sum(best.values())
 
 
 # --------------------------------------------------------------------------
@@ -415,24 +450,67 @@ def _anchor_handles(card: IdentityCard) -> set[str]:
     return {v.lower() for k, v in card.anchors.items() if k in ("x", "github") and v}
 
 
-def links_to_anchor(facts: PageFacts, card: IdentityCard) -> str:
-    """Does the page link to something we already know is theirs?
+def links_to_anchor(facts: PageFacts, card: IdentityCard) -> list[str]:
+    """Every link on the page that points at something we already know is theirs.
 
-    Their blog linking their GitHub is near-proof, and it is the single most
-    valuable thing a fetched page can show — the one signal a stranger's page
-    is very unlikely to produce by accident.
+    Their blog linking their GitHub is near-proof — and a page *about* them
+    links their GitHub too, which is why finding the link and weighing it are
+    separate jobs. This finds them; `_anchor_link_signal` weighs the best one
+    by where the page carries it.
     """
     anchor_hosts = card.anchor_hosts()
     profiles = _anchor_urls(card)
+    found: list[str] = []
     for link in facts.links:
         host = _host(link)
         if host and host in anchor_hosts:
-            return link
+            found.append(link)
+            continue
         trimmed = re.sub(r"^https?://(?:www\.)?", "", link.lower()).rstrip("/")
-        for profile in profiles:
-            if trimmed == profile or trimmed.startswith(profile + "/"):
-                return link
-    return ""
+        if any(trimmed == p or trimmed.startswith(p + "/") for p in profiles):
+            found.append(link)
+    return found
+
+
+def _anchor_link_signal(
+    anchor_links: list[str], facts: PageFacts, card: IdentityCard
+) -> tuple[Signal, bool]:
+    """Weigh a link to an anchor by where the page carries it.
+
+    The distinction is the one the attribution model already treats as
+    load-bearing — a declared field versus page prose (a GitHub `blog` field
+    is a self-declaration; a link in a README body is prose) — applied one
+    level down. A page that carries the link in its own furniture (an author
+    or byline block, the header, the footer), or that links their GitHub
+    *and* declares their handle as its own author, is identifying itself as
+    theirs: strong, and on its own enough to promote. A bare link in body
+    prose is how a stranger's page mentions a person — a post *about*
+    someone links their profiles too — so it corroborates without promoting
+    alone: moderate.
+
+    Returns the signal and whether it spent the page's handle declaration.
+    A strong link that exists only because of the declaration must not let
+    `declared_handle` bill the same fact a second time.
+    """
+    placed = next((link for link in anchor_links if link in facts.declared_links), "")
+    if placed:
+        return Signal(
+            "links_to_anchor",
+            STRONG,
+            f"the page links to {placed} from its own author/byline/header/footer block",
+        ), False
+    declared = sorted({h.lower() for h in facts.handles} & _anchor_handles(card))
+    if declared:
+        return Signal(
+            "links_to_anchor",
+            STRONG,
+            f"the page links to {anchor_links[0]} and declares @{declared[0]} as its own handle",
+        ), True
+    return Signal(
+        "links_to_anchor",
+        MODERATE,
+        f"the page links to {anchor_links[0]}, but only from body prose",
+    ), False
 
 
 def _occurrences(pattern: re.Pattern[str] | None, text: str) -> list[re.Match[str]]:
@@ -701,8 +779,10 @@ def score_candidate(
         )
 
     linked = links_to_anchor(facts, card)
+    declaration_spent = False
     if linked:
-        score.signals.append(Signal("links_to_anchor", STRONG, f"the page links to {linked}"))
+        link_signal, declaration_spent = _anchor_link_signal(linked, facts, card)
+        score.signals.append(link_signal)
 
     if facts.fetched and facts.declares_author(card.name):
         score.signals.append(
@@ -726,7 +806,10 @@ def score_candidate(
                 f"two anchor handles appear together on the page ({', '.join(sorted(co_occurring))})",
             )
         )
-    elif co_occurring and declared_handles & handles:
+    elif co_occurring and declared_handles & handles and not declaration_spent:
+        # `declaration_spent` because one declaration is one fact: when it
+        # already made the anchor link strong, scoring it again here would
+        # bill the same claim twice.
         score.signals.append(
             Signal(
                 "declared_handle",
@@ -748,7 +831,7 @@ def score_candidate(
         # A demotion, not merely a failure to promote: however many positives
         # agreed, an unresolved contradiction sends this to a human.
         score.outcome = "held"
-    elif count_independent(score.signals) >= CORROBORATION_THRESHOLD:
+    elif corroboration_points(score.signals) >= CORROBORATION_THRESHOLD:
         score.outcome = "corroborated"
     else:
         score.outcome = "held"

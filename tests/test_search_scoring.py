@@ -14,12 +14,14 @@ from __future__ import annotations
 import pytest
 
 from corpus.identity import IdentityCard
+from corpus.models import ATTRIBUTION_CONFIDENCE
 from corpus.search.pagefacts import extract_facts, facts_from_snippet, name_matches
 from corpus.search.scoring import (
     CORROBORATION_THRESHOLD,
     MODERATE,
     STRONG,
     WEAK,
+    corroboration_points,
     count_independent,
     score_candidate,
 )
@@ -100,21 +102,21 @@ def test_search_can_never_promote_to_linked() -> None:
     assert score.confidence < 0.85, "a search find must never reach linked's confidence"
 
 
-def test_one_signal_is_not_corroboration() -> None:
+def test_one_moderate_signal_is_not_corroboration() -> None:
     facts = extract_facts(
         page(body="A post that happens to mention Acme Corp."),
         "https://someone-else.example/post",
     )
     score = score_candidate(facts, card())
 
-    assert score.independent_count < CORROBORATION_THRESHOLD
+    assert score.points < CORROBORATION_THRESHOLD
     assert score.outcome == "held"
     assert not score.ingestible
 
 
-def test_a_weak_signal_does_not_count_toward_the_threshold() -> None:
-    """Location is real evidence and weak evidence. Two weak facts about a
-    common name are not a match; they are a coincidence with two parts."""
+def test_a_weak_signal_is_half_a_point_and_never_promotes_alone() -> None:
+    """Location is real evidence and weak evidence. A weak fact about a
+    common name is a coincidence, and half a point says exactly that."""
     facts = extract_facts(
         page(body="Written in Seattle, where lots of people live."),
         "https://someone-else.example/post",
@@ -123,6 +125,7 @@ def test_a_weak_signal_does_not_count_toward_the_threshold() -> None:
 
     assert names(score.signals) == {"location"}
     assert [s.weight for s in score.signals] == [WEAK]
+    assert score.points == 0.5
     assert score.outcome == "held"
 
 
@@ -168,7 +171,7 @@ def test_a_different_employer_demotes_a_page_that_otherwise_matched() -> None:
     )
     score = score_candidate(facts, card())
 
-    assert score.independent_count >= CORROBORATION_THRESHOLD, (
+    assert score.points >= CORROBORATION_THRESHOLD, (
         "the positives must be strong enough that only the negative can explain the demotion"
     )
     assert "different_employer" in {n.name for n in score.negatives}
@@ -207,7 +210,7 @@ def test_a_different_field_demotes_on_its_own() -> None:
     )
     score = score_candidate(facts, card(role="VP Engineering"))
 
-    assert score.independent_count >= CORROBORATION_THRESHOLD
+    assert score.points >= CORROBORATION_THRESHOLD
     assert [n.name for n in score.negatives] == ["different_field"]
     assert score.outcome == "held"
 
@@ -362,9 +365,10 @@ def test_their_own_about_page_is_not_mistaken_for_a_profile_of_them() -> None:
 
 def test_metadata_and_byline_are_one_claim_not_two() -> None:
     """`<meta name="author">` and a visible "By Jane Smith" are usually the
-    same byline rendered twice. Counting both would manufacture corroboration
-    out of a single claim, which is exactly how a threshold of two gets
-    defeated."""
+    same byline rendered twice. Scored separately they would be worth 3.0
+    points — a strong plus a moderate — manufactured out of a single claim.
+    The group counts once, at its strongest member's weight: this page is
+    exactly one self-declared author, 2.0 points, no more."""
     facts = extract_facts(
         page(author="Jane Smith", body="By Jane Smith\n\nA post about rubrics."),
         "https://unrelated.example/post",
@@ -372,7 +376,8 @@ def test_metadata_and_byline_are_one_claim_not_two() -> None:
     score = score_candidate(facts, card())
 
     assert count_independent(score.signals) <= 1
-    assert score.outcome == "held"
+    assert corroboration_points(score.signals) == 2.0
+    assert score.outcome == "corroborated"
 
 
 def test_two_anchor_handles_on_one_page_is_a_strong_signal() -> None:
@@ -395,6 +400,241 @@ def test_an_employer_mention_is_moderate_not_strong() -> None:
     score = score_candidate(facts, card())
 
     assert [s.weight for s in score.signals] == [MODERATE]
+
+
+# -- weight, not count -------------------------------------------------------
+#
+# The dustinw run: `links_to_anchor` — a strong signal — fired six times and
+# only two candidates corroborated, because the threshold counted signals
+# instead of weighing them. Two moderate agreements promoted; one strong
+# self-declaration did not. These tests pin the weighted threshold and the
+# placement judgement that makes a lone strong link safe to promote on.
+
+
+def test_two_moderate_signals_still_promote() -> None:
+    facts = extract_facts(
+        page(body="Jane Smith is VP Engineering at Acme Corp."),
+        "https://thinking.example/post",
+    )
+    score = score_candidate(facts, card(role="VP Engineering"))
+
+    assert score.points == CORROBORATION_THRESHOLD
+    assert score.outcome == "corroborated"
+
+
+def test_one_strong_signal_from_the_pages_own_furniture_promotes() -> None:
+    """The fix, from the passing side: a footer link to their GitHub is the
+    page identifying itself, worth 2.0 points on its own."""
+    facts = extract_facts(
+        "<html><body><p>Jane Smith on rubrics, and why the rubric comes first.</p>"
+        '<footer><a href="https://github.com/jsmith">GitHub</a></footer></body></html>',
+        "https://thinking.example/post",
+    )
+    score = score_candidate(facts, card())
+
+    assert [s.weight for s in score.signals if s.name == "links_to_anchor"] == [STRONG]
+    assert score.points == CORROBORATION_THRESHOLD
+    assert score.outcome == "corroborated"
+    assert score.ingestible
+
+
+def test_a_strangers_page_that_links_their_github_is_not_ingested() -> None:
+    """The judgement call in the links_to_anchor split, from the failing side.
+
+    A page ABOUT the target — no author metadata, one name mention, no
+    third-person speech verbs, nothing for the about-detector to catch — that
+    links their GitHub because it is discussing them. At a flat strong weight
+    this promoted on the link alone, and a stranger's blog post entered the
+    corpus at full corroborated confidence.
+    """
+    facts = extract_facts(
+        page(
+            body="Jane Smith wrote a lovely essay on rubrics this month.",
+            links=["https://github.com/jsmith"],
+        ),
+        "https://someone-else.example/monthly-links",
+    )
+    score = score_candidate(facts, card())
+
+    assert score.name_present
+    assert [s.weight for s in score.signals if s.name == "links_to_anchor"] == [MODERATE]
+    assert score.outcome == "held"
+    assert not score.ingestible
+
+
+def test_a_page_that_declares_the_handle_makes_the_anchor_link_strong() -> None:
+    """A single strong signal from a page that also declares the handle as its
+    own is a self-identification, and it is ingested."""
+    facts = extract_facts(
+        page(
+            body="Jane Smith on rubrics, and why the rubric comes first.",
+            links=["https://github.com/jsmith"],
+            handle="jsmith",
+        ),
+        "https://thinking.example/notes",
+    )
+    score = score_candidate(facts, card())
+
+    assert [s.weight for s in score.signals if s.name == "links_to_anchor"] == [STRONG]
+    assert score.outcome == "corroborated"
+    assert score.ingestible
+
+
+def test_about_not_by_short_circuits_the_single_strong_signal_path() -> None:
+    """Every promotion path, including the new one, sits behind the negatives.
+    An interview page with a furniture link to their GitHub is still a page
+    about them."""
+    facts = extract_facts(
+        "<html><head><title>Interview with Jane Smith</title></head>"
+        "<body><p>Jane Smith of Acme Corp answers our questions.</p>"
+        '<footer><a href="https://github.com/jsmith">her GitHub</a></footer></body></html>',
+        "https://podcast.example/episodes/42",
+    )
+    score = score_candidate(facts, card())
+
+    assert score.outcome == "context"
+    assert not score.ingestible
+    assert score.negatives[0].name == "about_not_by"
+
+
+def test_citation_only_short_circuits_the_single_strong_signal_path() -> None:
+    facts = extract_facts(
+        "<html><body><p>A wonderful piece, via Jane Smith.</p>"
+        '<footer><a href="https://github.com/jsmith">source</a></footer></body></html>',
+        "https://someone-else.example/links",
+    )
+    score = score_candidate(facts, card())
+
+    assert score.outcome == "rejected"
+    assert not score.ingestible
+    assert score.negatives[0].name == "citation_only"
+
+
+def test_declared_links_are_the_pages_furniture_not_its_prose() -> None:
+    """The extraction the placement judgement rests on: links in author,
+    byline, header and footer blocks are kept apart from links in body
+    prose."""
+    facts = extract_facts(
+        '<html><body><div class="byline">By <a href="https://github.com/jsmith">jsmith</a></div>'
+        '<p>See also <a href="https://github.com/other">someone else</a>.</p>'
+        '<footer><a href="https://janesmith.com">home</a></footer></body></html>',
+        "https://thinking.example/post",
+    )
+
+    assert facts.declared_links == ["https://github.com/jsmith", "https://janesmith.com"]
+    assert "https://github.com/other" in facts.links
+
+
+def test_a_wordpress_author_body_class_does_not_make_the_page_furniture() -> None:
+    """WordPress stamps `author author-<slug>` onto <body> on author archive
+    pages, and themes add `single-author` sitewide. If <body> could be
+    furniture, every prose link on half the blogs on the internet would be a
+    declaration — including a stranger's inline link to the target's GitHub,
+    which would then promote on its own."""
+    facts = extract_facts(
+        '<html><body class="archive category single-author author author-bob">'
+        "<p>Jane Smith wrote a lovely essay on rubrics this month. See "
+        '<a href="https://github.com/jsmith">her GitHub</a>.</p></body></html>',
+        "https://someone-else.example/weekly-links",
+    )
+    score = score_candidate(facts, card())
+
+    assert facts.declared_links == []
+    assert [s.weight for s in score.signals if s.name == "links_to_anchor"] == [MODERATE]
+    assert score.outcome == "held"
+    assert not score.ingestible
+
+
+def test_an_unclosed_author_block_does_not_swallow_the_rest_of_the_page() -> None:
+    """A furniture element must actually close before its links count. Left
+    open, a `<div class="author">` would claim every later link on the page
+    — and real pages leave elements open constantly."""
+    facts = extract_facts(
+        '<html><body><div class="author"><span>Bob</span>'
+        "<p>Jane Smith wrote a lovely essay on rubrics this month.</p>"
+        '<a href="https://github.com/jsmith">link</a></body></html>',
+        "https://someone-else.example/post",
+    )
+    score = score_candidate(facts, card())
+
+    assert facts.declared_links == []
+    assert score.outcome == "held"
+    assert not score.ingestible
+
+
+def test_an_oversized_author_classed_wrapper_is_not_a_byline() -> None:
+    """A block wearing an author class around the whole article is a wrapper,
+    not a byline; a real byline runs a line or three."""
+    prose = "Jane Smith wrote a lovely essay on rubrics this month. " * 12
+    facts = extract_facts(
+        f'<html><body><div class="author-page"><p>{prose}</p>'
+        '<a href="https://github.com/jsmith">her GitHub</a></div></body></html>',
+        "https://someone-else.example/post",
+    )
+    score = score_candidate(facts, card())
+
+    assert facts.declared_links == []
+    assert score.outcome == "held"
+
+
+def test_furniture_classes_match_on_tokens_not_substrings() -> None:
+    """ "authorization-notice" is not a byline. The words themselves have to
+    appear, so "post-author" and "byline__name" match and "authoritative"
+    does not."""
+    facts = extract_facts(
+        '<html><body><div class="authorization-notice">'
+        'Sign in to comment. <a href="https://github.com/jsmith">login</a></div>'
+        '<div class="post-author">By <a href="https://janesmith.com">Jane</a></div>'
+        "</body></html>",
+        "https://someone-else.example/post",
+    )
+
+    assert facts.declared_links == ["https://janesmith.com"]
+
+
+def test_the_handle_declaration_is_one_fact_not_two() -> None:
+    """When the declared handle is what makes the anchor link strong, the
+    same declaration must not also fire `declared_handle`: 2.0 points, not
+    3.0, for one link plus one declaration."""
+    facts = extract_facts(
+        page(
+            body="Jane Smith on rubrics, and why the rubric comes first.",
+            links=["https://github.com/jsmith"],
+            handle="jsmith",
+        ),
+        "https://thinking.example/notes",
+    )
+    score = score_candidate(facts, card())
+
+    assert "declared_handle" not in names(score.signals)
+    assert score.points == 2.0
+
+
+def test_corroborated_confidence_is_capped_inside_its_tier() -> None:
+    """A page can stack every signal there is; confidence still stops at 0.8,
+    under linked's 0.85. Very corroborated is not linked."""
+    facts = extract_facts(
+        page(
+            author="Jane Smith",
+            body=(
+                "Jane Smith, VP Engineering at Acme Corp, in Seattle. Find me at @jsmith on GitHub."
+            ),
+            links=["https://github.com/jsmith"],
+            handle="janesmith",
+        ),
+        "https://thinking.example/essay",
+    )
+    subject = card(
+        role="VP Engineering",
+        location="Seattle",
+        anchors={"github": "jsmith", "x": "janesmith"},
+    )
+    score = score_candidate(facts, subject)
+
+    assert score.outcome == "corroborated"
+    assert score.points > CORROBORATION_THRESHOLD + 2
+    assert score.confidence == 0.8
+    assert score.confidence < ATTRIBUTION_CONFIDENCE["linked"]
 
 
 # -- snippets are leads, never evidence -------------------------------------

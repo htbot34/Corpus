@@ -19,8 +19,8 @@ fixture can be rebuilt from evidence instead of documentation.
 
 **2. How many candidates actually come back corroborated versus held?** The
 census at the end breaks the outcomes down and, for the held ones, counts *why*
-— which signal was missing, which negative fired. That is the number that says
-whether the two-signal threshold is calibrated or merely strict.
+— how many corroboration points each sat at, which negative fired. That is the
+number that says whether the 2.0-point bar is calibrated or merely strict.
 
 Read the census carefully, because one failure mode makes it meaningless:
 **a candidate whose page was never read has never had its strong signals
@@ -64,7 +64,8 @@ from corpus.search.client import SearchClient
 from corpus.search.contract import WEB_SEARCH, check_search_response
 from corpus.search.providers import SearchError, get_search_provider
 from corpus.search.queries import generate_queries
-from corpus.search.verify import search_for_sources
+from corpus.search.scoring import CORROBORATION_THRESHOLD
+from corpus.search.verify import DEFAULT_MAX_VERIFY_FETCHES, search_for_sources
 from corpus.sources.base import http_client
 from corpus.x.contract import CRITICAL, Violation, worst_severity
 
@@ -183,7 +184,7 @@ def census(result: Any) -> None:
 
     _print("Why the held ones were held")
     reasons: Counter[str] = Counter()
-    signal_counts: Counter[int] = Counter()
+    point_counts: Counter[float] = Counter()
     for candidate in result.held:
         score = candidate.score
         if score is None:
@@ -192,28 +193,28 @@ def census(result: Any) -> None:
         if not candidate.verified:
             reasons["never fetched (page unread)"] += 1
             continue
-        signal_counts[score.independent_count] += 1
+        point_counts[score.points] += 1
         if score.negatives:
             for negative in score.negatives:
                 reasons[f"negative: {negative.name}"] += 1
         else:
-            reasons[f"only {score.independent_count} independent signal(s)"] += 1
+            reasons[f"only {score.points:g} corroboration point(s)"] += 1
     for reason, count in reasons.most_common():
         print(f"  {count:>4}  {reason}")
 
-    if signal_counts:
-        _print("Signal counts among fetched-but-held candidates")
-        print("  (this is the calibration table: how many sat at exactly one)")
-        for n in sorted(signal_counts):
-            print(f"  {signal_counts[n]:>4}  candidate(s) with {n} independent signal(s)")
-        one = signal_counts.get(1, 0)
-        fetched_held = sum(signal_counts.values())
-        if fetched_held and one / fetched_held > 0.5:
+    if point_counts:
+        _print("Corroboration points among fetched-but-held candidates")
+        print("  (this is the calibration table: how many sat just under the bar)")
+        for pts in sorted(point_counts):
+            print(f"  {point_counts[pts]:>4}  candidate(s) at {pts:g} point(s)")
+        near = sum(c for pts, c in point_counts.items() if 0 < pts < CORROBORATION_THRESHOLD)
+        fetched_held = sum(point_counts.values())
+        if fetched_held and near / fetched_held > 0.5:
             print(
-                f"\n  {one} of {fetched_held} fetched-and-held candidates had exactly one\n"
-                f"  signal. If those are mostly the right person, the threshold of two is\n"
-                f"  too strict for real results and the fix is a third weak signal that\n"
-                f"  fires more often — not lowering the bar to one."
+                f"\n  {near} of {fetched_held} fetched-and-held candidates carried real\n"
+                f"  evidence and still sat under the {CORROBORATION_THRESHOLD:g}-point bar. If those are\n"
+                f"  mostly the right person, the weights are too strict for real results\n"
+                f"  and the fix is a signal that fires more often — not lowering the bar."
             )
 
     _print("Which signals actually fired, across every scored candidate")
@@ -233,7 +234,9 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, help="a saved target from profiles.yaml")
     parser.add_argument("--max-searches", type=int, default=12)
-    parser.add_argument("--max-fetches", type=int, default=20)
+    # The default is imported rather than restated, so the checker and the
+    # phase cannot quietly disagree about how many pages a run may read.
+    parser.add_argument("--max-fetches", type=int, default=DEFAULT_MAX_VERIFY_FETCHES)
     parser.add_argument("--budget", type=float, default=1.00)
     parser.add_argument("--capture-search", metavar="DIR", default=None)
     parser.add_argument("--dry-run", action="store_true", help="print the plan and price, no calls")

@@ -40,10 +40,10 @@ def _cite(ids: list[str], links: dict[str, Document]) -> str:
     """Render evidence ids as markdown links to the source posts.
 
     A finding resting *only* on corroborated evidence says so. Corroborated
-    means "found by search, matched two identity signals" — good enough to
-    ingest, not good enough to let a claim stand on it silently. Anchor and
-    linked evidence carry no marker, because the unmarked case should be the
-    certain one.
+    means "found by search, with enough weighed identity evidence to promote"
+    — good enough to ingest, not good enough to let a claim stand on it
+    silently. Anchor and linked evidence carry no marker, because the
+    unmarked case should be the certain one.
 
     Capped here as well as in `prune_unsourced`, because `--render-only` runs
     against whatever synthesis.json is on disk — including one edited by hand.
@@ -144,8 +144,22 @@ def _search_lines(search: dict[str, Any]) -> list[str]:
         lines.append(
             f"- {len(search['held'])} search candidate(s) were **not confirmed as theirs** "
             "and are not in this corpus. They are listed in `unconfirmed.md`, with what "
-            "matched and what did not."
+            "matched and what did not. Held means unproved, not rejected."
         )
+        # ...and for the rest, the fetch *is* the thing to blame — so say so,
+        # with the ceiling. On real search candidates roughly half the pages
+        # cannot be read at all, and a reader who does not know that reads
+        # "24 held" as "24 rejected".
+        unread = sum(1 for c in search["held"] if not c.get("verified"))
+        if unread:
+            cap = search.get("max_fetches", 0)
+            ceiling = f" under this run's fetch ceiling of {cap} page(s)" if cap else ""
+            lines.append(
+                f"- {unread} of the held candidate(s) were held with their page unread"
+                f"{ceiling}. Publishers and aggregators block roughly half of candidate "
+                "fetches (12 of 27 pages were readable on a reference run), so an unread "
+                "hold says the evidence was never seen — not that it was found wanting."
+            )
     if search.get("context"):
         lines.append(
             f"- {len(search['context'])} page(s) found by search are *about* the subject "

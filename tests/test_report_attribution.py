@@ -127,6 +127,32 @@ def test_the_report_says_what_search_ran_and_what_it_held() -> None:
     assert "could not be verified" not in report
 
 
+def test_unread_holds_are_explained_with_the_fetch_ceiling() -> None:
+    """14 of the dustinw run's 24 holds were never fetched — publishers and
+    aggregators block roughly half of candidate fetches. A reader who sees
+    "24 held" with no fetch story reads it as "24 rejected", and the report
+    must not let them."""
+    report = report_for(
+        [doc("1")],
+        run_meta={
+            "search": {
+                "queries": [{"text": "q", "why": "w"}],
+                "max_fetches": 40,
+                "held": [
+                    {"url": "https://b.example/2", "verified": True},
+                    {"url": "https://c.example/3", "verified": False},
+                    {"url": "https://d.example/4", "verified": False},
+                ],
+            }
+        },
+    )
+
+    assert "Held means unproved, not rejected." in report
+    assert "2 of the held candidate(s) were held with their page unread" in report
+    assert "fetch ceiling of 40 page(s)" in report
+    assert "Publishers and aggregators block roughly half" in report
+
+
 def test_a_run_that_never_searched_says_nothing_about_search() -> None:
     assert "Search:" not in report_for([doc("1")], run_meta={"search": {"queries": []}})
 

@@ -51,8 +51,11 @@ RESULTS_PER_QUERY = 8
 
 #: Pages fetched in the verification pass. Plain HTTP against public pages, so
 #: this is not a money guard — it is a guard against a hundred requests to
-#: other people's servers on behalf of one search run.
-DEFAULT_MAX_VERIFY_FETCHES = 20
+#: other people's servers on behalf of one search run. 40 rather than 20
+#: because the dustinw run needed 27 page reads and the old cap left 14 of
+#: its 24 held candidates unread: a ceiling that stops the pass from reading
+#: pages it already decided to read manufactures holds out of nothing.
+DEFAULT_MAX_VERIFY_FETCHES = 40
 
 #: Distinct domains that match the name and nothing else before the name is
 #: treated as too common to search on. Eight unrelated domains all matching
@@ -135,6 +138,8 @@ class SearchPhaseResult:
     #: whether verification ran at all — `fetches` cannot, because a cache hit
     #: is a read that costs no request.
     reads_attempted: int = 0
+    #: The fetch ceiling this run was given, so the report can say what bound.
+    max_fetches: int = 0
     #: True when the name is too common to search on. Nothing is ingested.
     common_name: bool = False
     #: Card fields that would most improve the next run.
@@ -171,6 +176,7 @@ class SearchPhaseResult:
             "results_seen": self.results_seen,
             "fetches": self.fetches,
             "reads_attempted": self.reads_attempted,
+            "max_fetches": self.max_fetches,
             "verified": self.verified_count,
             "unread": self.unread,
             "common_name": self.common_name,
@@ -185,7 +191,7 @@ class SearchPhaseResult:
         }
 
 
-def snippet_promise(score: CandidateScore) -> tuple[int, bool]:
+def snippet_promise(score: CandidateScore) -> tuple[float, bool]:
     """How promising a snippet looks, for deciding fetch *order*.
 
     Deliberately not a floor. An earlier version refused to fetch a candidate
@@ -197,9 +203,12 @@ def snippet_promise(score: CandidateScore) -> tuple[int, bool]:
     snippet to say so again bought no attribution and cost real coverage.
 
     So every candidate that was not rejected outright gets fetched, and this
-    only decides who goes first when `--max-verify-fetches` binds.
+    only decides who goes first when `--max-verify-fetches` binds. Ordered by
+    corroboration points rather than a signal count, for the same reason the
+    threshold is: a snippet carrying one strong signal is a better bet than
+    one carrying one moderate.
     """
-    return score.independent_count, score.name_present
+    return score.points, score.name_present
 
 
 def detect_common_name(scores: list[CandidateScore]) -> tuple[bool, int]:
@@ -244,6 +253,7 @@ def search_for_sources(
 ) -> SearchPhaseResult:
     """Run Phase 2 end to end. Never raises; degrades and reports."""
     result = SearchPhaseResult(queries=generate_queries(card, max_searches))
+    result.max_fetches = max_fetches
     known = {normalize_url(u) for u in (known_urls or set())}
     known.discard("")
 

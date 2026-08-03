@@ -32,9 +32,10 @@ DocKind = Literal["original", "thread", "reply", "quote", "repost", "media_only"
 #   linked       reached by following a link from an anchor — a GitHub bio
 #                pointing at a blog. Near-certain, and the most valuable path,
 #                because people link their own things.
-#   corroborated found by search and independently matching two or more
-#                identity signals (employer named on the page, links back to an
-#                anchor, byline plus role).
+#   corroborated found by search with enough weighed identity evidence: one
+#                strong self-declaration (author metadata, a byline-block link
+#                back to an anchor), or independent moderate signals agreeing
+#                (employer named on the page plus the role).
 #   name_match   the name matched and nothing else. Never ingested by default.
 Attribution = Literal["anchor", "linked", "corroborated", "name_match"]
 

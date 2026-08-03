@@ -91,7 +91,7 @@ corpus run --target janesmith --accept-unconfirmed out/janesmith/2026-08-03/unco
 | `--max-fetches` | 25 | Ceiling on discovery's plain-HTTP requests. Not a money guard — there is no money here — but a guard against a hostile link graph. |
 | `--search` / `--no-search` | on | Phase 2: find sources the anchors do not reach. Costs ~$0.01 per query. Never ingests what it cannot verify. |
 | `--max-searches` | 12 | Billable queries per run, reported in the estimate and the report. Cached queries are free and do not count. |
-| `--max-verify-fetches` | 20 | Pages fetched to verify search candidates. Free, plain HTTP. |
+| `--max-verify-fetches` | 40 | Pages fetched to verify search candidates. Free, plain HTTP. |
 | `--accept-unconfirmed PATH` | unset | Read back an edited `unconfirmed.md`: ticked entries are ingested as `corroborated`, unticked ones go into the card's `exclude` list. |
 | `--rss URL` / `--url URL` | unset | Repeatable, read directly, not crawled. Anchor-attributed. |
 | `--max-posts` | 3000 | Ingestion stop condition. |
@@ -169,7 +169,7 @@ and holds the axes. Targets are personal notes about real people; a `pip install
 | --- | --- | :-: |
 | `anchor` | A URL or handle you supplied. Certain. | yes |
 | `linked` | Reached by following a link from an anchor. | yes |
-| `corroborated` | Found by search, matching two or more identity signals. | yes |
+| `corroborated` | Found by search, with 2.0 points of identity evidence: one strong self-declaration, or agreeing moderate signals. | yes |
 | `name_match` | The name matched and nothing else. | **no** |
 
 `name_match` candidates are recorded in `discovery.json` with what matched and
@@ -255,7 +255,8 @@ read, argued with, and tested for free.
 
 | Signal | Weight |
 | --- | --- |
-| Page links to a known anchor | strong |
+| Page links to a known anchor from its own author/byline/header/footer block, or while declaring the anchor handle as its own | strong |
+| Page links to a known anchor from body prose only | moderate |
 | Domain is or subdomains an anchor domain | strong |
 | Structured author metadata matches the name (`<meta name="author">`, JSON-LD, OpenGraph, feed `<author>`) | strong |
 | Two or more anchor handles co-occur on the page | strong |
@@ -263,6 +264,12 @@ read, argued with, and tested for free.
 | Role matches | moderate |
 | Name in the byline rather than the body | moderate |
 | Location matches | weak |
+
+The anchor-link split is the declared-field-versus-page-prose distinction the
+attribution model already treats as load-bearing, applied one level down: a
+GitHub `blog` field is a self-declaration, a link in a README body is prose.
+A page that carries the link while identifying itself is very likely theirs; a
+stranger's post *about* them links their GitHub too.
 
 The negatives are the half that makes it work, because **absence of confirmation
 is not the same as presence of contradiction** and a scorer with only positive
@@ -283,16 +290,20 @@ demotes: a page with three strong signals and one contradiction goes to a human.
 contradiction *unless* it also names the right one, in which case it is a page
 that mentions two companies. Each negative names what would resolve it.
 
-Two or more independent strong-or-moderate signals with no negatives →
-`corroborated`, and ingested. Anything else → `name_match`, and held.
+Signals are weighed, not counted: a strong signal is worth 2 points, a
+moderate 1, a weak 0.5, and 2.0 points with no negatives → `corroborated`, and
+ingested. One strong self-declaration is enough; so are two moderate
+agreements; anything less → `name_match`, and held. (A count of two was
+backwards — it promoted two moderate agreements while holding a page whose own
+footer links their GitHub.)
 **`linked` is unreachable from search by construction**: it means "reached from
 a declared field on an anchor", and no quantity of search evidence turns into a
 self-declaration.
 
-Signals that are two views of one fact count once. A `<meta name="author">` tag
-and a visible "By Jane Smith" are usually the same byline rendered twice, and
-counting both would manufacture corroboration out of a single claim — which is
-exactly how a threshold of two gets defeated.
+Signals that are two views of one fact count once, at the strongest member's
+weight. A `<meta name="author">` tag and a visible "By Jane Smith" are usually
+the same byline rendered twice, and scoring both would manufacture 3.0 points
+out of a single claim.
 
 ### When the name is too common
 
@@ -869,8 +880,9 @@ python scripts/verify_search_contract.py --target KEY --dry-run   # free
 `verify_search_contract.py` answers the two questions the offline suite cannot:
 whether `web_search_20250305` returns the shape the fixture assumes, and how
 many candidates actually come back `corroborated` versus `held` — with a
-breakdown of *why* each held one was held, and how many sat at exactly one
-signal. That last table is the calibration data for the two-signal threshold.
+breakdown of *why* each held one was held, and how many corroboration points
+each one sat at. That last table is the calibration data for the 2.0-point
+bar.
 
 It guards that census at **both** ends. Before spending anything it probes page
 reachability and refuses to run if fetches are blocked. Afterwards it checks
@@ -970,12 +982,14 @@ is still missing or unproven:
   provenance above. The tool survives that only because a snippet was never
   allowed to promote anything; a richer vendor (`exa` returns real page text)
   is the stub to reach for if snippets ever need to carry weight.
-- **The scoring thresholds are still judgement, not measurement.** Two
-  independent signals for `corroborated`, eight domains for a common name, 80%
-  for source concentration: round numbers chosen for where the failure mode
-  changes, like the corpus tiers, and the code says so rather than implying
-  precision it does not have. **Nobody has yet seen what fraction of real
-  search results clear two signals.** The 2026-08-03 run was supposed to
+- **The scoring thresholds are still judgement, not measurement.** 2.0
+  corroboration points for `corroborated` (strong 2, moderate 1, weak 0.5),
+  eight domains for a common name, 80% for source concentration: round numbers
+  chosen for where the failure mode changes, like the corpus tiers, and the
+  code says so rather than implying precision it does not have. The
+  strong/moderate split inside `links_to_anchor` — furniture versus prose — is
+  the same kind of judgement. **Nobody has yet seen what fraction of real
+  search results clear the bar.** The 2026-08-03 run was supposed to
   produce that number and could not: it read zero of 50 candidate pages,
   because the common-name check ran before the fetches on evidence it did not
   have. That gate is fixed and the script now refuses to print a census taken
