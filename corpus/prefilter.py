@@ -148,6 +148,22 @@ def classify(doc: Document) -> str | None:
     return None
 
 
+def is_substantive_engagement(doc: Document) -> bool:
+    """Does this document actually engage with anything?
+
+    The same judgement `classify` makes, asked as a question. A shared link
+    with no commentary is a document — it has a URL, a timestamp, and an
+    author — but it is not engagement with what it links to, and treating it
+    as such is how an axis gets a `weak signal` out of nothing.
+
+    Used by the axis rules in `synthesize.py`, which is why it is exposed
+    rather than left implicit in the filter: the filter drops these documents
+    before synthesis, but `--no-filter` keeps them and the corpus on disk
+    always has them.
+    """
+    return classify(doc) is None
+
+
 def filter_low_signal(docs: list[Document]) -> tuple[list[Document], FilterStats]:
     stats = FilterStats(input_documents=len(docs))
     kept: list[Document] = []

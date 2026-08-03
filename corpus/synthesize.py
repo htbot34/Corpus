@@ -34,7 +34,7 @@ from .budget import (
     estimate_tokens,
 )
 from .models import Axis, Document, MapChunk, Synthesis
-from .prefilter import FilterStats, filter_low_signal
+from .prefilter import FilterStats, filter_low_signal, is_substantive_engagement
 from .tiers import RICH, TierRules, classify_corpus, prompt_block
 
 # Map is extraction: find the claims, name the moves, point at the ids. It does
@@ -110,6 +110,24 @@ CHARS_PER_TOKEN = 4
 EVIDENCE_CAP = 3
 # An inference whose reasoning is this short is not a chain, it is a restatement.
 MIN_REASONING_CHARS = 80
+
+# Documents of substantive engagement required before an axis may report
+# `weak` rather than `none`.
+#
+# Measured against a real failure. On a live run over @paulg the
+# `defense_intel_natsec` axis came back `weak signal` on the strength of one
+# glancing exchange about AI influence operations plus a shared link to a .gov
+# visa portal — while the coverage block, correctly, said "No documents on
+# defense, intelligence, surveillance, or adversary states beyond one glancing
+# exchange." The report contradicted itself and the honest half was in the
+# caveats.
+#
+# One tangential mention plus an unrelated URL is `none`. Two is the smallest
+# number that can distinguish a position from a thing someone said once, and a
+# shared link with no commentary is not engagement at all — see
+# `is_substantive_engagement`. This matters more as search adds thinner and
+# more varied sources.
+MIN_WEAK_DOCUMENTS = 2
 
 MAP_SYSTEM_BASE = """You are extracting structured evidence from one chronological slice of a \
 person's public writing. You are not summarizing and not editorializing.
@@ -197,8 +215,14 @@ plausible. A confabulated axis is worse than an absent one, because it is \
 indistinguishable from a real finding. Most corpora have nothing to say about \
 most axes; that is the normal case, not a failure.
 
-Use "weak" when there are one or two documents that glance at the axis, and \
-"strong" only when the corpus genuinely lets you locate them.
+"weak" is not "I found something". It requires **at least {weak} documents that \
+substantively engage** with the axis. A shared link with no commentary is not \
+engagement. A single glancing mention is not engagement. One tangential remark \
+plus an unrelated URL is `none`, not `weak` — and it will be corrected to \
+`none` in code if you claim otherwise, so claiming it costs you the axis rather \
+than winning it.
+
+Use "strong" only when the corpus genuinely lets you locate them.
 
 ## Axes for this run
 
@@ -231,7 +255,10 @@ def build_map_system(axes: list[AxisSpec]) -> str:
 
 def build_reduce_system(axes: list[AxisSpec], tier: TierRules) -> str:
     return REDUCE_SYSTEM_TEMPLATE.format(
-        axes=axes_prompt_block(axes), tier=prompt_block(tier), cap=EVIDENCE_CAP
+        axes=axes_prompt_block(axes),
+        tier=prompt_block(tier),
+        cap=EVIDENCE_CAP,
+        weak=MIN_WEAK_DOCUMENTS,
     )
 
 
@@ -831,6 +858,7 @@ def prune_unsourced(
     valid_ids: set[str],
     axes: list[AxisSpec] | None = None,
     tier: TierRules | None = None,
+    documents: dict[str, Document] | None = None,
 ) -> list[str]:
     """The rules, enforced in code rather than hoped for.
 
@@ -917,7 +945,7 @@ def prune_unsourced(
             kept_blind_spots.append(spot)
     synthesis.reasoning.blind_spots = kept_blind_spots
 
-    synthesis.axes = _enforce_axes(synthesis.axes, clean, axes, rules, notes)
+    synthesis.axes = _enforce_axes(synthesis.axes, clean, axes, rules, notes, documents)
 
     kept_evolution = []
     for evo in synthesis.evolution:
@@ -971,17 +999,50 @@ def _drop_inference(axis: Axis, note: str, notes: list[str]) -> None:
     notes.append(note)
 
 
+def _substantive_evidence(ids: list[str], documents: dict[str, Document] | None) -> int:
+    """How many cited documents actually engage, rather than merely exist.
+
+    Without the corpus to hand — an older caller, a hand-edited synthesis —
+    this falls back to counting ids. That still enforces the "at least two
+    documents" half of the rule; only the "a shared link is not engagement"
+    half needs the documents themselves.
+    """
+    if documents is None:
+        return len(ids)
+    return sum(
+        1
+        for doc_id in ids
+        if (doc := documents.get(doc_id)) is not None and is_substantive_engagement(doc)
+    )
+
+
 def _enforce_axes(
     emitted: list[Axis],
     clean: Callable[[list[str]], list[str]],
     requested: list[AxisSpec] | None,
     rules: TierRules,
     notes: list[str],
+    documents: dict[str, Document] | None = None,
 ) -> list[Axis]:
     """Clean each axis, then reconcile against what was actually requested."""
     cleaned: dict[str, Axis] = {}
     for axis in emitted:
         axis.evidence_ids = clean(axis.evidence_ids)
+
+        # A `weak` axis resting on one glancing mention, or on documents that
+        # engage with nothing, is `none`. The report used to be able to claim a
+        # weak signal in the body while the coverage block said there was
+        # nothing there — two true-sounding statements contradicting each
+        # other, with the honest one buried in the caveats.
+        if axis.signal == "weak":
+            substantive = _substantive_evidence(axis.evidence_ids, documents)
+            if substantive < MIN_WEAK_DOCUMENTS:
+                notes.append(
+                    f"axis '{axis.axis}' demoted weak -> none: {substantive} document(s) of "
+                    f"substantive engagement, {MIN_WEAK_DOCUMENTS} required "
+                    f"(a shared link with no commentary does not count)"
+                )
+                axis.signal = "none"
 
         if axis.signal == "none":
             # An axis with no signal carries no content, by definition. Anything
@@ -1214,7 +1275,17 @@ async def synthesize(
             )
         if synthesis is not None:
             valid_ids = {d.source_id for d in docs}
-            run.dropped_findings = prune_unsourced(synthesis, valid_ids, selected_axes, tier)
+            run.dropped_findings = prune_unsourced(
+                synthesis,
+                valid_ids,
+                selected_axes,
+                tier,
+                # The whole corpus, not the post-filter slice: the model can
+                # only cite what it saw, but under --no-filter what it saw
+                # includes the link-only posts, and those are exactly the
+                # documents the weak-signal rule exists to discount.
+                documents={d.source_id: d for d in docs},
+            )
             for note in run.dropped_findings:
                 log(f"  [unsourced] {note}")
             run.corrected_counts = enforce_signal_counts(

@@ -113,6 +113,18 @@ def _callout(lines: list[str]) -> str:
     return "\n".join(f"> {line}" for line in lines)
 
 
+def _document_count(synthesis: Synthesis | None, docs: list[Document]) -> str:
+    """What the header says about how much was read.
+
+    Says "N of M documents" when they differ, rather than picking one and
+    leaving the reader to find the other number lower down.
+    """
+    analyzed = synthesis.coverage.total_documents if synthesis else 0
+    if analyzed and analyzed != len(docs):
+        return f"{analyzed} of {len(docs)} documents"
+    return f"{len(docs)} documents"
+
+
 def render_report(
     *,
     handle: str,
@@ -131,7 +143,15 @@ def render_report(
     # thing only when X is the only source, which is no longer the usual case.
     out.append(f"# {subject or '@' + handle} — how they think")
     out.append("")
-    out.append(f"_Generated {generated} · {len(docs)} documents · {signals.get('date_range', '')}_")
+    # The analyzed count, not the corpus count. The Python correction in
+    # `enforce_signal_counts` fires on `coverage.total_documents`, and the
+    # header used to read `len(docs)` — so a run where the prefilter dropped
+    # four posts printed "94 documents" here and "90 of 94" in the coverage
+    # block, two lines apart and disagreeing.
+    out.append(
+        f"_Generated {generated} · {_document_count(synthesis, docs)} · "
+        f"{signals.get('date_range', '')}_"
+    )
     out.append("")
 
     # ---- coverage caveats, up top where they cannot be missed -------------
