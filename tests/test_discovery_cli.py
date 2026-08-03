@@ -405,6 +405,59 @@ def test_an_unknown_target_fails_before_anything_is_fetched(wired) -> None:
     assert "nobody" in result.output
 
 
+def test_a_github_anchor_produces_documents_and_states_its_limits(wired) -> None:
+    """The whole point of the GitHub adapter, end to end: a person with no X
+    presence, read from their review and issue comments — and a report that
+    says what the events feed could not reach."""
+    events = json.loads((Path(__file__).parent / "fixtures" / "github_events.json").read_text())
+    seed(
+        wired,
+        {"https://api.github.com/users/testsubject/events/public?per_page=100&page=1": events},
+        source="github",
+    )
+    seed(
+        wired,
+        {"https://api.github.com/users/testsubject/events/public?per_page=100&page=2": []},
+        source="github",
+    )
+    # The GitHub profile discovery reads, so link-following finds nothing else.
+    seed(wired, {"get:https://api.github.com/users/testsubject": json.dumps({"blog": ""})})
+    seed(
+        wired,
+        {"get:https://raw.githubusercontent.com/testsubject/testsubject/HEAD/README.md": "hi"},
+    )
+
+    result = invoke(
+        [
+            "run",
+            "--name",
+            "Test Subject",
+            "--github",
+            "testsubject",
+            "--out",
+            str(wired["out"]),
+            "--yes",
+            "--skip-synthesis",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    directory = outputs(wired["out"], "testsubject")
+    corpus = json.loads((directory / "corpus.json").read_text())
+    assert corpus, "the GitHub anchor produced no documents"
+    assert {d["source"] for d in corpus} == {"github"}
+    kinds = {d["raw"]["kind"] for d in corpus}
+    assert kinds == {"review_comment", "issue_comment"}
+    assert {d["attribution"] for d in corpus} == {"anchor"}
+
+    report = (directory / "report.md").read_text()
+    assert "90 days" in report and "300 events" in report, (
+        "the events-feed ceiling has to reach the coverage block; a reader who "
+        "infers it from a short date range infers something about the person"
+    )
+    assert "carried no commit messages" in report
+
+
 def test_the_x_only_path_is_unchanged(wired) -> None:
     """The regression that matters for everyone already using this: an X handle
     with no card still runs, and its documents are still anchor-attributed."""

@@ -1,12 +1,61 @@
-# Wire contract: twitterapi.io
+# Wire contracts
 
-What this tool assumes about the provider's responses, which of those
+What this tool assumes about each provider's responses, which of those
 assumptions have been **observed on the wire**, and which are still **read from
 documentation**. The distinction is the whole point of the document.
 
-- Machine-readable form: `corpus/x/contract.py`
-- Checked offline against fixtures: `tests/test_wire_contract.py` (every test run)
-- Checked online against the provider: `scripts/verify_contract.py` (~$0.01, by hand)
+Two providers, same machinery:
+
+| | twitterapi.io | GitHub |
+| --- | --- | --- |
+| Machine-readable | `corpus/x/contract.py` | `corpus/sources/github_contract.py` |
+| Checked offline | `tests/test_wire_contract.py` | `tests/test_github_wire_contract.py` |
+| Checked online | `scripts/verify_contract.py` (~$0.01) | — (see below) |
+| Fixture provenance | **synthetic**, except `user_info.json` | **captured live**, then scrubbed |
+
+## GitHub, in one screen
+
+Captured from the live API with an authenticated token on **2026-08-03**, then
+scrubbed into `tests/fixtures/github_*.json` by
+`tests/fixtures/_scrub_github.py`, which is kept as the record of exactly what
+was changed: key names and nesting are real, identifiers and prose are not. The
+raw captures were deleted.
+
+| Endpoint | Status |
+| --- | --- |
+| `GET /users/{login}` | **CONFIRMED** 2026-08-03 |
+| `GET /users/{login}/events/public` | **CONFIRMED** 2026-08-03, 100 events |
+| `GET /search/issues?q=commenter:{login}+type:pr` | **CONFIRMED** 2026-08-03, 20 items |
+| `GET /repos/{o}/{r}/issues/{n}/comments` | **UNVERIFIED** — element shape inferred from the identical comment object inside `IssueCommentEvent`, which *was* captured; that the path returns a bare array of them is assumed |
+
+There is no live checker for GitHub. `scripts/verify_contract.py` exists because
+twitterapi.io costs money to probe and drifts; GitHub is free to re-capture, and
+the honest way to refresh these is to pull the three payloads again and re-run
+the scrub. That cannot happen inside this sandbox — the agent proxy answers 403
+to `api.github.com` for everything except `/rate_limit`, which is why the
+captures were taken externally in the first place.
+
+**Two findings from the capture are load-bearing and are asserted by tests** so
+they cannot be quietly forgotten:
+
+1. **No `PushEvent` carries `commits`.** 69 of 69, across a 50-push repo and a
+   19-push hobby repo. The payload is `{repository_id, push_id, ref, head,
+   before}` — also missing the documented `size` and `distinct_size`, and
+   carrying an undocumented `repository_id`. Commit-message extraction is built
+   and tested against the *documented* shape (`github_events_with_commits.json`,
+   the one GitHub fixture that is synthetic and says so in its filename), and
+   the adapter counts the gap rather than reporting nothing.
+2. **A `search/issues` item is somebody else's writing.** `item.body` and
+   `item.user` belong to whoever opened the pull request; 0 of 20 items were
+   authored by the subject. The adapter never reads `body`.
+
+Two measured limits, reported in every run's coverage block: `events/public`
+reaches ~300 events and ~90 days, and the search API is limited to **30 requests
+per minute**, separately from and far more tightly than core.
+
+---
+
+## twitterapi.io
 
 | | Status |
 | --- | --- |

@@ -5,6 +5,12 @@ out/
 # scrubbed subset that belongs in the repo lives in tests/fixtures/.
 captures/
 
+# GitHub API captures, same rule. Pulled by hand with a token because this
+# sandbox's proxy refuses api.github.com; scrubbed into tests/fixtures/ by
+# tests/fixtures/_scrub_github.py and then deleted. They hold a real person's
+# identifiers and other people's prose, so they do not belong in the repo.
+gh_captures/
+
 # secrets
 .env
 

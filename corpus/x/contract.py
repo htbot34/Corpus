@@ -65,6 +65,15 @@ class Field:
     why: str
     confirmed: bool = False  # observed on the wire, as opposed to assumed
     presence: str = ALWAYS
+    #: Is an explicit null a valid value, or the same thing as absent?
+    #
+    # For twitterapi.io the two are interchangeable — a null is a missing
+    # value. GitHub returns null constantly for fields that exist and are
+    # simply unset (`bio`, `twitter_username`, `email` on a real profile), and
+    # there the distinction is the whole signal: a null means "this account has
+    # no bio", while an *absent* key means the field has been renamed and every
+    # reader of it is now silently returning nothing.
+    nullable: bool = False
 
     @property
     def primary(self) -> str:
@@ -72,7 +81,7 @@ class Field:
 
     def find(self, obj: dict[str, Any]) -> tuple[str, Any] | None:
         for name in self.names:
-            if name in obj and obj[name] is not None:
+            if name in obj and (self.nullable or obj[name] is not None):
                 return name, obj[name]
         return None
 
@@ -318,7 +327,7 @@ CONTRACTS: dict[str, EndpointContract] = {
 # --------------------------------------------------------------------------
 
 
-def resolve(payload: dict[str, Any], dotted: str) -> Any:
+def resolve(payload: Any, dotted: str) -> Any:
     """Walk a dotted path, returning None rather than raising on a miss."""
     node: Any = payload
     for part in dotted.split("."):
@@ -328,15 +337,23 @@ def resolve(payload: dict[str, Any], dotted: str) -> Any:
     return node
 
 
-def locate_items(
-    contract: EndpointContract, payload: dict[str, Any]
-) -> tuple[str | None, list[Any]]:
+# Sentinel array location: the payload *is* the array, with no envelope around
+# it. twitterapi.io always wraps; GitHub's events feed does not, and a contract
+# that could not say so would have to describe a shape that does not exist.
+ROOT_ARRAY = "$"
+
+
+def locate_items(contract: EndpointContract, payload: Any) -> tuple[str | None, list[Any]]:
     """Find the item array, returning (where it was found, the items).
 
     Deliberately mirrors `_tweets_from`'s probe order so the checker agrees with
     the code rather than describing an idealized version of it.
     """
     for location in contract.array_locations:
+        if location == ROOT_ARRAY:
+            if isinstance(payload, list):
+                return ROOT_ARRAY, payload
+            continue
         found = resolve(payload, location)
         if isinstance(found, list):
             return location, found
@@ -345,7 +362,7 @@ def locate_items(
 
 def check_payload(
     contract: EndpointContract,
-    payload: dict[str, Any],
+    payload: Any,
     *,
     sample_items: int = 5,
 ) -> list[Violation]:
@@ -360,29 +377,33 @@ def check_payload(
     def note(severity: str, message: str) -> None:
         out.append(Violation(contract.name, severity, message))
 
-    if not isinstance(payload, dict):
-        note(CRITICAL, f"response is {type(payload).__name__}, expected a JSON object")
+    root_array = ROOT_ARRAY in contract.array_locations
+    if not isinstance(payload, dict) and not (root_array and isinstance(payload, list)):
+        expected = "a JSON array" if root_array else "a JSON object"
+        note(CRITICAL, f"response is {type(payload).__name__}, expected {expected}")
         return out
 
-    for spec in contract.envelope:
-        if spec.find(payload) is None:
-            note(
-                spec.severity,
-                f"envelope field {spec.primary!r} missing "
-                f"(accepted: {', '.join(spec.names)}) — {spec.why}. "
-                f"Top-level keys present: {sorted(payload)}",
-            )
+    if isinstance(payload, dict):
+        for spec in contract.envelope:
+            if spec.find(payload) is None:
+                note(
+                    spec.severity,
+                    f"envelope field {spec.primary!r} missing "
+                    f"(accepted: {', '.join(spec.names)}) — {spec.why}. "
+                    f"Top-level keys present: {sorted(payload)}",
+                )
 
     # user_info has no array; its "items" describe the single data object.
     if contract.array_locations:
         location, items = locate_items(contract, payload)
         if location is None:
+            where = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
             note(
                 CRITICAL,
-                "no item array found. _tweets_from probes "
+                f"no item array found. The reader probes "
                 f"{list(contract.array_locations)} and would return [] here, "
-                "which the pipeline cannot distinguish from an account with no "
-                f"posts. Top-level keys present: {sorted(payload)}",
+                "which the pipeline cannot distinguish from an account with "
+                f"nothing to return. Top level: {where}",
             )
             return out
         if location != contract.array_locations[0]:
@@ -431,7 +452,9 @@ def check_payload(
                     f"field has been renamed. {spec.why}",
                 )
 
-    if contract.cursor is not None or contract.has_more is not None:
+    # Cursor pagination lives in an envelope, so a root-array response has no
+    # place to put one and nothing to check.
+    if isinstance(payload, dict) and (contract.cursor is not None or contract.has_more is not None):
         out.extend(_check_pagination(contract, payload))
     return out
 

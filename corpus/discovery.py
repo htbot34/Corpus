@@ -223,13 +223,13 @@ class Candidate:
 
     @property
     def ingestible(self) -> bool:
-        """Is there an adapter for this kind yet?
+        """Is there an adapter for this kind?
 
-        `github` is discovered before `sources/github.py` exists. Saying so is
-        better than dropping the find: the URL is in discovery.json either way,
-        and the run reports what it could not read.
+        A kind with no adapter is still reported rather than dropped: the URL
+        lands in discovery.json either way, and the run says what it could not
+        read instead of quietly reading less.
         """
-        return self.kind in ("rss", "substack", "web")
+        return self.kind in ("rss", "substack", "web", "github")
 
     def as_dict(self) -> dict[str, Any]:
         return {

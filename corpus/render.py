@@ -173,6 +173,12 @@ def render_report(
             f"- {len(held)} further source(s) matched the name and nothing else, and were "
             "**not** ingested. They are listed in discovery.json."
         )
+    # What a source could not give, in the source's own words. A per-platform
+    # ceiling — GitHub's events feed reaching back only ~90 days — is a fact
+    # about the corpus, and a reader who has to infer it from a suspiciously
+    # short date range will infer something about the person instead.
+    for note in run_meta.get("source_notes", [])[:6]:
+        caveats.append(f"- {note}")
 
     if tier is not None:
         if tier.suppresses_inference:

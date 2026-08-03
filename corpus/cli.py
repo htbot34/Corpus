@@ -424,8 +424,9 @@ def run(
     # run that is actually about to happen.
     _ACTIVE_LOGGER.context.phase = "sources"
     author = handle or card.slug or card.key
-    other = _fetch_discovered(discovery.candidates, author, cache, echo)
-    other.extend(_fetch_secondary(author, rss, url, cache, echo))
+    source_notes: list[str] = []
+    other = _fetch_discovered(discovery.candidates, author, cache, echo, source_notes)
+    other.extend(_fetch_secondary(author, rss, url, cache, echo, source_notes))
     if other:
         echo(
             f"  {len(other)} document(s) from {len(discovery.candidates) + len(rss) + len(url)} "
@@ -643,6 +644,7 @@ def run(
         "budget_stopped": budget.stopped,
         "discovery": discovery.as_dict(),
         "identity": card.as_dict(),
+        "source_notes": source_notes,
     }
     synthesis: Synthesis | None = None
     exit_code = 0
@@ -871,7 +873,9 @@ def _report_discovery(result: DiscoveryResult, card: IdentityCard, *, following:
 # Which adapter reads which kind of find. `github` is deliberately absent:
 # discovery can name a GitHub profile before `sources/github.py` exists, and
 # saying "found it, cannot read it yet" beats dropping the find.
-def _fetch_one(kind: str, url: str, author: str, cache: Cache, log: Any) -> list[Document]:
+def _fetch_one(
+    kind: str, url: str, author: str, cache: Cache, log: Any, notes: list[str]
+) -> list[Document]:
     """Read one source, or raise SourceError. Never anything else.
 
     The net is deliberately wide. Adapters wrap HTTP status codes in
@@ -881,6 +885,7 @@ def _fetch_one(kind: str, url: str, author: str, cache: Cache, log: Any) -> list
     which is the rule every source in this tool follows.
     """
     from .sources.base import SourceError
+    from .sources.github import GitHubSource
     from .sources.rss import RSSSource
     from .sources.substack import SubstackSource
     from .sources.web import WebSource
@@ -891,6 +896,17 @@ def _fetch_one(kind: str, url: str, author: str, cache: Cache, log: Any) -> list
         if kind == "substack":
             domain = url.removeprefix("https://").removeprefix("http://").strip("/")
             return SubstackSource().fetch(domain, author_handle=author, cache=cache, log=log)
+        if kind == "github":
+            login = url.rstrip("/").rsplit("/", 1)[-1]
+            # GitHub is the one adapter with coverage limits worth stating in
+            # the report: its events feed reaches ~90 days, and the search path
+            # that reaches further has its own per-minute rate limit. Those
+            # notes travel with the documents rather than being logged and lost.
+            docs, stats = GitHubSource().fetch_with_stats(
+                login, author_handle=author, cache=cache, log=log
+            )
+            notes.extend(f"GitHub: {note}" for note in stats.notes)
+            return docs
         return WebSource().fetch(url, author_handle=author, cache=cache, log=log)
     except SourceError:
         raise
@@ -899,7 +915,7 @@ def _fetch_one(kind: str, url: str, author: str, cache: Cache, log: Any) -> list
 
 
 def _fetch_discovered(
-    candidates: list[Candidate], author: str, cache: Cache, log: Any
+    candidates: list[Candidate], author: str, cache: Cache, log: Any, notes: list[str]
 ) -> list[Document]:
     """Read every source discovery is confident enough to ingest.
 
@@ -917,7 +933,7 @@ def _fetch_discovered(
             log(f"  {candidate.url}: no adapter for '{candidate.kind}' yet, skipped")
             continue
         try:
-            found = _fetch_one(candidate.kind, candidate.url, author, cache, log)
+            found = _fetch_one(candidate.kind, candidate.url, author, cache, log, notes)
         except SourceError as exc:
             log(f"  {candidate.url} failed (non-fatal): {exc}")
             continue
@@ -938,6 +954,7 @@ def _fetch_secondary(
     urls: list[str],
     cache: Cache,
     log: Any,
+    notes: list[str],
 ) -> list[Document]:
     """`--rss` and `--url`: URLs the user typed, so anchor-attributed.
 
@@ -954,7 +971,7 @@ def _fetch_secondary(
     for kind, targets in (("rss", rss), ("web", urls)):
         for entry in targets:
             try:
-                found = _fetch_one(kind, entry, handle, cache, log)
+                found = _fetch_one(kind, entry, handle, cache, log, notes)
             except SourceError as exc:
                 log(f"  {kind} {entry} failed (non-fatal): {exc}")
                 continue

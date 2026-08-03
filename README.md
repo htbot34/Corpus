@@ -173,7 +173,8 @@ No search, highest confidence, and it costs nothing. From each anchor:
 
 - **X bio** URL and description links, plus the pinned post — read out of the
   profile the run already paid for, so the bio itself is free.
-- **GitHub** profile `blog` field and bio, plus the profile README.
+- **GitHub** profile `blog` field and bio, plus the profile README. A `github`
+  anchor is also read as a source in its own right — see below.
 - **Substack** about page.
 - **A personal site**: its outbound links, its declared
   `<link rel="alternate">` feed, and failing that up to six probes —
@@ -591,6 +592,67 @@ fields the new report needs — and gets a migration message pointing at plain
 
 ---
 
+## GitHub
+
+For a technical person with no X presence this is often the only place their
+reasoning is written down in public, and the valuable part is not the repo list.
+It is the argument in a review comment and the justification in a commit message
+— technical reasoning under disagreement. So `sources/github.py` reads no repo
+metadata at all, and comments come first.
+
+Two paths, and neither needs a key:
+
+1. **`/users/{login}/events/public`** — review comments (with the diff hunk kept
+   as `context`, for the same reason a reply keeps its parent post), issue and PR
+   comments, and commit messages from `PushEvent`.
+2. **`/search/issues?q=commenter:{login}+type:pr`**, then each thread's
+   `comments_url` — reaches back further than the events feed, filtered to the
+   comments the subject actually wrote.
+
+`GITHUB_TOKEN` raises the rate limit from 60/hr to 5,000/hr. Without it the
+adapter opens 8 threads instead of 25, because 25 thread reads would be a third
+of the anonymous hourly budget spent on one person.
+
+### What a live capture changed about the design
+
+Three payloads were pulled from the live API with a token on 2026-08-03 and
+scrubbed into `tests/fixtures/github_*.json`. Two findings in them are
+load-bearing, and both would otherwise have been silent:
+
+- **No `PushEvent` carries commit messages.** All 69 in the capture had the
+  payload `{repository_id, push_id, ref, head, before}` — no `commits`, no
+  `size`, no `distinct_size`, and an undocumented `repository_id`. Consistent
+  across a 50-push repo and a 19-push hobby repo, so not size-related
+  truncation. The extraction and the wip/typo/merge filter are implemented and
+  tested against the documented shape; `push_events_without_commits` counts the
+  gap, so a run says "69 pushes, 0 with messages attached" rather than producing
+  nothing and looking like an account that never commits.
+- **A `search/issues` item is not the subject's writing.** Each item is the pull
+  request they *commented on*, so `item.body` and `item.user` belong to whoever
+  opened it — **0 of 20 items in the capture were authored by the subject**. An
+  adapter reading `item.body` would attribute twenty strangers' PR descriptions
+  to the target. So `body` is never read at all: the search result is a list of
+  pointers, and the comments are fetched per thread and filtered by author.
+
+`corpus/sources/github_contract.py` states every field name and nesting the
+adapter depends on, with a severity and a what-breaks note each.
+`tests/test_github_wire_contract.py` checks the fixtures against it on every
+run, and cross-checks in both directions — a field marked critical that the
+adapter never reads fails, and a field the adapter reads that the contract never
+mentions fails too.
+
+### Two limits, reported in every coverage block
+
+- **`events/public` reaches ~300 events and ~90 days.** Commit and comment
+  coverage from that path is recent activity, never history. A reader who has to
+  infer that from a suspiciously short date range will infer something about the
+  person instead.
+- **`search/issues` has its own rate limit of 30 requests per _minute_**,
+  separate from and far tighter than the core limit. One search runs per target
+  and it is not paginated.
+
+---
+
 ## Sources other than X
 
 One file each in `corpus/sources/`, merging into the same corpus.
@@ -627,7 +689,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-584 tests, all offline. The suite covers both provider regressions (via
+638 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
@@ -705,12 +767,17 @@ Honest failure over polish, so these are stated rather than buried:
 Phase 1 landed first because it costs nothing and may cover most targets, and
 that was worth finding out before adding a search bill. What is not here yet:
 
-- **`sources/github.py`.** Discovery already *finds* a GitHub profile and reads
-  its bio and README for links, but there is no adapter to ingest commit
-  messages, PR comments, issue comments, or repo prose. Those are the
-  highest-signal GitHub content by a distance — technical reasoning under
-  disagreement — and a discovered `github` candidate is currently reported as
-  "no adapter yet" rather than silently dropped.
+- **Commit messages, in practice.** `sources/github.py` extracts and filters
+  them, but GitHub's events feed no longer carries a `commits` array — see the
+  finding above — so in practice a run gets comments and no commits. Reading
+  `/repos/{owner}/{repo}/commits?author={login}` per repo would recover them and
+  is not built; there is no capture of that endpoint to build against.
+- **The one unverified hop.** `github_issue_comments` is reached from a search
+  result's `comments_url` and no capture of that response exists. The element
+  shape is not a guess — it is the same comment object embedded in
+  `IssueCommentEvent`, which *was* captured — but that the path returns a bare
+  array of them is assumed. Declared unverified in the contract and pinned by a
+  test.
 - **Phase 2 search.** No search vendor and no scoring against found pages, so
   nothing ever reaches `corroborated` today. `--max-searches` does not exist yet
   and `discovery.json` records `"searches": 0` so its absence is explicit rather

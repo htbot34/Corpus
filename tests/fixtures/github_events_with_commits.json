@@ -1,0 +1,102 @@
+[
+  {
+    "id": "99000000001",
+    "type": "PushEvent",
+    "actor": {
+      "id": 4200001,
+      "login": "testsubject",
+      "display_login": "testsubject",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/testsubject",
+      "avatar_url": ""
+    },
+    "repo": {
+      "id": 4200002,
+      "name": "testsubject/project-beta",
+      "url": "https://api.github.com/repos/testsubject/project-beta"
+    },
+    "payload": {
+      "repository_id": 4200002,
+      "push_id": 99000000001,
+      "size": 7,
+      "distinct_size": 7,
+      "ref": "refs/heads/main",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "before": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits": [
+        {
+          "sha": "1111111111111111111111111111111111111111",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "audio: keep the gate's threshold in fixed point\n\nFloating point in the interrupt path was costing more than the precision was worth, and the range we actually need fits in Q15 with room to spare.\n\nSigned-off-by: Test Subject <subject@example.invalid>",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/1111111111111111111111111111111111111111"
+        },
+        {
+          "sha": "2222222222222222222222222222222222222222",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "wip",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/2222222222222222222222222222222222222222"
+        },
+        {
+          "sha": "3333333333333333333333333333333333333333",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "fix typo",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/3333333333333333333333333333333333333333"
+        },
+        {
+          "sha": "4444444444444444444444444444444444444444",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "Merge branch 'fixes' of https://github.com/contributor-one/project",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/4444444444444444444444444444444444444444"
+        },
+        {
+          "sha": "5555555555555555555555555555555555555555",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "gen_effects: sort by (priority, filename) so ids are stable\n\nTwo effects sharing a priority made the id depend on os.listdir() order, which is to say on the filesystem. Break the tie explicitly.",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/5555555555555555555555555555555555555555"
+        },
+        {
+          "sha": "6666666666666666666666666666666666666666",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "WIP: do not merge",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/6666666666666666666666666666666666666666"
+        },
+        {
+          "sha": "7777777777777777777777777777777777777777",
+          "author": {
+            "email": "subject@example.invalid",
+            "name": "Test Subject"
+          },
+          "message": "Revert \"audio: keep the gate's threshold in fixed point\"\n\nThis reverts commit 1111111111111111111111111111111111111111. The Q15 range is wrong for the high-gain path and it clips.",
+          "distinct": true,
+          "url": "https://api.github.com/repos/testsubject/project-alpha/commits/7777777777777777777777777777777777777777"
+        }
+      ]
+    },
+    "public": true,
+    "created_at": "2026-08-02T23:25:23Z"
+  }
+]

@@ -771,3 +771,97 @@ seeded, which is the honest way to find it.
 policy, the manifest, the wire contract, `BATCH_LOOKUP_MAX = 50`, and every
 schema the model sees. This pass is about finding the corpus, not about what
 happens to it afterwards.
+
+---
+
+## 2026-08-03 — Branch consolidation, and GitHub as a source
+
+### One trunk
+
+Four branches existed, each a strict ancestor of the next, and a fresh session
+had already branched from the wrong one and lost every production fix. Verified
+ancestry across all four (39 commits, **0 reachable from any branch and not
+from the discovery tip**), then created `main` at that tip and pushed it.
+
+Two steps could not be completed from inside the sandbox and are left for a
+human: the repository default is still the oldest branch, and branch deletion
+is refused. The agent proxy intercepts `api.github.com` and answers
+`GitHub access is not enabled for this session` to `/repos/{owner}/{repo}`,
+while the git proxy returns 403 to any ref deletion. Neither the MCP GitHub
+server nor `gh` exposes a default-branch setter. Until the default moves, a new
+session still clones the 1-commit build — which is the exact failure this was
+meant to end, so it is stated here rather than buried in a summary.
+
+### `sources/github.py`
+
+For a technical person with no X presence, GitHub is often the only place their
+reasoning is written down in public — and the valuable part is the argument in a
+review comment, not the repo list. So no repo metadata is read at all.
+
+Two paths, neither requiring a key. `events/public` yields review comments
+(keeping the diff hunk as `context`, for the same reason a reply keeps its
+parent post), issue and PR comments, and commit messages. `search/issues?q=
+commenter:{login}+type:pr` then each thread's `comments_url` reaches further
+back, filtered to comments the subject actually wrote. `GITHUB_TOKEN` raises
+60/hr to 5,000/hr; without it the thread cap drops from 25 to 8, because 25
+reads would be a third of the anonymous hourly budget spent on one person.
+
+### What the capture changed
+
+Three payloads were pulled from the live API with a token on 2026-08-03,
+scrubbed into `tests/fixtures/github_*.json`, and the captures deleted.
+`tests/fixtures/_scrub_github.py` is the record of exactly what was changed:
+key names and nesting are real, identifiers and prose are not.
+
+**No `PushEvent` carries commit messages.** All 69 in the capture had the
+payload `{repository_id, push_id, ref, head, before}` — no `commits`, no
+`size`, no `distinct_size`, and an undocumented `repository_id`. Consistent
+across a 50-push repo and a 19-push hobby repo, so not size truncation. The
+extraction and the wip/typo/merge filter are built and tested against the
+documented shape, and `push_events_without_commits` counts the gap so a run
+reports "4 pushes, 0 with messages attached" instead of looking like an account
+that never commits.
+
+**A `search/issues` item is not the subject's writing.** Each item is the pull
+request they *commented on*; `item.body` and `item.user` belong to whoever
+opened it, and **0 of 20 items in the capture were authored by the subject**.
+Reading `item.body` would have attributed twenty strangers' PR descriptions to
+the target — the attribution failure the whole discovery layer exists to
+prevent, arriving from inside a source rather than from search. `body` is
+therefore never read: the search result is a list of pointers.
+
+### The contract, and what it caught
+
+`corpus/sources/github_contract.py` reuses `corpus/x/contract.py`'s primitives
+rather than copying them. Three additions to the shared module, each earned:
+
+- `ROOT_ARRAY` (`"$"`) — GitHub's events feed is a bare array with no envelope,
+  and a contract that could not say so would have to describe a shape that does
+  not exist.
+- `Field.nullable` — GitHub returns null constantly for fields that exist and
+  are unset. An absent key means a rename; a null means the account has no bio,
+  and conflating them makes the checker cry wolf on every profile.
+- The array-not-found message no longer names `_tweets_from`, which is not the
+  reader on this side.
+
+`tests/test_github_wire_contract.py` cross-checks in both directions, and the
+second direction found three real mismatches: `search/issues.user` and
+`.created_at` were marked critical/important while the adapter never reads
+them, and the events `id` was marked important when dedupe actually keys on the
+comment id inside the payload. The contract was wrong, not the code, and now
+says so.
+
+### Fixed on the way through
+
+The commit document id was `gh-commit-{sha[:12]}`. A fixture with
+zero-padded shas collapsed seven commits into one, which is an artificial case —
+but a truncated id turns a collision into a silently dropped commit, so it is
+the full sha now.
+
+### Housekeeping
+
+- Test suite 584 → 638, still all offline. The GitHub tests replace
+  `http_client` with something that fails the test if it is ever constructed.
+- `gh_captures/` deleted and gitignored alongside `captures/`. The blobs remain
+  in git history, where they were committed before this session.
+- No new dependencies.
