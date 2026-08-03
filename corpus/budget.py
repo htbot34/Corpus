@@ -460,6 +460,27 @@ def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:
     return reads * X_COST_PER_TWEET + X_COST_PER_PROFILE
 
 
+def estimate_anthropic_split(
+    post_count: int,
+    map_model: str = "claude-haiku-4-5-20251001",
+    reduce_model: str = "claude-opus-5",
+) -> tuple[float, float]:
+    """(map, reduce) separately, for the per-phase breakdown a run prints.
+
+    Split out rather than summed inline because the two phases answer different
+    questions when an estimate looks wrong: map scales with corpus size, reduce
+    barely moves. A single number cannot tell you which one surprised you.
+    """
+    corpus_tokens = post_count * 120
+    map_chunks = max(1, round(corpus_tokens / 30_000))
+    map_in, map_out = model_rates(map_model)
+    reduce_in_rate, reduce_out_rate = model_rates(reduce_model)
+    map_cost = corpus_tokens * map_in / 1_000_000 + map_chunks * 1_500 * map_out / 1_000_000
+    reduce_in = map_chunks * 1_500 + 3_000  # map outputs + signals.json
+    reduce_cost = reduce_in * reduce_in_rate / 1_000_000 + 10_000 * reduce_out_rate / 1_000_000
+    return map_cost, reduce_cost
+
+
 def estimate_anthropic_cost(
     post_count: int,
     map_model: str = "claude-haiku-4-5-20251001",
@@ -477,11 +498,4 @@ def estimate_anthropic_cost(
     *not* the reservation — `estimate_anthropic_call` is, and it charges the
     full `max_tokens` because a reservation that guesses low is not a ceiling.
     """
-    corpus_tokens = post_count * 120
-    map_chunks = max(1, round(corpus_tokens / 30_000))
-    map_in, map_out = model_rates(map_model)
-    reduce_in_rate, reduce_out_rate = model_rates(reduce_model)
-    map_cost = corpus_tokens * map_in / 1_000_000 + map_chunks * 1_500 * map_out / 1_000_000
-    reduce_in = map_chunks * 1_500 + 3_000  # map outputs + signals.json
-    reduce_cost = reduce_in * reduce_in_rate / 1_000_000 + 10_000 * reduce_out_rate / 1_000_000
-    return map_cost + reduce_cost
+    return sum(estimate_anthropic_split(post_count, map_model, reduce_model))

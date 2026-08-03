@@ -1,9 +1,12 @@
 """corpus — CLI.
 
+corpus profile --name "Jane Smith" --employer "Acme Corp" --github jsmith
+corpus profile --target jane
+corpus run --target jane
 corpus run --x paulg
+corpus run --github jsmith --site https://janesmith.com    # no X at all
 corpus run --x paulg --max-posts 5000 --since 2020-01-01 --budget 15
 corpus run --x someone --dry-run
-corpus run --x someone --also-substack example.com
 corpus resynth out/paulg/2026-08-02
     corpus resynth out/paulg/2026-08-02 --render-only   # re-render, zero API calls
 corpus cache stats | corpus cache clear
@@ -29,10 +32,27 @@ from .budget import (
     STRICT,
     Budget,
     BudgetExceeded,
-    estimate_anthropic_cost,
+    estimate_anthropic_split,
     estimate_x_cost,
 )
 from .cache import DEFAULT_TTL_SECONDS, Cache
+from .discovery import (
+    DEFAULT_MAX_FETCHES,
+    Candidate,
+    DiscoveryResult,
+    discover_from_anchors,
+    plan_from_anchors,
+)
+from .identity import (
+    IdentityCard,
+    IdentityError,
+    build_card,
+    default_profiles_path,
+    load_target,
+    load_targets,
+    merge_flags,
+    save_target,
+)
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
 from .models import Document, Synthesis
@@ -45,7 +65,6 @@ from .x.hydrate import hydrate
 from .x.ingest import DEFAULT_EMPTY_WINDOW_TOLERANCE, ingest_timeline
 from .x.providers import ProviderError, get_provider
 from .x.signals import compute_signals
-from .x.validate import InvalidHandle, validate_handle
 
 app = typer.Typer(
     add_completion=False,
@@ -150,7 +169,27 @@ def _out_dir(base: Path, handle: str) -> Path:
 
 @app.command()
 def run(
-    x: str = typer.Option(..., "--x", help="X handle, with or without @."),
+    x: str | None = typer.Option(
+        None, "--x", help="X handle, with or without @. Optional — a run with no X anchor works."
+    ),
+    target: str | None = typer.Option(
+        None, "--target", help="A saved target from profiles.yaml. See `corpus profile`."
+    ),
+    name: str = typer.Option("", "--name", help="Their full name, for scoring what is found."),
+    employer: str = typer.Option("", "--employer"),
+    role: str = typer.Option("", "--role"),
+    location: str = typer.Option("", "--location", help="Disambiguates a common name."),
+    github: str = typer.Option("", "--github", help="GitHub username. An anchor."),
+    site: str = typer.Option("", "--site", help="Their own site. An anchor, and crawled."),
+    profiles: Path | None = typer.Option(None, "--profiles", metavar="PATH"),
+    discover: bool = typer.Option(
+        True,
+        "--discover/--no-discover",
+        help="Follow links out from the anchors. Free, and never fatal. Anchors are read either way.",
+    ),
+    max_fetches: int = typer.Option(
+        DEFAULT_MAX_FETCHES, "--max-fetches", help="Ceiling on discovery's plain-HTTP requests."
+    ),
     max_posts: int = typer.Option(3000, "--max-posts"),
     since: str | None = typer.Option(None, "--since", help="YYYY-MM-DD floor."),
     budget_limit: float = typer.Option(10.00, "--budget", help="Hard stop, in dollars."),
@@ -223,18 +262,31 @@ def run(
         help="Resume from a previous run's out/<handle>/<date> directory.",
     ),
 ) -> None:
-    """Ingest, hydrate, and synthesize one person's public writing."""
+    """Find one person's public writing, and synthesize how they think."""
     if log_format not in LOG_FORMATS:
         typer.echo(f"ERROR: --log-format must be one of {', '.join(LOG_FORMATS)}")
         raise typer.Exit(code=2)
-    # Validate at the boundary, where the error can name the input and the user
-    # can still fix it. An unvalidated handle does not fail downstream — it
-    # silently changes what the search query means.
+    # The card is resolved at the boundary, where an error can name the input
+    # and the user can still fix it. Anchors are validated on the way in: an
+    # unvalidated X handle does not fail downstream, it silently changes what
+    # the search query means.
     try:
-        handle = validate_handle(x)
-    except InvalidHandle as exc:
+        card = _resolve_card(
+            target=target,
+            profiles=profiles,
+            name=name,
+            employer=employer,
+            role=role,
+            location=location,
+            x=x or "",
+            github=github,
+            site=site,
+            substack=substack or "",
+        )
+    except IdentityError as exc:
         error(str(exc))
         raise typer.Exit(code=2) from exc
+    handle = card.x_handle
     try:
         selected_axes = select_axes(axes)
     except AxisError as exc:
@@ -273,15 +325,16 @@ def run(
         )
         raise typer.Exit(code=2)
     if manifest is not None:
-        if manifest.handle and manifest.handle != handle:
-            error(f"--resume {resume} is a run for @{manifest.handle}, not @{handle}")
+        if manifest.handle and manifest.handle != card.key:
+            error(f"--resume {resume} is a run for {manifest.handle}, not {card.key}")
             raise typer.Exit(code=2)
         # A resumed run's budget covers everything the target has cost, not
         # just this attempt — otherwise --budget 10 resumed three times is a $30
         # run, and the flag documented as a hard stop would be per-attempt.
         budget.prior_spend = manifest.prior_spend
 
-    echo(f"corpus run @{handle} (run {budget.run_id})")
+    echo(f"corpus run {card.display} (run {budget.run_id})")
+    echo(f"  anchors: {_anchor_line(card)}")
     echo(
         f"  budget ${budget_limit:.2f} ({budget_mode}) · max-posts {max_posts} "
         f"· window {window_days}d"
@@ -293,10 +346,10 @@ def run(
     # The output directory is created up front, not after ingestion: the
     # manifest is checkpointed during the walk, and a checkpoint needs
     # somewhere to land before the thing it protects against happens.
-    out_dir = Path(resume) if resume else _out_dir(out, handle)
+    out_dir = Path(resume) if resume else _out_dir(out, card.key)
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = manifest or RunManifest(handle=handle, run_id=budget.run_id)
-    manifest.handle = manifest.handle or handle
+    manifest = manifest or RunManifest(handle=card.key, run_id=budget.run_id)
+    manifest.handle = manifest.handle or card.key
     manifest.run_id = budget.run_id
 
     # ---- estimate + confirm ---------------------------------------------
@@ -305,8 +358,10 @@ def run(
     raw_tweets: list[dict[str, Any]] = []
     client: XClient | None = None
     profile: dict[str, Any] = {}
+    public_posts = 0
+    post_target = 0
 
-    if offline:
+    if handle and offline:
         cached = cache.get("x", f"corpus:{handle.lower()}")
         if cached is None:
             echo(f"ERROR: --offline but no cached corpus for @{handle}.")
@@ -314,7 +369,7 @@ def run(
             raise typer.Exit(code=2)
         raw_tweets = cached
         echo(f"  loaded {len(raw_tweets)} cached raw posts")
-    else:
+    elif handle:
         try:
             provider = get_provider(capture=_make_capture(capture_raw), log=echo)
         except (ProviderError, NotImplementedError) as exc:
@@ -333,38 +388,97 @@ def run(
             or profile.get("tweetCount")
             or 0
         )
-        target = min(max_posts, public_posts) if public_posts else max_posts
-        x_cost = estimate_x_cost(target)
-        llm_cost = 0.0 if skip_synthesis else estimate_anthropic_cost(target)
+        post_target = min(max_posts, public_posts) if public_posts else max_posts
 
-        estimated_total = x_cost + llm_cost
-        estimated_posts = target
-        echo(f"  @{handle}: {public_posts or 'unknown'} public posts on file")
-        echo(f"  estimate: ~{target} posts")
-        echo(f"    X data (twitterapi.io): ~${x_cost:.3f}")
-        echo(f"    Anthropic synthesis:    ~${llm_cost:.3f}")
-        echo(f"    total:                  ~${x_cost + llm_cost:.3f} of ${budget_limit:.2f} budget")
-        if x_cost + llm_cost > budget_limit:
+    # ---- discovery (phase 1: follow the anchors) -------------------------
+    # Before the estimate, because what it finds changes what the corpus will
+    # be — and before the confirmation, because it costs nothing to run and a
+    # spend prompt should describe the run that is actually about to happen.
+    _ACTIVE_LOGGER.context.phase = "discover"
+    discovery = discover_from_anchors(
+        card,
+        cache,
+        x_profile=profile or None,
+        # The pinned-post read is the only metered call in the phase, so it is
+        # skipped under --dry-run, which promises to stop before paid fetches.
+        x_lookup=(client.tweets_by_ids if client is not None and not dry_run else None),
+        follow_links=discover,
+        max_fetches=max_fetches,
+        log=echo,
+    )
+    _report_discovery(discovery, card, following=discover)
+    echo("")
+
+    if not handle and not (rss or url) and not discovery.candidates:
+        error(
+            "no sources. There is no X anchor, discovery found nothing, and no "
+            "--rss/--url was given. Add an anchor (--github, --site, --substack) "
+            "or name a saved target with --target."
+        )
+        raise typer.Exit(code=2)
+
+    # ---- everything that is not X ----------------------------------------
+    # Read *before* the estimate, not after, because it is free — plain HTTP,
+    # no metered API — and because on a run with no X anchor an estimate that
+    # ignores it is an estimate of nothing. The prompt below then describes the
+    # run that is actually about to happen.
+    _ACTIVE_LOGGER.context.phase = "sources"
+    author = handle or card.slug or card.key
+    other = _fetch_discovered(discovery.candidates, author, cache, echo)
+    other.extend(_fetch_secondary(author, rss, url, cache, echo))
+    if other:
+        echo(
+            f"  {len(other)} document(s) from {len(discovery.candidates) + len(rss) + len(url)} "
+            f"non-X source(s), at no cost"
+        )
+        echo("")
+
+    if not offline:
+        x_cost = estimate_x_cost(post_target) if handle else 0.0
+        projected_docs = post_target + len(other)
+        map_cost, reduce_cost = (
+            (0.0, 0.0) if skip_synthesis else estimate_anthropic_split(projected_docs)
+        )
+        estimated_total = x_cost + map_cost + reduce_cost
+        estimated_posts = post_target
+        if handle:
+            echo(f"  @{handle}: {public_posts or 'unknown'} public posts on file")
+        echo(
+            f"  estimate: ~{post_target} posts + {len(other)} document(s) already "
+            f"read from {len(discovery.candidates)} discovered source(s)"
+        )
+        echo(f"    discovery (plain HTTP):   $0.000  ({discovery.fetches} request(s))")
+        echo(f"    fetch — X data:          ~${x_cost:.3f}")
+        echo(f"    map:                     ~${map_cost:.3f}")
+        echo(f"    reduce:                  ~${reduce_cost:.3f}")
+        echo(f"    total:                   ~${estimated_total:.3f} of ${budget_limit:.2f} budget")
+        if estimated_total > budget_limit:
             warn("the estimate exceeds the budget; the run will stop early")
-        if target and target < THIN_BELOW and not skip_synthesis:
+        if projected_docs and projected_docs < THIN_BELOW and not skip_synthesis:
             echo("")
             warn(
-                f"~{target} posts is under the {THIN_BELOW}-document floor, so this will "
-                "be a THIN corpus: inferred positions, blind spots, and view changes are "
-                "all suppressed and the report shows stated positions only."
+                f"~{projected_docs} documents is under the {THIN_BELOW}-document floor, so "
+                "this will be a THIN corpus: inferred positions, blind spots, and view "
+                "changes are all suppressed and the report shows stated positions only."
             )
-            echo("  Secondary sources merge into the same corpus and cost nothing —")
+            echo("  Other sources merge into the same corpus and cost nothing —")
             echo("  they are plain HTTP, not a metered API:")
-            echo(f"    corpus run --x {handle} --substack DOMAIN")
-            echo(f"    corpus run --x {handle} --rss URL          # repeatable")
-            echo(f"    corpus run --x {handle} --url URL          # repeatable")
-            echo("  Or reach further back: raise --max-posts, drop --since, or raise")
-            echo("  --empty-window-tolerance.")
+            echo("    --github USER --site URL     # anchors, and then crawled for more")
+            echo("    --substack DOMAIN")
+            echo("    --rss URL                    # repeatable")
+            echo("    --url URL                    # repeatable")
+            if handle:
+                echo("  Or reach further back: raise --max-posts, drop --since, or raise")
+                echo("  --empty-window-tolerance.")
         echo("")
 
         if dry_run:
             echo("--dry-run: stopping before any paid fetch.")
-            echo(f"  spent so far: ${budget.total:.4f} (profile lookup)")
+            for line in plan_from_anchors(card):
+                echo(f"  plan: {line}")
+            echo("  plan: 0 searches (phase 2 is not wired up yet)")
+            spent = f"${budget.total:.4f}" + (" (profile lookup)" if handle else "")
+            echo(f"  spent so far: {spent}")
             raise typer.Exit(code=0)
 
         if not yes and not typer.confirm("Proceed?", default=True):
@@ -372,6 +486,7 @@ def run(
             raise typer.Exit(code=0)
         echo("")
 
+    if handle and not offline and client is not None:
         # ---- ingest ------------------------------------------------------
         echo("Ingesting (sliding time window):")
         _ACTIVE_LOGGER.context.phase = "ingest"
@@ -427,64 +542,78 @@ def run(
         echo("--dry-run with --offline: nothing to estimate.")
         raise typer.Exit(code=0)
 
-    ingest_meta = (
-        ingest_stats.as_dict() if not offline else {"stop_reason": "loaded from cache (--offline)"}
-    )
-    share = ingest_meta.get("ingested_share")
-    total_known = ingest_meta.get("public_post_count")
-    if share is not None and total_known:
-        echo(
-            f"  {len(raw_tweets)} unique posts of {total_known:,} public "
-            f"({share:.1%}) · ${budget.total:.4f} spent"
-        )
+    from .x.hydrate import HydrationStats
+
+    docs: list[Document] = []
+    hyd_stats = HydrationStats()
+    ingest_meta: dict[str, Any] = {}
+
+    if not handle:
+        ingest_meta = {"stop_reason": "no X anchor; this corpus is built from other sources"}
     else:
-        echo(f"  {len(raw_tweets)} unique posts · ${budget.total:.4f} spent")
-    echo("")
-
-    if not raw_tweets:
-        error("no posts ingested. Nothing to synthesize.")
-        raise typer.Exit(code=1)
-
-    # ---- hydrate ---------------------------------------------------------
-    _ACTIVE_LOGGER.context.phase = "hydrate"
-    echo("Hydrating:")
-    if client is None:
-        provider = _OfflineProvider()
-        client = XClient(provider, cache, budget)
-    try:
-        docs, hyd_stats = hydrate(
-            client,
-            raw_tweets,
-            handle,
-            include_reposts=include_reposts,
-            include_replies=replies,
-            log=echo,
+        ingest_meta = (
+            ingest_stats.as_dict()
+            if not offline
+            else {"stop_reason": "loaded from cache (--offline)"}
         )
-    except BudgetExceeded as exc:
-        # Un-hydrated documents are still worth keeping — we paid for them.
-        echo(f"  [budget] {exc} — continuing with un-hydrated documents")
-        from .x.client import normalize_tweet
-        from .x.hydrate import HydrationStats
+        share = ingest_meta.get("ingested_share")
+        total_known = ingest_meta.get("public_post_count")
+        if share is not None and total_known:
+            echo(
+                f"  {len(raw_tweets)} unique posts of {total_known:,} public "
+                f"({share:.1%}) · ${budget.total:.4f} spent"
+            )
+        else:
+            echo(f"  {len(raw_tweets)} unique posts · ${budget.total:.4f} spent")
+        echo("")
 
-        docs = [normalize_tweet(t) for t in raw_tweets]
-        hyd_stats = HydrationStats(
-            input_documents=len(raw_tweets),
-            output_documents=len(docs),
-            notes=["budget exhausted before hydration completed; context is missing"],
-        )
-    echo("")
+        if not raw_tweets:
+            error("no posts ingested from X.")
+            if not discovery.candidates:
+                raise typer.Exit(code=1)
+            warn("continuing on the discovered sources alone")
+
+        # ---- hydrate -----------------------------------------------------
+        if raw_tweets:
+            _ACTIVE_LOGGER.context.phase = "hydrate"
+            echo("Hydrating:")
+            if client is None:
+                provider = _OfflineProvider()
+                client = XClient(provider, cache, budget)
+            try:
+                docs, hyd_stats = hydrate(
+                    client,
+                    raw_tweets,
+                    handle,
+                    include_reposts=include_reposts,
+                    include_replies=replies,
+                    log=echo,
+                )
+            except BudgetExceeded as exc:
+                # Un-hydrated documents are still worth keeping — we paid for them.
+                echo(f"  [budget] {exc} — continuing with un-hydrated documents")
+                from .x.client import normalize_tweet
+
+                docs = [normalize_tweet(t) for t in raw_tweets]
+                hyd_stats = HydrationStats(
+                    input_documents=len(raw_tweets),
+                    output_documents=len(docs),
+                    notes=["budget exhausted before hydration completed; context is missing"],
+                )
+            echo("")
 
     manifest.hydrate_complete = True
     manifest.hydrated_documents = len(docs)
     manifest.prior_spend = budget.total
     manifest.save(out_dir)
 
-    # ---- secondary sources ----------------------------------------------
-    secondary = _fetch_secondary(handle, substack, rss, url, cache, echo)
-    if secondary:
-        docs.extend(secondary)
+    if other:
+        docs.extend(other)
         docs.sort(key=lambda d: d.published_at, reverse=True)
-        echo("")
+
+    if not docs:
+        error("no documents from any source. Nothing to synthesize.")
+        raise typer.Exit(code=1)
 
     # ---- signals ---------------------------------------------------------
     _ACTIVE_LOGGER.context.phase = "signals"
@@ -501,7 +630,10 @@ def run(
     # ---- write corpus + signals before spending on synthesis -------------
     _write_json(out_dir / "corpus.json", [d.model_dump() for d in docs])
     _write_json(out_dir / "signals.json", signals)
-    echo(f"Wrote corpus.json and signals.json to {out_dir}")
+    # discovery.json holds the held-back candidates too, so a name-match this
+    # run declined to ingest is recorded rather than forgotten.
+    _write_json(out_dir / "discovery.json", {"card": card.as_dict(), **discovery.as_dict()})
+    echo(f"Wrote corpus.json, signals.json and discovery.json to {out_dir}")
     echo("")
 
     # ---- synthesize ------------------------------------------------------
@@ -509,6 +641,8 @@ def run(
         "ingest": ingest_meta,
         "hydration": hyd_stats.as_dict(),
         "budget_stopped": budget.stopped,
+        "discovery": discovery.as_dict(),
+        "identity": card.as_dict(),
     }
     synthesis: Synthesis | None = None
     exit_code = 0
@@ -581,7 +715,8 @@ def run(
     # ---- report + spend --------------------------------------------------
     _ACTIVE_LOGGER.context.phase = "render"
     report = render_report(
-        handle=handle,
+        handle=author,
+        subject=card.display,
         synthesis=synthesis,
         docs=docs,
         signals=signals,
@@ -599,7 +734,7 @@ def run(
     if not offline and estimated_total is not None:
         cache.log_estimate(
             run_id=budget.run_id,
-            handle=handle,
+            handle=card.key,
             category="total",
             estimated=estimated_total,
             actual=budget.this_attempt,
@@ -655,43 +790,177 @@ class _OfflineProvider:
         return None
 
 
+def _resolve_card(
+    *,
+    target: str | None,
+    profiles: Path | None,
+    name: str = "",
+    employer: str = "",
+    role: str = "",
+    location: str = "",
+    x: str = "",
+    github: str = "",
+    site: str = "",
+    substack: str = "",
+) -> IdentityCard:
+    """Who this run is about: a saved target, flags, or both.
+
+    A flag always beats the file, and never writes back to it — an override on
+    the command line is not a decision to edit the user's notes.
+    """
+    flags = {
+        "name": name,
+        "employer": employer,
+        "role": role,
+        "location": location,
+        "x": x,
+        "github": github,
+        "site": site,
+        "substack": substack,
+    }
+    if target:
+        return merge_flags(load_target(target, profiles), **flags)
+    return build_card(
+        name=name,
+        employer=employer,
+        role=role,
+        location=location,
+        x=x,
+        github=github,
+        site=site,
+        substack=substack,
+    )
+
+
+def _anchor_line(card: IdentityCard) -> str:
+    if not card.anchors:
+        return "none — nothing to read"
+    return " · ".join(f"{kind}:{value}" for kind, value in sorted(card.anchors.items()))
+
+
+def _report_discovery(result: DiscoveryResult, card: IdentityCard, *, following: bool) -> None:
+    """What discovery found, at a glance, before anything is paid for."""
+    if not following:
+        echo(f"Discovery: --no-discover, reading the {len(result.candidates)} anchor(s) only.")
+        return
+    mix = result.by_attribution()
+    echo(
+        f"Discovery (phase 1, link-following): {len(result.candidates)} source(s) "
+        f"from {result.fetches} fetch(es) and {result.cached_fetches} cache hit(s)"
+    )
+    if mix:
+        echo("  " + ", ".join(f"{count} {label}" for label, count in sorted(mix.items())))
+    for candidate in result.candidates:
+        marker = "" if candidate.ingestible else "  [no adapter yet]"
+        echo(f"  {candidate.attribution:<12} {candidate.url}  ({candidate.basis}){marker}")
+    for signal in result.identity_signals[:5]:
+        echo(f"  signal: {signal}")
+    if result.held:
+        warn(
+            f"{len(result.held)} candidate(s) matched the name and nothing else. They "
+            "are NOT in this corpus; see discovery.json."
+        )
+        for candidate in result.held[:5]:
+            echo(f"  held: {candidate.url} — missing: {', '.join(candidate.missing)}")
+    for note in result.notes[:5]:
+        echo(f"  note: {note}")
+    for problem in result.errors[:5]:
+        warn(f"discovery: {problem}")
+
+
+# Which adapter reads which kind of find. `github` is deliberately absent:
+# discovery can name a GitHub profile before `sources/github.py` exists, and
+# saying "found it, cannot read it yet" beats dropping the find.
+def _fetch_one(kind: str, url: str, author: str, cache: Cache, log: Any) -> list[Document]:
+    """Read one source, or raise SourceError. Never anything else.
+
+    The net is deliberately wide. Adapters wrap HTTP status codes in
+    SourceError but not transport failures — a DNS miss, a TLS error, a proxy
+    403 — and those arrive as httpx exceptions that no caller was catching. A
+    dead feed must cost the corpus some documents and cost the run nothing,
+    which is the rule every source in this tool follows.
+    """
+    from .sources.base import SourceError
+    from .sources.rss import RSSSource
+    from .sources.substack import SubstackSource
+    from .sources.web import WebSource
+
+    try:
+        if kind == "rss":
+            return RSSSource().fetch(url, author_handle=author, cache=cache, log=log)
+        if kind == "substack":
+            domain = url.removeprefix("https://").removeprefix("http://").strip("/")
+            return SubstackSource().fetch(domain, author_handle=author, cache=cache, log=log)
+        return WebSource().fetch(url, author_handle=author, cache=cache, log=log)
+    except SourceError:
+        raise
+    except Exception as exc:
+        raise SourceError(f"{kind} {url}: {exc}") from exc
+
+
+def _fetch_discovered(
+    candidates: list[Candidate], author: str, cache: Cache, log: Any
+) -> list[Document]:
+    """Read every source discovery is confident enough to ingest.
+
+    Non-fatal throughout, like every other source: a feed that 404s costs the
+    corpus some documents and costs the run nothing.
+    """
+    docs: list[Document] = []
+    if not candidates:
+        return docs
+    from .sources.base import SourceError, attribute
+
+    log("Reading discovered sources:")
+    for candidate in candidates:
+        if not candidate.ingestible:
+            log(f"  {candidate.url}: no adapter for '{candidate.kind}' yet, skipped")
+            continue
+        try:
+            found = _fetch_one(candidate.kind, candidate.url, author, cache, log)
+        except SourceError as exc:
+            log(f"  {candidate.url} failed (non-fatal): {exc}")
+            continue
+        docs.extend(
+            attribute(
+                found,
+                attribution=candidate.attribution,
+                basis=candidate.basis,
+                confidence=candidate.confidence,
+            )
+        )
+    return docs
+
+
 def _fetch_secondary(
     handle: str,
-    substack: str | None,
     rss: list[str],
     urls: list[str],
     cache: Cache,
     log: Any,
 ) -> list[Document]:
+    """`--rss` and `--url`: URLs the user typed, so anchor-attributed.
+
+    They stay direct source flags rather than becoming card anchors because
+    both are repeatable and neither is crawled — "read this page" and "this
+    person owns this domain" are different statements.
+    """
     docs: list[Document] = []
-    if not (substack or rss or urls):
+    if not (rss or urls):
         return docs
-    log("Secondary sources (optional bolt-ons; X remains the corpus):")
-    from .sources.base import SourceError
+    log("Sources named on the command line:")
+    from .sources.base import SourceError, attribute
 
-    if substack:
-        from .sources.substack import SubstackSource
-
-        try:
+    for kind, targets in (("rss", rss), ("web", urls)):
+        for entry in targets:
+            try:
+                found = _fetch_one(kind, entry, handle, cache, log)
+            except SourceError as exc:
+                log(f"  {kind} {entry} failed (non-fatal): {exc}")
+                continue
             docs.extend(
-                SubstackSource().fetch(substack, author_handle=handle, cache=cache, log=log)
+                attribute(found, attribution="anchor", basis=f"--{kind} on the command line")
             )
-        except SourceError as exc:
-            log(f"  substack failed (non-fatal): {exc}")
-    for feed in rss:
-        from .sources.rss import RSSSource
-
-        try:
-            docs.extend(RSSSource().fetch(feed, author_handle=handle, cache=cache, log=log))
-        except SourceError as exc:
-            log(f"  rss {feed} failed (non-fatal): {exc}")
-    for page in urls:
-        from .sources.web import WebSource
-
-        try:
-            docs.extend(WebSource().fetch(page, author_handle=handle, cache=cache, log=log))
-        except SourceError as exc:
-            log(f"  web {page} failed (non-fatal): {exc}")
     return docs
 
 
@@ -856,6 +1125,104 @@ def resynth(
     echo(f"Report: {directory / 'report.md'}")
     cache.close()
     raise typer.Exit(code=0 if result.synthesis is not None else 1)
+
+
+@app.command()
+def profile(
+    target: str | None = typer.Option(None, "--target", help="Show or update one saved target."),
+    key: str | None = typer.Option(None, "--key", help="Target key. Defaults to a slug of --name."),
+    name: str = typer.Option("", "--name"),
+    employer: str = typer.Option("", "--employer"),
+    role: str = typer.Option("", "--role"),
+    location: str = typer.Option("", "--location", help="Disambiguates a common name."),
+    x: str = typer.Option("", "--x", help="X handle. An anchor."),
+    github: str = typer.Option("", "--github", help="GitHub username. An anchor."),
+    site: str = typer.Option("", "--site", help="Their own site. An anchor."),
+    substack: str = typer.Option("", "--substack", help="Substack domain. An anchor."),
+    rss: str = typer.Option("", "--rss", help="Feed URL. An anchor."),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="A known false positive. Repeatable, and never ingested."
+    ),
+    profiles: Path | None = typer.Option(None, "--profiles", metavar="PATH"),
+) -> None:
+    """Create, update, or show the identity card a run is scored against.
+
+    With no arguments it lists what is on file. Anchors are what make discovery
+    safe: everything found later is scored against them, and a run with no
+    anchors has nothing to check a name match against.
+    """
+    path = profiles or default_profiles_path()
+    flags = {
+        "name": name,
+        "employer": employer,
+        "role": role,
+        "location": location,
+        "x": x,
+        "github": github,
+        "site": site,
+        "substack": substack,
+        "rss": rss,
+    }
+    writing = any(flags.values()) or bool(exclude)
+
+    try:
+        if not writing:
+            if target:
+                _show_card(load_target(target, path), path)
+                return
+            cards = load_targets(path)
+            if not cards:
+                echo(f"no targets in {path}")
+                echo('  corpus profile --name "Jane Smith" --employer "Acme" --github jsmith')
+                return
+            echo(f"{len(cards)} target(s) in {path}:")
+            for card in cards.values():
+                echo(f"  {card.key:<16} {card.display:<28} {_anchor_line(card)}")
+            return
+
+        if target:
+            card = merge_flags(load_target(target, path), **flags)
+            card.exclude = list(dict.fromkeys([*card.exclude, *exclude]))
+        else:
+            card = build_card(
+                key=key or "",
+                name=name,
+                employer=employer,
+                role=role,
+                location=location,
+                x=x,
+                github=github,
+                site=site,
+                substack=substack,
+                rss=rss,
+                exclude=list(exclude),
+            )
+    except IdentityError as exc:
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
+
+    written = save_target(card, path)
+    echo(f"wrote target '{card.key}' to {written}")
+    _show_card(card, written)
+    if not card.anchors:
+        warn(
+            "this card has no anchors, so discovery has nothing to follow and "
+            "nothing to score a name match against. Add --x, --github, --site, "
+            "--substack, or --rss."
+        )
+
+
+def _show_card(card: IdentityCard, path: Path) -> None:
+    echo(f"target {card.key} ({path})")
+    for label in ("name", "employer", "role", "location"):
+        value = getattr(card, label)
+        if value:
+            echo(f"  {label + ':':<10} {value}")
+    echo(f"  {'anchors:':<10} {_anchor_line(card)}")
+    for entry in card.exclude:
+        echo(f"  {'exclude:':<10} {entry}")
+    echo("")
+    echo(f"  corpus run --target {card.key}")
 
 
 @cache_app.command("stats")

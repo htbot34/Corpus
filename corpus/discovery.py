@@ -730,6 +730,7 @@ def discover_from_anchors(
     *,
     x_profile: dict[str, Any] | None = None,
     x_lookup: Callable[[list[str]], dict[str, dict[str, Any]]] | None = None,
+    follow_links: bool = True,
     max_fetches: int = DEFAULT_MAX_FETCHES,
     log: Callable[[str], None] = print,
 ) -> DiscoveryResult:
@@ -738,22 +739,27 @@ def discover_from_anchors(
     `x_profile` is the profile the run already fetched — reusing it means the X
     bio costs nothing. `x_lookup` enables the pinned-post read, the one metered
     call in this phase; omit it and the phase is free outright.
+
+    `follow_links=False` (`--no-discover`) returns the anchors and nothing else,
+    without a single fetch. The anchors are still candidates: they are what the
+    user asked for, and refusing to read them because crawling is switched off
+    would confuse two different decisions.
     """
     result = DiscoveryResult()
-    fetcher = _Fetcher(cache, max_fetches, log)
+    fetcher = _Fetcher(cache, max_fetches if follow_links else 0, log)
     anchor_hosts = card.anchor_hosts()
 
     try:
         surfaces: list[_Surface] = []
-        if x_profile:
+        if x_profile and follow_links:
             surfaces.extend(_x_surfaces(x_profile))
             if x_lookup is not None:
                 surfaces.extend(_pinned_surfaces(x_profile, x_lookup, result.errors))
-        if "github" in card.anchors:
+        if "github" in card.anchors and follow_links:
             github_surfaces, signals = _github_surfaces(card.anchors["github"], fetcher)
             surfaces.extend(github_surfaces)
             result.identity_signals.extend(signals)
-        if "substack" in card.anchors:
+        if "substack" in card.anchors and follow_links:
             about = _page_surface(
                 f"https://{card.anchors['substack']}/about",
                 f"{card.anchors['substack']}'s about page",
@@ -761,7 +767,7 @@ def discover_from_anchors(
             )
             if about is not None:
                 surfaces.append(about)
-        if "site" in card.anchors:
+        if "site" in card.anchors and follow_links:
             # One fetch, two uses: the homepage's outbound links are a surface,
             # and the same cached body answers the feed question below.
             home = _page_surface(
@@ -824,5 +830,8 @@ def discover_from_anchors(
     result.held.sort(key=lambda c: c.url)
     result.fetches = fetcher.fetches
     result.cached_fetches = fetcher.cached
-    result.errors.extend(fetcher.errors)
+    # Deduped: one dead host is reached from several directions, and repeating
+    # the same failure five times buries the four other things that went wrong.
+    result.errors.extend(e for e in dict.fromkeys(fetcher.errors) if e not in result.errors)
+    result.notes = list(dict.fromkeys(result.notes))
     return result

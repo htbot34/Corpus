@@ -39,16 +39,52 @@ def _link_map(docs: list[Document]) -> dict[str, Document]:
 def _cite(ids: list[str], links: dict[str, Document]) -> str:
     """Render evidence ids as markdown links to the source posts.
 
+    A finding resting *only* on corroborated evidence says so. Corroborated
+    means "found by search, matched two identity signals" — good enough to
+    ingest, not good enough to let a claim stand on it silently. Anchor and
+    linked evidence carry no marker, because the unmarked case should be the
+    certain one.
+
     Capped here as well as in `prune_unsourced`, because `--render-only` runs
     against whatever synthesis.json is on disk — including one edited by hand.
     """
     out = []
+    cited: list[Document] = []
     for doc_id in ids[:EVIDENCE_CAP]:
         doc = links.get(doc_id)
         if doc is None:
             continue
+        cited.append(doc)
         out.append(f"[{doc.published_at.strftime('%Y-%m-%d')}]({doc.url})")
-    return ", ".join(out) if out else "_no source_"
+    if not out:
+        return "_no source_"
+    if cited and all(d.attribution == "corroborated" for d in cited):
+        return ", ".join(out) + " _(corroborated sources only — attribution is not certain)_"
+    return ", ".join(out)
+
+
+def _attribution_line(docs: list[Document]) -> str | None:
+    """The coverage block's answer to "how do you know this is them?".
+
+    Silent when every document is an anchor, which is the whole corpus before
+    discovery finds anything — a line saying "100% certain" on every report
+    would train the reader to skip the one report where it matters.
+    """
+    counts: dict[str, int] = {}
+    for doc in docs:
+        counts[doc.attribution] = counts.get(doc.attribution, 0) + 1
+    if not counts or set(counts) == {"anchor"}:
+        return None
+    order = ("anchor", "linked", "corroborated", "name_match")
+    parts = [f"{counts[label]} {label.replace('_', ' ')}" for label in order if label in counts]
+    line = "- Attribution: " + ", ".join(parts)
+    weak = counts.get("corroborated", 0) + counts.get("name_match", 0)
+    if weak:
+        line += (
+            f". **{weak} document(s) were matched rather than supplied**, so the "
+            "claims resting on them are only as good as the match."
+        )
+    return line
 
 
 def _tier_for(synthesis: Synthesis | None, run_meta: dict[str, Any]) -> TierRules | None:
@@ -85,12 +121,15 @@ def render_report(
     signals: dict[str, Any],
     budget_lines: list[str],
     run_meta: dict[str, Any],
+    subject: str | None = None,
 ) -> str:
     links = _link_map(docs)
     out: list[str] = []
     generated = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    out.append(f"# @{handle} — how they think")
+    # `subject` is the person; `handle` is the X account. They are the same
+    # thing only when X is the only source, which is no longer the usual case.
+    out.append(f"# {subject or '@' + handle} — how they think")
     out.append("")
     out.append(f"_Generated {generated} · {len(docs)} documents · {signals.get('date_range', '')}_")
     out.append("")
@@ -124,6 +163,16 @@ def render_report(
     else:
         caveats.append(f"- Date range: {signals.get('date_range', 'unknown')}")
         caveats.append(f"- Documents ingested: {len(docs)}")
+
+    attribution = _attribution_line(docs)
+    if attribution:
+        caveats.append(attribution)
+    held = (run_meta.get("discovery") or {}).get("held") or []
+    if held:
+        caveats.append(
+            f"- {len(held)} further source(s) matched the name and nothing else, and were "
+            "**not** ingested. They are listed in discovery.json."
+        )
 
     if tier is not None:
         if tier.suppresses_inference:
