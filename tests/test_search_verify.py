@@ -45,9 +45,7 @@ class FakeSearchProvider:
 
     def search(self, query: str, limit: int) -> list[SearchResult]:
         self.queries.append(query)
-        self.last_usage = SearchUsage(
-            searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU
-        )
+        self.last_usage = SearchUsage(searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU)
         return list(self.results.get(query, []))[:limit]
 
     def close(self) -> None:
@@ -64,9 +62,7 @@ class EverythingProvider(FakeSearchProvider):
 
     def search(self, query: str, limit: int) -> list[SearchResult]:
         self.queries.append(query)
-        self.last_usage = SearchUsage(
-            searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU
-        )
+        self.last_usage = SearchUsage(searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU)
         return self.hits[:limit] if len(self.queries) == 1 else []
 
 

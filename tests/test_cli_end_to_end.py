@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from fake_anthropic import FakeAnthropic
 from fake_provider import FakeProvider, load
+from fake_search import SilentSearchProvider
 from typer.testing import CliRunner
 
 from corpus import cli as cli_module
@@ -48,6 +49,9 @@ def wired(monkeypatch, tmp_path: Path):
     # cli_module resets this global per run; make sure a previous test's logger
     # cannot leak into this one.
     monkeypatch.setattr(cli_module, "_ACTIVE_LOGGER", None)
+    # Search runs by default; these tests are not about it, so it answers
+    # with nothing and bills nothing rather than reaching a vendor.
+    monkeypatch.setattr(cli_module, "get_search_provider", lambda **_: SilentSearchProvider())
     return {"provider": provider, "anthropic": anthropic, "out": tmp_path / "out"}
 
 

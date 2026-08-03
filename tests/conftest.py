@@ -15,6 +15,30 @@ from corpus.cache import Cache
 from corpus.x.client import XClient
 
 
+@pytest.fixture(autouse=True)
+def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may construct a real Anthropic client for search.
+
+    The same guard the discovery tests put on `http_client`, applied suite-wide
+    because search runs by default: without it, any CLI test that reaches the
+    search phase makes a real HTTPS call to api.anthropic.com and passes
+    anyway, because a failed search is deliberately non-fatal. The suite would
+    still be green, still be "offline", and quietly depend on the network.
+
+    A test that wants search behaviour supplies its own fake provider, which
+    never touches this method.
+    """
+    from corpus.search.providers import AnthropicSearchProvider
+
+    def forbidden(self: object) -> object:
+        raise AssertionError(
+            "a test built a live Anthropic client for search — patch "
+            "cli.get_search_provider with a fake instead"
+        )
+
+    monkeypatch.setattr(AnthropicSearchProvider, "_ensure_client", forbidden)
+
+
 @pytest.fixture()
 def cache(tmp_path: Path) -> Cache:
     c = Cache(path=tmp_path / "cache.db")

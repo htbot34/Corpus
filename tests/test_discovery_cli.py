@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from fake_anthropic import FakeAnthropic
 from fake_provider import FakeProvider
+from fake_search import SilentSearchProvider
 from typer.testing import CliRunner
 
 from corpus import cli as cli_module
@@ -59,6 +60,9 @@ def wired(monkeypatch, tmp_path: Path):
         cli_module, "synthesize", partial(cli_module.synthesize, client=FakeAnthropic())
     )
     monkeypatch.setattr(cli_module, "_ACTIVE_LOGGER", None)
+    # Search runs by default; these tests are not about it, so it answers
+    # with nothing and bills nothing rather than reaching a vendor.
+    monkeypatch.setattr(cli_module, "get_search_provider", lambda **_: SilentSearchProvider())
 
     def forbidden(*args, **kwargs):
         raise AssertionError("a test reached for the network")
@@ -364,10 +368,39 @@ def test_dry_run_prints_the_plan_and_the_phase_split(wired) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "api.github.com/users/jsmith" in result.output
-    assert "0 searches" in result.output
-    for phase in ("discovery (plain HTTP)", "fetch — X data", "map:", "reduce:"):
+    for phase in (
+        "discovery (plain HTTP)",
+        "fetch — X data",
+        "search (phase 2)",
+        "map:",
+        "reduce:",
+    ):
         assert phase in result.output
+    # The queries are named and none of them is run: --dry-run promises to stop
+    # before any paid fetch, and a search is a paid fetch.
+    assert "none of them run" in result.output
+    assert '"Jane Smith" blog OR essay OR writing' in result.output
+    assert "spent so far: $0.0000" in result.output
     assert not (wired["out"]).exists() or not any((wired["out"]).rglob("corpus.json"))
+
+
+def test_no_search_plans_no_searches(wired) -> None:
+    result = invoke(
+        [
+            "run",
+            "--name",
+            "Jane Smith",
+            "--github",
+            "jsmith",
+            "--out",
+            str(wired["out"]),
+            "--no-search",
+            "--dry-run",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert "0 searches (--no-search)" in result.output
+    assert "search (phase 2):        ~$0.000" in result.output
 
 
 def test_a_target_run_uses_the_saved_card(wired) -> None:

@@ -30,6 +30,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from ..budget import BudgetExceeded
 from ..cache import Cache
 from ..discovery import Fetcher, kind_for, normalize_url
 from ..identity import IdentityCard
@@ -211,7 +212,15 @@ def search_for_sources(
     # ---- pass 1: discover -------------------------------------------------
     candidates: dict[str, SearchCandidate] = {}
     for query in result.queries:
-        for hit in client.search(query.text, RESULTS_PER_QUERY):
+        try:
+            hits = client.search(query.text, RESULTS_PER_QUERY)
+        except BudgetExceeded as exc:
+            # The budget refusing a query stops the phase, but it must not
+            # throw away the queries already paid for. Verification below runs
+            # on what we have, and the report says the phase was cut short.
+            result.notes.append(f"search stopped early: {exc}")
+            break
+        for hit in hits:
             result.results_seen += 1
             url = normalize_url(hit.url)
             if not url or url in candidates:

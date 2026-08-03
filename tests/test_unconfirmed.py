@@ -57,7 +57,7 @@ def test_an_entry_says_what_found_it_what_matched_and_what_did_not() -> None:
     text = render_unconfirmed(card(), result_with("https://someblog.example/about"))
 
     assert "- [ ] https://someblog.example/about" in text
-    assert "Found by: query `\"Jane Smith\" \"Acme Corp\"`" in text
+    assert 'Found by: query `"Jane Smith" "Acme Corp"`' in text
     assert "Matched:" in text
     assert "Did not match:" in text
     assert "Snippet: A post by Jane Smith" in text

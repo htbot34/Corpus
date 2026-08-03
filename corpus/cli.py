@@ -33,6 +33,7 @@ from .budget import (
     Budget,
     BudgetExceeded,
     estimate_anthropic_split,
+    estimate_search_phase,
     estimate_x_cost,
 )
 from .cache import DEFAULT_TTL_SECONDS, Cache
@@ -41,6 +42,7 @@ from .discovery import (
     Candidate,
     DiscoveryResult,
     discover_from_anchors,
+    kind_for,
     plan_from_anchors,
 )
 from .identity import (
@@ -57,6 +59,16 @@ from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
 from .models import Document, Synthesis
 from .render import render_report
+from .search.capture import SearchCapture
+from .search.client import SearchClient
+from .search.providers import SearchError, get_search_provider
+from .search.queries import DEFAULT_MAX_SEARCHES, generate_queries
+from .search.unconfirmed import read_unconfirmed, write_unconfirmed
+from .search.verify import (
+    DEFAULT_MAX_VERIFY_FETCHES,
+    SearchPhaseResult,
+    search_for_sources,
+)
 from .synthesize import MAP_MODEL, REDUCE_MODEL, synthesize
 from .tiers import THIN_BELOW
 from .x.capture import RawCapture
@@ -190,6 +202,33 @@ def run(
     max_fetches: int = typer.Option(
         DEFAULT_MAX_FETCHES, "--max-fetches", help="Ceiling on discovery's plain-HTTP requests."
     ),
+    search: bool = typer.Option(
+        True,
+        "--search/--no-search",
+        help=(
+            "Phase 2: search for sources the anchors do not reach. Costs money "
+            "(~$0.01 per query) and never ingests anything it cannot verify."
+        ),
+    ),
+    max_searches: int = typer.Option(
+        DEFAULT_MAX_SEARCHES,
+        "--max-searches",
+        help="Ceiling on billable search queries. Cached queries are free and do not count.",
+    ),
+    max_verify_fetches: int = typer.Option(
+        DEFAULT_MAX_VERIFY_FETCHES,
+        "--max-verify-fetches",
+        help="Ceiling on pages fetched to verify search candidates. Free, plain HTTP.",
+    ),
+    accept_unconfirmed: Path | None = typer.Option(
+        None,
+        "--accept-unconfirmed",
+        metavar="PATH",
+        help=(
+            "Read back an edited unconfirmed.md: checked entries are ingested as "
+            "corroborated, unchecked ones are added to the card's exclude list."
+        ),
+    ),
     max_posts: int = typer.Option(3000, "--max-posts"),
     since: str | None = typer.Option(None, "--since", help="YYYY-MM-DD floor."),
     budget_limit: float = typer.Option(10.00, "--budget", help="Hard stop, in dollars."),
@@ -245,6 +284,12 @@ def run(
         "--capture-raw",
         metavar="DIR",
         help="Dump every raw provider response to DIR verbatim, before normalization.",
+    ),
+    capture_search: Path | None = typer.Option(
+        None,
+        "--capture-search",
+        metavar="DIR",
+        help="Dump every raw search response to DIR verbatim, before it is interpreted.",
     ),
     log_format: str = typer.Option(
         TEXT, "--log-format", help="text (default, human-readable) | json (one object per line)"
@@ -352,6 +397,19 @@ def run(
     manifest.handle = manifest.handle or card.key
     manifest.run_id = budget.run_id
 
+    # ---- accept an edited unconfirmed.md ---------------------------------
+    # Before discovery, so the rejections are already excluded by the time
+    # anything is scored against the card.
+    accepted_urls: list[str] = []
+    if accept_unconfirmed is not None:
+        try:
+            card, accepted_urls = _accept_unconfirmed(
+                accept_unconfirmed, card, profiles, target, assume_yes=yes
+            )
+        except (IdentityError, OSError) as exc:
+            error(f"--accept-unconfirmed {accept_unconfirmed}: {exc}")
+            raise typer.Exit(code=2) from exc
+
     # ---- estimate + confirm ---------------------------------------------
     estimated_total: float | None = None
     estimated_posts: int = 0
@@ -427,6 +485,7 @@ def run(
     source_notes: list[str] = []
     other = _fetch_discovered(discovery.candidates, author, cache, echo, source_notes)
     other.extend(_fetch_secondary(author, rss, url, cache, echo, source_notes))
+    other.extend(_fetch_accepted(accepted_urls, author, cache, echo, source_notes))
     if other:
         echo(
             f"  {len(other)} document(s) from {len(discovery.candidates) + len(rss) + len(url)} "
@@ -434,13 +493,16 @@ def run(
         )
         echo("")
 
+    planned_queries = generate_queries(card, max_searches) if search else []
+
     if not offline:
         x_cost = estimate_x_cost(post_target) if handle else 0.0
+        search_cost = estimate_search_phase(len(planned_queries)) if planned_queries else 0.0
         projected_docs = post_target + len(other)
         map_cost, reduce_cost = (
             (0.0, 0.0) if skip_synthesis else estimate_anthropic_split(projected_docs)
         )
-        estimated_total = x_cost + map_cost + reduce_cost
+        estimated_total = x_cost + search_cost + map_cost + reduce_cost
         estimated_posts = post_target
         if handle:
             echo(f"  @{handle}: {public_posts or 'unknown'} public posts on file")
@@ -450,6 +512,10 @@ def run(
         )
         echo(f"    discovery (plain HTTP):   $0.000  ({discovery.fetches} request(s))")
         echo(f"    fetch — X data:          ~${x_cost:.3f}")
+        echo(
+            f"    search (phase 2):        ~${search_cost:.3f}  "
+            f"({len(planned_queries)} quer{'y' if len(planned_queries) == 1 else 'ies'})"
+        )
         echo(f"    map:                     ~${map_cost:.3f}")
         echo(f"    reduce:                  ~${reduce_cost:.3f}")
         echo(f"    total:                   ~${estimated_total:.3f} of ${budget_limit:.2f} budget")
@@ -477,7 +543,12 @@ def run(
             echo("--dry-run: stopping before any paid fetch.")
             for line in plan_from_anchors(card):
                 echo(f"  plan: {line}")
-            echo("  plan: 0 searches (phase 2 is not wired up yet)")
+            if planned_queries:
+                echo(f"  plan: {len(planned_queries)} search quer(y/ies), none of them run:")
+                for query in planned_queries:
+                    echo(f"    search: {query.text}   ({query.why})")
+            else:
+                echo("  plan: 0 searches" + ("" if search else " (--no-search)"))
             spent = f"${budget.total:.4f}" + (" (profile lookup)" if handle else "")
             echo(f"  spent so far: {spent}")
             raise typer.Exit(code=0)
@@ -485,6 +556,51 @@ def run(
         if not yes and not typer.confirm("Proceed?", default=True):
             echo("Aborted.")
             raise typer.Exit(code=0)
+        echo("")
+
+    # ---- discovery (phase 2: search) -------------------------------------
+    # After the confirmation, because unlike phase 1 this phase costs money.
+    # Before ingestion, so a budget stop during the X walk cannot throw away
+    # search results that were already paid for.
+    search_result = SearchPhaseResult()
+    if search:
+        _ACTIVE_LOGGER.context.phase = "search"
+        search_result = _run_search(
+            card,
+            cache,
+            budget,
+            max_searches=max_searches,
+            max_fetches=max_verify_fetches,
+            known_urls={c.url for c in discovery.candidates} | {c.url for c in discovery.held},
+            capture=capture_search,
+        )
+        _report_search(search_result, card)
+        found = _fetch_discovered(
+            [
+                Candidate(
+                    url=c.url,
+                    kind=c.kind,
+                    attribution="corroborated",
+                    basis=c.score.basis if c.score else "found by search",
+                    confidence=c.score.confidence if c.score else 0.6,
+                    signals=c.score.matched if c.score else [],
+                )
+                for c in search_result.candidates
+                if c.ingestible
+            ],
+            author,
+            cache,
+            echo,
+            source_notes,
+        )
+        if found:
+            other.extend(found)
+            echo(f"  {len(found)} document(s) from verified search sources")
+        # Written even when nothing was held: a file that says "nothing was
+        # held back" is a result, and its absence would be ambiguous.
+        unconfirmed_path = write_unconfirmed(out_dir, card, search_result)
+        if search_result.held:
+            echo(f"  {len(search_result.held)} candidate(s) written to {unconfirmed_path}")
         echo("")
 
     if handle and not offline and client is not None:
@@ -633,7 +749,10 @@ def run(
     _write_json(out_dir / "signals.json", signals)
     # discovery.json holds the held-back candidates too, so a name-match this
     # run declined to ingest is recorded rather than forgotten.
-    _write_json(out_dir / "discovery.json", {"card": card.as_dict(), **discovery.as_dict()})
+    _write_json(
+        out_dir / "discovery.json",
+        {"card": card.as_dict(), **discovery.as_dict(), "search": search_result.as_dict()},
+    )
     echo(f"Wrote corpus.json, signals.json and discovery.json to {out_dir}")
     echo("")
 
@@ -643,6 +762,7 @@ def run(
         "hydration": hyd_stats.as_dict(),
         "budget_stopped": budget.stopped,
         "discovery": discovery.as_dict(),
+        "search": search_result.as_dict(),
         "identity": card.as_dict(),
         "source_notes": source_notes,
     }
@@ -943,6 +1063,175 @@ def _fetch_discovered(
                 attribution=candidate.attribution,
                 basis=candidate.basis,
                 confidence=candidate.confidence,
+            )
+        )
+    return docs
+
+
+def _run_search(
+    card: IdentityCard,
+    cache: Cache,
+    budget: Budget,
+    *,
+    max_searches: int,
+    max_fetches: int,
+    known_urls: set[str],
+    capture: Path | None,
+) -> SearchPhaseResult:
+    """Phase 2, wrapped so it can never be the reason a run dies.
+
+    Search is billable and optional. A missing key, an unimplemented provider,
+    or a budget that will not cover a query all degrade to "the phase did not
+    run" with the reason attached — the corpus is thinner and the report says
+    why.
+    """
+    try:
+        provider = get_search_provider(
+            capture=SearchCapture(capture, log=echo) if capture is not None else None,
+            log=echo,
+        )
+    except (SearchError, NotImplementedError) as exc:
+        warn(f"search did not run: {exc}")
+        return SearchPhaseResult(notes=[f"search did not run: {exc}"])
+
+    if capture is not None:
+        echo(f"  [capture] raw search responses -> {capture}")
+    client = SearchClient(provider, cache, budget, log=echo)
+    try:
+        return search_for_sources(
+            card,
+            cache,
+            client,
+            max_searches=max_searches,
+            max_fetches=max_fetches,
+            known_urls=known_urls,
+            log=echo,
+        )
+    except BudgetExceeded as exc:
+        warn(f"search stopped: {exc}")
+        return SearchPhaseResult(notes=[f"search stopped: {exc}"])
+    finally:
+        client.close()
+
+
+def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
+    """What search did, at a glance, in the order a reader needs it."""
+    echo(
+        f"Discovery (phase 2, search): {result.searches_run} search(es) "
+        f"({result.cached_searches} cached), {result.results_seen} result(s), "
+        f"{result.verified_count} verified"
+    )
+    if result.common_name:
+        # The stop-and-ask path. Loud, because the alternative to saying this
+        # is guessing which of several people the subject is.
+        warn(
+            f"'{card.display}' is too common a name to resolve by search alone. "
+            f"Nothing from search was ingested."
+        )
+        fields = ", ".join(f"--{f}" for f in result.disambiguators)
+        if fields:
+            echo(f"  Adding {fields} would narrow it more than any extra searching.")
+    for candidate in result.candidates:
+        echo(
+            f"  corroborated {candidate.url}  ({candidate.score.basis if candidate.score else ''})"
+        )
+    if result.held:
+        warn(
+            f"{len(result.held)} candidate(s) could not be verified. They are NOT in "
+            "this corpus; see unconfirmed.md."
+        )
+    if result.context:
+        echo(
+            f"  {len(result.context)} page(s) are about them rather than by them, and are "
+            "recorded as context only"
+        )
+    if result.rejected:
+        echo(f"  {len(result.rejected)} result(s) rejected outright (aggregators, excludes)")
+    for note in result.notes[:4]:
+        echo(f"  note: {note}")
+    for problem in result.errors[:4]:
+        warn(f"search: {problem}")
+
+
+def _accept_unconfirmed(
+    path: Path,
+    card: IdentityCard,
+    profiles: Path | None,
+    target: str | None,
+    *,
+    assume_yes: bool,
+) -> tuple[IdentityCard, list[str]]:
+    """Read back an edited unconfirmed.md and act on both halves of it.
+
+    Checked entries are returned for ingestion. Unchecked ones are written
+    into the card's `exclude` list, which is the part that needs a guard: an
+    unedited file has nothing checked, and acting on it literally would reject
+    every candidate forever on the strength of a file nobody read.
+    """
+    entries = read_unconfirmed(path)
+    if not entries:
+        raise IdentityError(f"no checklist entries found in {path}")
+
+    accepted = [e.url for e in entries if e.checked]
+    rejected = [e.url for e in entries if not e.checked]
+    echo(f"Reading {path}: {len(accepted)} accepted, {len(rejected)} rejected")
+
+    if not accepted:
+        warn(
+            f"nothing is ticked in {path}, so all {len(rejected)} candidate(s) would be "
+            "excluded permanently. That is what an unedited file looks like."
+        )
+        if not assume_yes and not typer.confirm("Exclude all of them anyway?", default=False):
+            echo("Leaving the file alone; nothing accepted and nothing excluded.")
+            return card, []
+
+    card.exclude = list(dict.fromkeys([*card.exclude, *rejected]))
+    if target and rejected:
+        # Only when the card came from the file. An ad-hoc card has no entry
+        # to update, and creating one as a side effect of a flag would be a
+        # surprising way to acquire a saved target.
+        written = save_target(card, profiles)
+        echo(f"  {len(rejected)} rejected URL(s) added to `exclude` in {written}")
+    elif rejected:
+        echo(
+            f"  {len(rejected)} rejected URL(s) apply to this run only — this card is not "
+            "saved. Use `corpus profile --target KEY --exclude URL` to keep them."
+        )
+    return card, accepted
+
+
+def _fetch_accepted(
+    urls: list[str],
+    author: str,
+    cache: Cache,
+    log: Any,
+    notes: list[str],
+) -> list[Document]:
+    """Sources a human ticked in unconfirmed.md.
+
+    Attributed `corroborated` with basis `user-confirmed`: a person saying
+    "yes, this is them" is better evidence than any signal in the scorer, but
+    it is still not a URL they supplied as an anchor, so it does not get
+    anchor's certainty.
+    """
+    docs: list[Document] = []
+    if not urls:
+        return docs
+    from .sources.base import SourceError, attribute
+
+    log("Sources confirmed by hand:")
+    for entry in urls:
+        try:
+            found = _fetch_one(kind_for(entry), entry, author, cache, log, notes)
+        except SourceError as exc:
+            log(f"  {entry} failed (non-fatal): {exc}")
+            continue
+        docs.extend(
+            attribute(
+                found,
+                attribution="corroborated",
+                basis="user-confirmed from unconfirmed.md",
+                confidence=0.75,
             )
         )
     return docs
