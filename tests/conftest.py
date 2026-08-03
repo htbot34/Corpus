@@ -30,11 +30,16 @@ def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from corpus.search.providers import AnthropicSearchProvider
 
-    def forbidden(self: object) -> object:
-        raise AssertionError(
-            "a test built a live Anthropic client for search — patch "
-            "cli.get_search_provider with a fake instead"
-        )
+    def forbidden(self: AnthropicSearchProvider) -> object:
+        # A provider handed an explicit `client=` is a test driving a stub, and
+        # is exactly what this fixture wants tests to do. Only the branch that
+        # would reach for the SDK is refused.
+        if self._client is None:
+            raise AssertionError(
+                "a test built a live Anthropic client for search — pass client= "
+                "or patch cli.get_search_provider with a fake instead"
+            )
+        return self._client
 
     monkeypatch.setattr(AnthropicSearchProvider, "_ensure_client", forbidden)
 
