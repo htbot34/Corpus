@@ -1,0 +1,222 @@
+{
+  "captured_at": "2026-08-03T05:59:36.129900+00:00",
+  "query": "\"Dustin Tran\" blog OR essay OR writing",
+  "provider": "anthropic_search",
+  "model": "claude-haiku-4-5-20251001",
+  "usage": {
+    "searches": 1,
+    "input_tokens": 9921,
+    "output_tokens": 70,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "errors": []
+  },
+  "parsed_results": [
+    {
+      "url": "http://dustintran.com/blog/tutorial-on-inference-networks-2",
+      "title": "Inference networks | Dustin Tran",
+      "snippet": "",
+      "published_at": "2016-07-21T00:00:00Z",
+      "raw": {
+        "url": "http://dustintran.com/blog/tutorial-on-inference-networks-2",
+        "title": "Inference networks | Dustin Tran",
+        "page_age": "July 21, 2016"
+      }
+    },
+    {
+      "url": "https://dustintran.com/blog/hello-world",
+      "title": "Hello world! | Dustin Tran",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://dustintran.com/blog/hello-world",
+        "title": "Hello world! | Dustin Tran"
+      }
+    },
+    {
+      "url": "https://www.princetonreview.com/academic-tutoring/tutor/dustin%20d--12088353",
+      "title": "Dustin D. | Tutor in Essay Writing",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.princetonreview.com/academic-tutoring/tutor/dustin%20d--12088353",
+        "title": "Dustin D. | Tutor in Essay Writing"
+      }
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=gH8WLvexzeM",
+      "title": "Write a short essay on Dustin | Essay Writing | English - YouTube",
+      "snippet": "",
+      "published_at": "2023-01-10T00:00:00Z",
+      "raw": {
+        "url": "https://www.youtube.com/watch?v=gH8WLvexzeM",
+        "title": "Write a short essay on Dustin | Essay Writing | English - YouTube",
+        "page_age": "January 10, 2023"
+      }
+    },
+    {
+      "url": "https://www.linkedin.com/in/dustinvtran",
+      "title": "Dustin Tran - Member of Technical Staff at xAI",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.linkedin.com/in/dustinvtran",
+        "title": "Dustin Tran - Member of Technical Staff at xAI"
+      }
+    },
+    {
+      "url": "http://dustintran.com/blog/on-the-paradigms-of-ai",
+      "title": "On the paradigms of AI | Dustin Tran",
+      "snippet": "",
+      "published_at": "2015-04-11T00:00:00Z",
+      "raw": {
+        "url": "http://dustintran.com/blog/on-the-paradigms-of-ai",
+        "title": "On the paradigms of AI | Dustin Tran",
+        "page_age": "April 11, 2015"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran",
+      "title": "Dustin Tran (@dustinvtran) / Posts / X",
+      "snippet": "",
+      "published_at": "2013-06-23T00:00:00Z",
+      "raw": {
+        "url": "https://x.com/dustinvtran",
+        "title": "Dustin Tran (@dustinvtran) / Posts / X",
+        "page_age": "June 23, 2013"
+      }
+    },
+    {
+      "url": "https://www.linkedin.com/in/dustintran-/",
+      "title": "Dustin Tran - Data Engineer - Associate @ Angle Systems ...",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.linkedin.com/in/dustintran-/",
+        "title": "Dustin Tran - Data Engineer - Associate @ Angle Systems ..."
+      }
+    }
+  ],
+  "raw_message": {
+    "id": "msg_011CdfJaWWVzt9oMH9iquwMp",
+    "container": null,
+    "content": [
+      {
+        "id": "srvtoolu_01KaaGGfk7NVuZa6QGfePuNf",
+        "caller": null,
+        "input": {
+          "query": "\"Dustin Tran\" blog OR essay OR writing"
+        },
+        "name": "web_search",
+        "type": "server_tool_use"
+      },
+      {
+        "caller": {
+          "type": "direct"
+        },
+        "content": [
+          {
+            "encrypted_content": "EowFCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDCgoksYR5EE+9vEC6hoMQkDPbx8Jg3qv1SRwIjDdzIpXQTmG7a+NZk3fYYeIF/8Me+cXnHH+bzNEm/XxZF+bKX/AX+GC07tLhNswXHUqjwSRnuIpaH2gITHQh/SrQREjs5+dpWM9OVFbgCzKuSCCcc6ylfdoXQ9qix5CSGLMLaXTIFJFTSaz1VwoHHXqO++EkS1XLiVNa0Z/Tl7+Io16Q2PEEqWDTAjXnxIPbSwSEj9HbSmL1XU7VyLtgZW/u0/vnuSpSzpgE0IonLvFcwL3nb5OxothDULHcGLcNnu2z7kNhNZo8VPRC1QyfaG83Xyt2xImKiezgqhom8Bh4d6nEN7Mj902+EVhvjosBfsijVLHoCEa65Z/Qvykl4HedXtLo/mC7PZ/yX1aLEC0K5MsrhDQbqk648isYnpJSHFft/FrwjoYoxYpVCSH77xzI/iqwqntMcgttg53mli6WV3FdQlRn+huTK12C3P77NuFeElkMHlF+43LObHY/24NMe+3ItQT3v1PPq+OxEPd46TWhgJ5C5Oz7gatOF92EOnf1no0RJO/X5rVNFNVqGJPQyIjv0NtS/4cyHCsCuvCdYr0EdzU96VVsykVkhDaNZ4bP2dqgSKg3S5u6430o8W6/g6SMXJAlYGdte3wZky7hGyWmvEj8+SkxE16vdXShDhhDOU1unpqNws+TJHX/iOk7Q8MVO8IRRk/Nex6VKnfkf7OR766xpvW+zks5ORUBqXgEmHnMD7lFBGI3eJDVAhvLsV+cHJkPci3sxabBNVih6MoFK0CWRa/HRcuYFezfJRK/RgD",
+            "page_age": "July 21, 2016",
+            "title": "Inference networks | Dustin Tran",
+            "type": "web_search_result",
+            "url": "http://dustintran.com/blog/tutorial-on-inference-networks-2"
+          },
+          {
+            "encrypted_content": "EqILCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDCOT8Yt3belGG8njghoMWPhhUEGgNHM14H6fIjCLOUIWmnQquLIXC0pAhRm06ddBCMmywikai1jLCZcQuQIjaDMZanOuAtRPHo9YssIqpQpjKheH/LDODZk4nxND7pjalhiQ9snVTLq+LdVD2uFLhq0c/O6REpTE+RvNiOt1fQDMWzQk6wy9LW/VchZa+boyY3Fo9eKajQTNNIVxgZatpnQaS0C2Nh03NgJk2vGSe2gWfyLWG/XtykUkPzP2LBC6KycB5ucIcUTiJJMaBeVJpeTD+PxSyBDqzd3OqGOMaCqe2hZYK8UP2h5YxzPeCPY63fZUt9BJI2fSFJ73SvUmX6DnmGDn8LqWkaNDxTQe14XD8IL601CRaazpVdFuya7HS49P/LZEGYaalzT3PWZCELaq05jODC5cxumEgg87FKK2ejJaq8fKfiP8oN+J7tCIOttvFTVZpbqzHiKiGoDa5tApQQm53GwKWE9RvqFbjW6H3a8P2Q3yB54VUcv91dMjHCwpK62gGL4Tbliv3vvC211RSsfO98WtXI+jLd4VO2cBULqOwm47mN0ARnpcYIAHJqiOLkmnjKi71cnygJxHYyeuwsxAuk5hxmWm+YpdxLVUV22l9CawtErsQu92pPU8fT6Q7nvmRmslvj793Fv90X3L8erKBOPLGp9nYycbeTbI426Xr/LhTIZwHUprg8wg2tuoTUOuM6tX2WfJ1uXMkCl245ydlB4SEs1I4IYapR5LaAolrN0ZDYpc03SPiBicJKAYwtNxu9RnoLi9zz4WpnNwRTCAFXoMVoJR6iaoR57BPNb5HUqIsdi9bUuVYPRlKkiepiNPDEK4VroYcQWoV1wuP7ax8Q1ojOFWDe7J9Y/zrv+OwOhk49u61ZILc6SgpuC30GfGFIcnnKO3yIptMWnie97E0YXyxJrY348RZ4946B9JiSYk1VvL1cZHbzXPTgPOpGWPf/I+x0z+3rnl4G+yow2lOS17Sp4TtxpQvgoYxvtuwWSvVg+1Od9uOfGXrOEFcs3+lTyVwoco/NpNZtnom2kGcE6WwOxZhrkUQTRA2q3XUiRA9OxTNSf37IFQrGRs4/JWYMzNv3+PM6kVO28zAPD1NtE9fWR2IuboJANJZOqhZgzMhWuW3qsYX6+BUEG/QzVD0ko0HkNBVFB5xw8dl0QWUVSyz0vmnmwiVWXD97bmHWwwXX+MtfrW+SDO0BujtDdsv7egIcGFj2mdnc8CVhf/uy5j6eeA9F7/hFXIOfv8MQnYUeNUQaZy4sgrL06y2IP3nXx4Ko12DzplZcx7URDSLDn/2kpR6TyFqceYqAWY1wN0lFscQlqFWrxxAK4kHafmeUqJTAWlognI1C4R5w6ngZ2VmwGR2iC7Dp1yyDkoJZlTLIw3N+3mibaNBmYTVA097YY6JidcycGYruHdPT/yk/OlQteHPt4b73mFr1d4BNNV1LqR4yihamJZFDzLYUn+zUC6QIy3dOsp55GeS50zAplXiELMLjBJTGviEy++APiiK6vmcoD5u+YKQ2e2PkuE+/GJXdjb0mEO68/wZsW4rTiWUdqZre9Aydzi2WS2+snvNe88GvGMCyQX+BD0S9EPkL/Wctof8r34rRTzfq4nsE5Ekho0ZqTx/P1kXEFMredlqxXwSn9JRtbWc6lOez/XHjsuQNUOlKSbOWNuZlfXeeNQPIbCHYH9i6PH23YcBbvDexDF9gRRDNoHGYrL/e4A4g2pDITIuPtyx6qcilwxPGfMVJ7u6EnjySHJIw2qk/sH9pWmUCIh3dEvUzf7nAdEREAUbVaEfjzzlQQAfYoWeTVAFCKdQHKJ63jqBaiydcYVqBD4eU3VF3Cx2AQfhJUYAw==",
+            "page_age": null,
+            "title": "Hello world! | Dustin Tran",
+            "type": "web_search_result",
+            "url": "https://dustintran.com/blog/hello-world"
+          },
+          {
+            "encrypted_content": "EsUBCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDM7pJEmXjH228y97fxoMS4kQnSABrN58bdI9IjC1OYBlbGBpXkbtWkA7F8uRMEh43NRw6bBFouQfT7VCCWhCtf8Kxt2uzFu/OElCfjAqSSXGa20PzLDo5KL6xOeQChpX6XwYnJn3RhAYbGSe28cao4fRGxoKK5/41Ajbt1hZ9rjgLBXqsAs72hwulmN339N+a7ZinoAc1cMYAw==",
+            "page_age": null,
+            "title": "Dustin D. | Tutor in Essay Writing",
+            "type": "web_search_result",
+            "url": "https://www.princetonreview.com/academic-tutoring/tutor/dustin%20d--12088353"
+          },
+          {
+            "encrypted_content": "Es8DCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDCpDq23HYYkCOUoqfxoMMkzFLxR23rcYeiwfIjCFpZ1QB1pA2uS6KBc9bAAoYqHh3LxfzNjwTwGWp3zWR9RcII7PlpPlg47UT44BmS0q0gJEHFm6tM+92dbV16mOOI8+Y0gaFu/CDZL/eISIMZ0Xkwj9dpvyjja8U3mIt7iOJX/4H1sxAPFPUEEytk8/ss5Eeg5dqXm3wADnDktxWatGbe+DP1q4Dp16VdtdZthMf3V30ag08IFYVPoQMKRHzOHKQ5uBbB8+nMUbwOd40KOtLV5fIEq8z6l1UVWdnuvsQeSdivuidPK7MFfIq72b3GLqjr4tiBxEssSaV2BCkNM976Ag/qgT4ASmGFiYbhsNAkoDCjIJsOP866d3YCP6dNvgNHaWGoAwmvEZju8aJVm0K6o7rGQPFaRhYg/gPm2ZrlpB2hfxxRWW+pg+5MGrGNzGqfc1HU9FREi3WYBGbh7sMtaf8Cz2oifsh6IB0hjJW5ojl2DZnEDmixs1JhXAusU9SSzRwqWXuP/YuqiUUUAztxhQ4YzlytvwMHVxwcV0HAsmeRgD",
+            "page_age": "January 10, 2023",
+            "title": "Write a short essay on Dustin | Essay Writing | English - YouTube",
+            "type": "web_search_result",
+            "url": "https://www.youtube.com/watch?v=gH8WLvexzeM"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran - Member of Technical Staff at xAI",
+            "type": "web_search_result",
+            "url": "https://www.linkedin.com/in/dustinvtran"
+          },
+          {
+            "encrypted_content": "Eq4ICioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDHdPrvLz8GhMjQaFbxoMVGKzgI2CL0ZnjzxAIjAuKFbt6si/uj9DRe9N8jVg7q4DKtPhyx1DKOxVM7zS7ExHNtxxLK8QVJcf+POc5C4qsQcf6qrDR9bKM5VH/zjT/jN0gk2oUKDiuabacjdIXUb+PI6eI37Yl/U21W+ZDUaXW2/RHVZZdDZps2FaA/mngXcQLXl+OyVou3qcttB0AMk9jWxmyFOFkz6fEckQQ1Qjhcg9TJjr7qCP4Iytkei8TWigBE8DcpvoPqVHu9SnVahjKeQYn0fo/v8UthCcSmRbGoCA+PLD3O+uoVUqIizzNwTvsFBnoNSJ7goOY4m4hFywJ4Tai1EYt5o97uHy+HYpFly6gDpaohIUuh7gpgUO+uG3zEzpQWlV/l0u97JHdWxUtn3DBjmaZevjEpGUWZrpBgBVwDUGYQEzEdqwx5cZt6+E0YN6Hh44SiQQubG9G7jD3/e/iYLTpuRczGIytMEyD4SkeK1csKnoBmsSn8A0Ct895GiU06VmO8y9wC+G7cLkZjHW9H8NAF8ZT5JmxySJqCeNxFlLgoHEovB2ckrN7qxK1xQk8Za1/U/k+g8PivmS/R+qHBmid6aBwxAZXxsuYUnLDQ7GcJBWq2/VJJxPPlRdQ4A7X/orAJBXM4XbAPwT57J9Ye9E8WxPgkYT/UIMvh1szOq778LnqHV9HRGHm5VFjh0GZLp2UIAqVIZQ3NECOkZfS0WcI0hiEgfqOlgK3HyZe3pqYhkMM9SvfviR2rVYarvYy7W7B9cBtqZH+/Gje4L+BXHwTgjKqA5LOhPv4YqdpbqzR0gk2Ib1/Y7a2S+aDlIHI6G381JiGBv+arTxU5rfNv1pNJ+NQaZUwKXpXknD7wLUJ9EAyKRnTi11BfkfOOAS6Y4AYdycM0FBupGhZ2RE7sUCoDbBOEDQo1hqn990G0eKej/226yScBFKMggLm+FbH7awjwCHQcJtLcFncKQybrSH38dxoSVLOWiQLUn4AuMOOLTOIAASGTL9h6a6qTKjeOh44YhPMVuMKpyi8RWMLAUuUGHcl5iLckKVPdQ44BN07u02rw0jDMreQhHI3pSMRwjAA037F3gKrbGnFVZCRoYdZHle/+TlHTMKJahrUiQXupKmxZq3YgPoxUIrAZe/TUu8+/vBh+ImmMZI0T3VOqbTnrSSvshh7MmaznMy9DF4YYk1PXD8rVHCPr0z8ctPErGhflknYs3W+o6bf+/RPU6pA7uHFtqVBET+oqJf/WPQwLvuOwUaJUY4DDCGgbM0dKJHQqiW+4oiJQT40bCjHknXY6eZvdnRsWMJ9V3nZnxRF6P8tPBrJjVMuzkYkDQ93z4KE3kQlTDDqNPxzcQYAw==",
+            "page_age": "April 11, 2015",
+            "title": "On the paradigms of AI | Dustin Tran",
+            "type": "web_search_result",
+            "url": "http://dustintran.com/blog/on-the-paradigms-of-ai"
+          },
+          {
+            "encrypted_content": "EoYJCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDFwbQH9vf5jBQaz67BoMc7jgiys7Q4Fbx9FaIjCmMZ1oyxwngjZ/zF6SURRi0JqgCGeyKoGzg45iExFKj3tCR9AcJGSD6fRNMvfnh9IqiQhSAUm3kmGu+Y8UhqXOeQ9Msku6zYPZr7anwFkh0tI7fIYbmsifl/0dF02uoBOlv0seSz7MWXrkixai02AhyxPvpYqlvMhxSdgH0H75Mq0O9sVTagUumRxsJ2QizMnXDIzgzNJHTa8J+xjITtL56vsquQkQe+Q8WTZgxCSs4Ft1N1yQbLCQb1deyvyTR8xQBoiJWXw3R5H5jTaBo9anYNPHlYHG8Jh0ud9lm12kLdxomzukYtva6P9EeWkWs07XOc3qkxRVAYwg0uHC9WytthAmCWtNRnty+4ftNWVppkywAP5Nyo/0B72D5yN01czMqgO5N9nK362+/W3Qur5jYeXKkZ/AVT1lx13dpVPlep+fCIbWQUMKGLtCbYMsfsKVvJSrrm56OkdBG6oLDUev8ZSNATJVa1Keu3rMYJP5zaJlLDhNmgV2sdyenRv5eskEIjxPKmUX1/7nKyT+rgCB5EaNvVcn1C5Zt91rPfLAhD+Lglw0FFMtzTt41XzEiiD7heiOroOIYy1VwwXs/SG65AYvJAE/3yPXjKRxhlR9pAjk+ieUR2iv390PF6QCJVh6PsIRd4GLtyUtGtoi1j1auPvxFvElyjlgJOvcuavOkIo2WnCduiP1OT1xXQArAv7ETxuVdiUW+H+Tus37j76TGJLD3HbFtrfF3m8Whd6+2Dc1HqE6EFtMFOND0PBS7CdVMqgO62aHgkAjmB6blkmsS2CP3x9jJ+hzlu+wx1zWnBC+nM6Ggxy1g9TLuXNPGSwJDqspxrG6ev2PqBrj6SuB6CuZBpT+NZphnkT5FEfWp7SWABScM7okjqgqo0SzSPtbfDQmYXIyqgH5Ii78PIiFDQ1tvXFTNnmX56yfQCEa41XuPIDqoprClcv3NrZ9Ak5OGhm9AuUmkzK61rOcHlBQR+zyAwBpWMEKIyzD7ShGj6fuOF0QcPXcx/GgS5kPSVvO/8sxTXHgNiDXI/YPrm7HUbqBdpZJnHSFursSs5ovhJWbEsCUdY7KXNGv/PhMqvdHY68z5Kky4qcMjlHx1jRa/X7dc41irDzKSg2QNA+T5w1F/a9EPlCxZ9hYTw0SUCOHNyhZpNjfjKnDqFFEI0HkE+H0DcEYPCghNLepvgQBAeMgd3jOzMTvbmAY9WndmfYdNJZsv+a2aQ1YJn/Y64CdiE6z0b5TPprfB4Aj+WmVD1DOqhSCkmEETcgMcRMJ8trxoQ1aMCd9S5T0Noe/2pUvHhKW+9DUUnAFEEp/r8RtyJmXsmHnRAnjdnfzH32Ee9y9kbYfJ/CBUah8xFNwpEZ2sVQ1xSWj6dLziYUs7RheN0DlLyMAXV7EOWSoDw6RNAzL4GKuVxYri6V8Gf8/ZrcM5XuzsL4UQnq8HB+YGAM=",
+            "page_age": "June 23, 2013",
+            "title": "Dustin Tran (@dustinvtran) / Posts / X",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran - Data Engineer - Associate @ Angle Systems ...",
+            "type": "web_search_result",
+            "url": "https://www.linkedin.com/in/dustintran-/"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": "June 3, 2017",
+            "title": "A Research to Engineering Workflow | Dustin Tran",
+            "type": "web_search_result",
+            "url": "https://dustintran.com/blog/a-research-to-engineering-workflow"
+          },
+          {
+            "encrypted_content": "EtAICioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDDd+PzPh92U8esj+0RoMGWOaSnYFpsxpmwq/IjD2fP5KeCwNNSD5bLNSg1gdxzkl4jtk3O/5pdOjuxztm9In24aWyZyx38VzFNxF2cMq0wdbp5mp3kSDGwMOBQkaRgUUvmiha/RCjrobUo+ko2kMQ9Z2kzlzp/Y8tmrwpS1r1aus6WYng5d83PJ7Q/+t2HvOGibFRPJO5/F7DpIfrXhMBjiUpipF/dla6uBvFWPnNAB7TJyfO4FTa5AicR2hpG+ghJSkCvKQLl/wTnCeCOZT8loAKWYE5+DrNwd9H2FIx3x2m0BGns1CwcFkwCyRMktHG+pgkCFDcTtrE8Hf4D0/IWFy1dVd/ztzU06q+nN1NHa4w/O5Mml2IateOY/kS7Ma4xqqyJW5nc9Gv/paWW6oAK1DGIWZmK7sjSSylkoulBwmdElsQXPt2cho9iANl1RojwMG0X2rYSuNNwZI7Uf1lcheTVYjN3wkqDuAuRQcOtPWGS/4u8qcpgTIzbyonb9jqiUW4CQRe1byMvXu183qTbTDwGr/XALy0ySR2pvGQ6MmrM6LBDKad5VvJFlh3Hj7bxTWtTIuYglQ6gOSMu2U6eTXYpDqls4IfVMYzqBNj55EnT6iHPQ5qxd7HvWLYg1nkLZggNPjwJ1/+ikpF+76Qyn7qs9O6KyDn82ASU+Kb8PV1Bt6cW+hbFM/iTTX5SKagyxUIWqTgo15eBuwJj25HOfOeJ0J7mX0JH9TwScbOmSG9NVwgy8KZ8tSlbpqjFGiDiKOqkMH/iX96Ixsac/9J+iCOOQzD/mqYOvZucgKFPVkqDrKChfbYMsa6I0BXFRQxrQ/yuiVyZAAqVh09QuWLQyZ2kew2fknFP9xf+VPgpOxEzhf7SHpCteUPl3A3+nuxoNq+u1RwDTzepUfBD+3j69qJyk/6EmbFYhOYNi2lt+6VGctJe9RnRaduue5YGl2FFyBd8D8dXiKH6Qr5yqpuslmOG/UQYmbmjcHoGnEOxlwLgio92GuE3DO/h2t7GnCwXyrFd4hQSx3oa/7jEXBbd6Z0JFHbttrzI2dqZna9HTmz3TVwFZJpVM+ME39j1Vf5kScHLAZLHGwCgVd3CJ1DZhfsuf/dG741xp+mLWgUHHOno0AbiIlYyTYQWhTulzWnqon0aP4/wkif7u3JQxwHlxuHgJD2SG7rCQ2BtL9icEBogWD+T8fSHoVfmd0C6YFUbA/O//o/r0gyjpBuSkSkW+saxaWgKUjLdPpq7dRtc7ham24D2gPTueNDsF5sbuG+37M97gbYoPmqsHRUeuOnQgAZG+zdE4CV+ArvbbxliUwj558eQ5u7ecXeL3z5IDsb6HDgDVK485vKJbZ1Z84jdks31bIG9OfWo+0r0bVC4UxL3ukk9r3PHgiAJqVzxPFrFGnGAM=",
+            "page_age": null,
+            "title": "Truong Tran",
+            "type": "web_search_result",
+            "url": "https://en.wikipedia.org/wiki/Truong_Tran"
+          }
+        ],
+        "tool_use_id": "srvtoolu_01KaaGGfk7NVuZa6QGfePuNf",
+        "type": "web_search_tool_result"
+      },
+      {
+        "citations": null,
+        "text": "done",
+        "type": "text"
+      }
+    ],
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 9921,
+      "output_tokens": 70,
+      "output_tokens_details": null,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 1
+      },
+      "service_tier": "standard"
+    }
+  }
+}

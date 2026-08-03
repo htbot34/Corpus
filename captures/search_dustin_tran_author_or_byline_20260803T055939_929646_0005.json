@@ -1,0 +1,204 @@
+{
+  "captured_at": "2026-08-03T05:59:39.929723+00:00",
+  "query": "\"Dustin Tran\" author OR byline",
+  "provider": "anthropic_search",
+  "model": "claude-haiku-4-5-20251001",
+  "usage": {
+    "searches": 1,
+    "input_tokens": 10237,
+    "output_tokens": 70,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "errors": []
+  },
+  "parsed_results": [
+    {
+      "url": "https://arxiv.org/a/tran_d_1.html",
+      "title": "Dustin Tran's articles on arXiv",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://arxiv.org/a/tran_d_1.html",
+        "title": "Dustin Tran's articles on arXiv"
+      }
+    },
+    {
+      "url": "https://arxiv.org/search/?searchtype=author&query=Dustin+Tran",
+      "title": "Dustin Tran",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://arxiv.org/search/?searchtype=author&query=Dustin+Tran",
+        "title": "Dustin Tran"
+      }
+    },
+    {
+      "url": "https://research.com/u/dustin-tran",
+      "title": "2026 Dustin Tran: Computer Science Researcher – H-Index, Publications & Awards | Research.com",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://research.com/u/dustin-tran",
+        "title": "2026 Dustin Tran: Computer Science Researcher – H-Index, Publications & Awards | Research.com"
+      }
+    },
+    {
+      "url": "https://dl.acm.org/profile/99659049129",
+      "title": "Dustin Tran - Home",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://dl.acm.org/profile/99659049129",
+        "title": "Dustin Tran - Home"
+      }
+    },
+    {
+      "url": "https://sciprofiles.com/profile/1497239",
+      "title": "Dr. Dustin Tran | Author | Google Brain, Mountain View, CA, USA",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://sciprofiles.com/profile/1497239",
+        "title": "Dr. Dustin Tran | Author | Google Brain, Mountain View, CA, USA"
+      }
+    },
+    {
+      "url": "https://openreview.net/profile?id=~Dustin_Tran1",
+      "title": "Dustin Tran | OpenReview",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://openreview.net/profile?id=~Dustin_Tran1",
+        "title": "Dustin Tran | OpenReview"
+      }
+    },
+    {
+      "url": "https://www.semanticscholar.org/author/Dustin-Tran/47497262",
+      "title": "Dustin Tran | Semantic Scholar",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.semanticscholar.org/author/Dustin-Tran/47497262",
+        "title": "Dustin Tran | Semantic Scholar"
+      }
+    },
+    {
+      "url": "https://www.researchgate.net/scientific-contributions/Dustin-Tran-2073462401",
+      "title": "Dustin Tran's research works | Mountain View College and other places",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.researchgate.net/scientific-contributions/Dustin-Tran-2073462401",
+        "title": "Dustin Tran's research works | Mountain View College and other places"
+      }
+    }
+  ],
+  "raw_message": {
+    "id": "msg_011CdfJah1mfmMDQoTpvRvoU",
+    "container": null,
+    "content": [
+      {
+        "id": "srvtoolu_01TiSZfjaheFeRXTZ3pWVHmb",
+        "caller": null,
+        "input": {
+          "query": "\"Dustin Tran\" author OR byline"
+        },
+        "name": "web_search",
+        "type": "server_tool_use"
+      },
+      {
+        "caller": {
+          "type": "direct"
+        },
+        "content": [
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran's articles on arXiv",
+            "type": "web_search_result",
+            "url": "https://arxiv.org/a/tran_d_1.html"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran",
+            "type": "web_search_result",
+            "url": "https://arxiv.org/search/?searchtype=author&query=Dustin+Tran"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "2026 Dustin Tran: Computer Science Researcher – H-Index, Publications & Awards | Research.com",
+            "type": "web_search_result",
+            "url": "https://research.com/u/dustin-tran"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran - Home",
+            "type": "web_search_result",
+            "url": "https://dl.acm.org/profile/99659049129"
+          },
+          {
+            "encrypted_content": "EoIDCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDKoMBv9VCq6rswz2xxoMTE5W+ksxpHCYiCMDIjBO/7mUo0w7wdPTgDZiL9WA+9ArIvzT1laO25RrfVBky1ng1j7rrDE71p8+SAHqXKoqhQJSip7ogglrtmUIyrEBmH2DSGB9xd2vD4I5Gebeh7sYiA3EM0l9jCvBpqWD+KHaKz0WmIg+cb8oGa5JGqxOAjOXWR5wp+O0bzyVt9dHMg4y1Fn1k1TRTiEpyJhHSUciDeA6olBBXIXt5B5AYll56rAp5CH7HSXNml2+B8K8Bf0yw0b+X+L4rs4abpTKZ6I1AoYeNMQ3RPANGq+LlhuzK9eIOwZnEK9eWIQ7xkCqQNAPnLgSlkahmtcF1pZ2/sVUYkGkBAi4tbMvL4p1q3q5polnrwrgYkZc8VBgFZqPEawXcQ8CNHsZXmoJPdWjRyO3g/o+ozXx6hkvxGuHN7H2B+RFgScGxK8YAw==",
+            "page_age": null,
+            "title": "Dr. Dustin Tran | Author | Google Brain, Mountain View, CA, USA",
+            "type": "web_search_result",
+            "url": "https://sciprofiles.com/profile/1497239"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran | OpenReview",
+            "type": "web_search_result",
+            "url": "https://openreview.net/profile?id=~Dustin_Tran1"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran | Semantic Scholar",
+            "type": "web_search_result",
+            "url": "https://www.semanticscholar.org/author/Dustin-Tran/47497262"
+          },
+          {
+            "encrypted_content": "EsEICioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDKvpcY3NAvz3gXw1bRoMs6inE4gf20v5LgmzIjD4vfJfXVq3ypV67be0Oda2P7K9sSsTl68vM8T19ZHbL4IQze8YYiAyZMp8vI6tCh4qxAeeaxqLytXhw+0y2DFLwyYVmTlwodVoaWXkvmPSaNMQAZ7JLK99H1QwkymgmCW1GZQcXGIKDsDy7S08Rq3V5KXAwS4OMEeNvIlGypc39vDCnKv6nFf1++wcC19mNZvkzwdIX8r2BJy76wArdzQrwgEhlyPcwW4O0UoaEBthM0cMp2fkljGCwqkWrAWSi3DkImGRBfSL4a13jabXLYWIKNo7eQUlVuU2voUGcTMx/8ObGKN0toYi/fdLWCR7XMlGqFQt6SWQ1sGAioWDb0ISudej3W0mcG4FAodj7FVc8fUHM4tkEu0+eZnDRwnO8RBOlUvC1F7tv4+OpaPy1dMMdTHI8LbH4t5pEsI8tMoqUrDR04JUChXHma4FcNCKJvPyirPZl3c8YXQ4AAiD8TfmsqMxDNr1NkrhNb1L47ywx4nyokzIMNJ19VCKSlr0n4xouojQZEiStUi/xP5IouNxfVKCuT7hIzoZN17xNdvKMkroRX1BCN7nIQ/3M3jKmqoIuB3CyDLf14XNRDeCFVpDHYkPVXu2kxlX4/7LzBchsXlud1dkpa7lxb2XYZAX8W9e7aImGRVGjfyNGMlHPkXL34VrW3mypbEBia7F5qlnZjqMafa8NcZJjEPQz5qcRBb7t3S50+Axghp2Wp5ty/0CvUgXWRUk/MfpNh+MWUaqU1dWewHLg5dcxngeu7DmN7oolui8DMZWdlTWWyXfEkbj0gCu2imoeHBtUTWpWjtslCPpr4CAvrDtVlIUinhihazetmVmYydfd7Q0BqamQmCx8rvPH4wVWeVOletxSfv9xgYdC9xHflcluWVpooVIEKMJcnrtVSMwRB+DN3cXVAZ3zZlVSSBk4OwHZVm5wB8gK4lvZKagIDIL4MDCKGo3VmI1TKtKrV4DVTkWY/S7e7mdUcnuJztqRBXpt0JpP3GQgpyhGfwqB7ZV7NKrKOq5AGvLALrxs2xdxLzs1vKX/5I24yrfkTzIFxBENYymU5RSpM3vm3jEgcpjB6kK5Rd5Vb8jkucgC5o3b/n4OfcGjXU69aZ8Lvoj9Rzj0/+9THVEp5E+SkYtI6lx3FXwhGBVgKkukB9X8gyj4Za3O2b/cAWoS8kO+T3BHak3CZ4zSW5khvb6AN/gPMFG8jZfjUyjpQ0SygHyiARlwSA5bGYJWtBuI/k532NkfU2zFXs/ZE1qzYUc4g4SsT8HDmN23/OOgiSsPZDwUot+YAqee/VkS5x7XRnr0fmi+fyEZxCpEktc0A/p/gAXbQgxIaT6j0lT2yACbyfA5wa7GAM=",
+            "page_age": null,
+            "title": "Dustin Tran's research works | Mountain View College and other places",
+            "type": "web_search_result",
+            "url": "https://www.researchgate.net/scientific-contributions/Dustin-Tran-2073462401"
+          }
+        ],
+        "tool_use_id": "srvtoolu_01TiSZfjaheFeRXTZ3pWVHmb",
+        "type": "web_search_tool_result"
+      },
+      {
+        "citations": null,
+        "text": "done.",
+        "type": "text"
+      }
+    ],
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 10237,
+      "output_tokens": 70,
+      "output_tokens_details": null,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 1
+      },
+      "service_tier": "standard"
+    }
+  }
+}

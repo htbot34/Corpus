@@ -1,0 +1,224 @@
+{
+  "captured_at": "2026-08-03T05:59:29.377870+00:00",
+  "query": "\"@dustinvtran\"",
+  "provider": "anthropic_search",
+  "model": "claude-haiku-4-5-20251001",
+  "usage": {
+    "searches": 1,
+    "input_tokens": 8433,
+    "output_tokens": 63,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "errors": []
+  },
+  "parsed_results": [
+    {
+      "url": "https://digg.com/tech/0b1w70ch",
+      "title": "Digg",
+      "snippet": "",
+      "published_at": "2026-06-17T00:00:00Z",
+      "raw": {
+        "url": "https://digg.com/tech/0b1w70ch",
+        "title": "Digg",
+        "page_age": "June 17, 2026"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran/status/1795860299607666813",
+      "title": "Dustin Tran (@dustinvtran) on X",
+      "snippet": "",
+      "published_at": "2024-05-29T00:00:00Z",
+      "raw": {
+        "url": "https://x.com/dustinvtran/status/1795860299607666813",
+        "title": "Dustin Tran (@dustinvtran) on X",
+        "page_age": "May 29, 2024"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran/status/1865085109675930095",
+      "title": "Dustin Tran on X: \"gemini-exp-1206, out now. #1 everywhere ...",
+      "snippet": "",
+      "published_at": "2024-12-06T00:00:00Z",
+      "raw": {
+        "url": "https://x.com/dustinvtran/status/1865085109675930095",
+        "title": "Dustin Tran on X: \"gemini-exp-1206, out now. #1 everywhere ...",
+        "page_age": "December 6, 2024"
+      }
+    },
+    {
+      "url": "https://mashdigi.com/en/dustin-tran-a-key-contributor-to-gemini-and-a-senior-researcher-at-google-deepmind-has-joined-xai/",
+      "title": "Dustin Tran, a key figure behind Gemini and a senior researcher at Google DeepMind, joins xAI | mashdigi - Technology, New Products, Interesting News, Trends",
+      "snippet": "",
+      "published_at": "2025-09-22T00:00:00Z",
+      "raw": {
+        "url": "https://mashdigi.com/en/dustin-tran-a-key-contributor-to-gemini-and-a-senior-researcher-at-google-deepmind-has-joined-xai/",
+        "title": "Dustin Tran, a key figure behind Gemini and a senior researcher at Google DeepMind, joins xAI | mashdigi - Technology, New Products, Interesting News, Trends",
+        "page_age": "September 22, 2025"
+      }
+    },
+    {
+      "url": "https://github.com/pyro-ppl/pyro/issues/295",
+      "title": "Use observations library in all examples · Issue #295 · pyro-ppl/pyro",
+      "snippet": "",
+      "published_at": "2017-10-20T00:00:00Z",
+      "raw": {
+        "url": "https://github.com/pyro-ppl/pyro/issues/295",
+        "title": "Use observations library in all examples · Issue #295 · pyro-ppl/pyro",
+        "page_age": "October 20, 2017"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran",
+      "title": "Dustin Tran (@dustinvtran) / Posts / X",
+      "snippet": "",
+      "published_at": "2013-06-23T00:00:00Z",
+      "raw": {
+        "url": "https://x.com/dustinvtran",
+        "title": "Dustin Tran (@dustinvtran) / Posts / X",
+        "page_age": "June 23, 2013"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran/status/796727808861073409",
+      "title": "Dustin Tran on X: \"Variational Lossy Autoencoder by Xi Chen and others at OpenAI. interesting interpretation from information theory https://t.co/VZT9f4KKys\" / X",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://x.com/dustinvtran/status/796727808861073409",
+        "title": "Dustin Tran on X: \"Variational Lossy Autoencoder by Xi Chen and others at OpenAI. interesting interpretation from information theory https://t.co/VZT9f4KKys\" / X"
+      }
+    },
+    {
+      "url": "https://github.com/dustinvtran",
+      "title": "dustinvtran (Dustin Tran) · GitHub",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://github.com/dustinvtran",
+        "title": "dustinvtran (Dustin Tran) · GitHub"
+      }
+    }
+  ],
+  "raw_message": {
+    "id": "msg_011CdfJZyhqd5AKASWHP1xB7",
+    "container": null,
+    "content": [
+      {
+        "id": "srvtoolu_016kv42xiZSjad53xCZiTgF8",
+        "caller": null,
+        "input": {
+          "query": "@dustinvtran"
+        },
+        "name": "web_search",
+        "type": "server_tool_use"
+      },
+      {
+        "caller": {
+          "type": "direct"
+        },
+        "content": [
+          {
+            "encrypted_content": "Eq4KCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDNX2Bva6uCHK1sMOsxoMzOAQy+Y0eqVpg57UIjAC2BLmC4wBfyaSqPHPqsqzWV32pINApdvZyf2GzNEjBwwKyVi6j6a82LusmcBa+ZIqsQlc0fggBQmFnJWropeML9vMvuMFc6huHXTadenldqi47RyyWUP2o29w0RE9EdG8PrYaZq/4IQRSgcbqwOo6yNom3HhAbEuDYful1tnAOcVQJeTvp3WW+eQr7VtjJSjXUMpDC3DF93r7ZCJ/nb8jV6IojgEqYFBqfkJYzdkSXBeqXkyM+WdOau1WtdTqXLf+myOnTnloenT7P+9f5VU6fyVurrl4zAMJVq48OnSXkRiFtoGa+mxX6ldbxC1+ALiUu5GQBvKnmcmffr8dOXj00nHx6Fg9gcV6Mah6Gc6KO6VSWj6ubBJpr3elf6AlBfyHM2aDrfIN0IWv7LjYnZtcZ7HB57N8TmSVAUbZpxkyscswvLLfPjt/Eo1UkV0hNWEIxxZgLEJZk44Myjv/HnrShkFLGn3WPlp3Terl4+FiCVN9N7rIg+oTLMh23RXTStlCC7olt4dPAI6aqhYopJyi8NBbZ2ur5koj6bu/ch8z4lBydU0TPWHHyJhIwnA1Mt7FnuFak32xjBqZMp6Puscg/iXUtPR+6LgCrG70PI9gKWeZGXR88bn1quu57N8oRdVZbD4OjSo5LG4XyV0S/hXsa33AlWnN2DHbG9/Nv/PldsXRBrEMdCAeOlSkAYK06XMHUooBtWAJuLoxwxMDGAJyFp5VPrLGSl8hHBczfS0+LPl9ZzUgDzZroZHP0NttGWQCElAeTiNnyunQTEZxVSHKm16SsQJcldDo7JcdxqiL/K0cHDguOm1jyt3nCntjUjwBQlgVLliR77AZg+9ZRzDW9YSi14eqABYG6lT+yezWMArYpVwKCcRm6mnFF4+Y9mdRqaKs0Un0Qq5nopPbkCBpB/2vs66vAXLKIpOxToFde7FLrAvHpblPc8odwboFiJTp1RLL/59TAeqrPJ8OV91jyEIVS6gMlsARsaRoQ3pJcsS2v+VxzQD3gIthNwwDDxQlRDjTvjT6VvMWrX1SUNOwLwEsQp9I2QJLS2qKKFGXlcRE6czZ/4igiGDV5tncgd8HRj9W4tmosiJFHzzCwiK+IspQL4wAjPKWneYh7IA1fL2IA+7AxQJr0ChT+xhE7enf0MEvkOWR9fblif7Oo/Yj5Eu5vDBPjbeeyTCZn5bU36OC23SxeHDzhnf9OJuIqNFFSgGBz1J2q8jywmJW3W8twGszfU9y4OwB+aNqG4Anl2xmiNwglxEynDrWSsA8YK39iXgifSAOTgvgcrffwTEpTNyJrBBQxH5AJSCyGHXQzhH1DbjFio/nTtqcui0qFzNTV0tcNSwqOxjOYkd9q7jdPU/rTawg/7MN2vx2r8MM0P78VDh0vm51dRnyheqO3pir4vbHW6gYVbUphBpACpc7OwpFxbFAv+oy+s6s8YrWSGZDqU4l8cdfV1FANdfczGa7Flyl2OQzOxdrUJV3NguphHB61V0aHsbLSVdaQWX9ylHrd4/eoNPKC98O16PsYFWHIsKsTOFnx/rYOXDVzz1cYcATtf7PD76Wo9wO0HdTbCWk3DgEPI5Y+4vXnCBGF9bPw9qgYN60toxRqsEjP+53j/ss149H3WWcvSik7sNzpCPDbrSE4CmD7ws/b8fFLa/ou/d4GAM=",
+            "page_age": "June 17, 2026",
+            "title": "Digg",
+            "type": "web_search_result",
+            "url": "https://digg.com/tech/0b1w70ch"
+          },
+          {
+            "encrypted_content": "EtAJCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDJuwEu7P3eMU7AiqQxoMUHnB7z9QHzmvj0cVIjC0sbjr3MVqQLor+NYPK3x7RP867nmKM3aAjiBmppQqfW1XwFT3aTBrAg408GnVGhMq0whVpZgjKUEz5YiVJmTYS7FOL9M7jZUR92kDTELp/fD+ms3OS/bS2jNKCdelOqGcpg+VEZsqFqGgb8IlKafmtMSSrC+tcnUb1Rtob8gWI5vc0XUPPdErDfZNqXosh5+qZyMDO/HsABvYVdv1dVBdDmGaW+gyuHz+eaeOHq76SreBnb/8U/zmGSTpq47rx/8gYacHY1hh9tHZyGwGfFS3n0UdU5A6isQK12wvFMrWPlr0z9Jgxnge7+CtGzx3fX0yuZgrPO8NMZBV3o+kiUcOb0XC6pokHXqzSmK+lvt7JDaQVyZ2EYCjr0wr2hRxuAeoVvEEpti/Zi0l700hglA//BCqNrpzkulWzBjoCmMu3mCs3j/oaosxxpT0zRTU0ZuA4HsjPRBozjanm2Yu7ZfmfhryyplKxwaG+w8QP0paxYdP00hDEDBhsyyiIhybzCIZVj6nZ3/QP9tT+MIgVY6RVgM0Amp2ErB+ZcCDldXsAmR6sHFNvxtFGvAqKkc4Pg7UzSxL6IlUV7AgyBswa01ywN4AzpU3Ky/vymryLqOxDZRBLuqzRvmWI2MkvTGqWELjWtWeBKQ/oWnqyehu5N5Sd5J4gJxgq9sX+8EXB/NnuMo1IJEspTmBME9mA0zVBIS7ccTjYWmzM7YXY5Bowfjv0znnNWtGIZ4lh6rMS98RBYfsfMI98H/Ne2H+TJG1KFHGbkS6Si03uf7kS5QgiJt5XqIbN1vEetm9a8XhEdrGu/a3xaEEKDir462SjC9mMVIjhxioGoN20wc10n1GaMgDrsNLQjvIn5hz0SBDNDCo3sbiE77sFZnAg8kxj/QWOG94PVm2LY0/lH64N/7bypXKCPc9JisyEAvrDEbbI7HAKip8NUi8+I2OVlcLTKxsS3M8VCDsWReavDOsuZMQqCpSLgJHOBxbmQTM/s1WRuLm+Q4DqCozSjfcuwBt2tYfSgMBdC+NoyxI7D25IYcVVTlJ2TRGqRYcIHrZkwVdbRnu2YAa6yV4AvOVB32Wt04TNe1+YlFfZGebQLkv8FIYdeRNCs8Nn46w/CuoGVKEUjHXMs3oEZZ6mkLoRwIFUxZDW5ZzZrvibAdfHQlOSrK9dF4/FU13ujBXP0qm/Ftn9PcbMOhPaxfWnnBTm/A6XCj6LAoxkV0fB2CSlfuj4/uEsXZIIXsTnY3m1KljExY6MMPEHLbZirlVOXRdlNmJ2/9fY3sB/sboSQFZUJuBb1ijHQ6OhNJyTSfx/pti7X2hSgIJHTOgwdutWsoCLb+zyWyruUhn2roUvRp2Vi3xftNEF8rIIJachrzxgEDgTl7K6NRxA49TYLnkPrF618/hgV1iGN4671jxR2PfU6X10bBCjmSVkllmefbl5HoCx/PIMDSFTGUOts+gu62EjIPAfxeJMYRV29ddcuyaYr2W5Frdrz9+PoAkvEQmo56FBsB2bfvnjWwlJJpD1WneLew9vxqbUbj9+f8KRLUYAw==",
+            "page_age": "May 29, 2024",
+            "title": "Dustin Tran (@dustinvtran) on X",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran/status/1795860299607666813"
+          },
+          {
+            "encrypted_content": "EsADCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDIzWRze2pDmG7WC7xhoMai1uPd/EdZ74U1RHIjAaZbj+z0UH3t1qNVpZmtokPWYmTIbV1fHkytzGwJ00GgZldk5yqPHN4ukOmXuO8xYqwwIApA9GZn8YtfQ9+C6T/fPCWaDPYZhduHgXcYLRGqh2reEUqa6xjkcQaDzUCF/2pHLwisZ7K6tki7gJNlq0HCs399ibrBHKyNHsyNuMVc8DKhAEVtSlnDneiEDIShZ9K4lnBz4UpfAAob00C6uJcQTHZ8itWOPvZW1W1+PrcTTmqXPseeod+XD+u2i9GazDUL56hLvBObD7Fx8v/NHMoq/CD6KlIj1DHEg4n7a6kiZRRAOWXEKDwE3SZuNSvrZAms6EtLKF/0NFXYCNcHj0TKcde93LDd9440NRkXZqfTOc0P20H673adOIeDQO/lPaE5pMyX/ApEkJ96s50DtFWjbW7gjvm6fW12CLlM9oqgu/x5FVO5hBdzM/ro16YeWQhskjaXtBG2A6Fduu3zAvpajRKYhUBm4QhG0TgzPE7KVoPWinvxgD",
+            "page_age": "December 6, 2024",
+            "title": "Dustin Tran on X: \"gemini-exp-1206, out now. #1 everywhere ...",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran/status/1865085109675930095"
+          },
+          {
+            "encrypted_content": "Eu0JCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDAHD57pCrBLuTzig6BoMv+XTf5/GtIvIBsgzIjDj/PU5pQKrg6IYLlLIt1hQ502+/EMU530jQRFDmSzWXXX9RBf037xHlTkdXlrfXv8q8AiHShm1T7tOQTD6mMAAimlkRTJZD2lciRnh1BiktJyGRyxxwt/65odGVVyI8ROSkA0ZSrB8oZh89bEgntfsw0vK3jHgj82gVAEfA+VMaLCZD7akfhiCDUF7dKV8nbyUSA93ipmJbsGIprMbZ0v3JsnsUBxVKGHf5wR/Qo8XLUeHhzl/sgzHw3kkDJrvQvwh5Os9u1Gd0PQm1kLlAN1Jvw834rWVkABpUlBIyGHDBKfvp5Y3ZN032bNFhbErZuV4ZM49Vl+/jrDyhTyb1oLq+OeEL2pVJYgJU+HRmMcdInlEWpUAmja4Wln09A3bcpEQ57ZUObiSz8iHakIZbCxJYFymbazc9GQ8cpRuT0EFo3BmfDneyrT0fnFHgePCl0xZ1iA4SbQ40wkNqV4W9hu7dZcGO4NUnT7sTej71OyLAZvlVjkCPYER02clyKlaNp6DKPtTrMMASjl/EEh9S42sucupAXk/YuDUelhyPTXvirngAYYDngq7/52JvuLd+cWon7kQ4k6LsKPWnIrho0ui1y7eb6TJLfbU4d82kVkMbCKVqXJpKtUlnBuEC3OrpAO7iiqeU7tjKDfpEJrU82RgoN/xw0Fe4m1rEmSBtSPvWXW6kMtLoFKl10EM/ngzq3W0dvUFgz2AGD0CFIOlvTc7AZVLImkm0qa2ffJU/4Lr0AFjDekKzrJdWD9BSfnWVXW9h0SqMphfGvxngtdmP9YmFG9Q/wbU3EMYWvjyab/80L+hLOv1DZdodXG8x+tMfQ/35DGA4hY7T3lKvtmxRnZezHUca9odb3GTgIBGM8bQufa5KddLbk7F6zIx8YJhRKPQt+cGxGHwymPNEFOQ5zoxs3t1qFR5a3uHf3tHNaz+pOR4uU2vySAdOs0XCU5r0xmYkOoQH9ICLg1CUKS05lwOI4CX7scJhz2/RwFuToc30r06ywH/BBeBM5OgrAj6RMd/94CiuHQivCZakhKwB50Bi8bwTx1fdo6XZbUNcT6+aTzj9EA7WBkgk1iC9+GN/TzmZk+psppvW7nPZoLZA1aLYl7GesMkT0OkpvSs/qcRDHUbx8/jQ1cN3VIFWOIX5+ehpDAzr3JfrSIDyljbW1zGjmN+eT/kKhWpqDD0U50/BwoRir7lHuRkKCniUK4vnQlr98oqrWy8Dc/Niw/gFMjpPRZR8pFC4QVy5vRpbHXwn5zkD74GbFXWbZ0u/0bwQctE0dF3gRVZ3YVRnAqH972ifO5zdiWUOPGdBNWSfS58YND0uJQnif41mFccB2s1cq6VntKgZBdxGi1jl0ssNYORTTuWAjtmkDCOMN/SJRbbV1s4hL19xrGJ+xYJINPLDqkkDy7zSXCqFrLK00WpntEgu2Hb8u2SChCjtbaURQewV65Iob4HHx1JoAGBoAREtspivYLInqf8CtGuch/bFFzU/SRTYZ4V31lxgzHsY0vPqm0izQwRDUmVPrRXFmGb4z+dvHTtUhL0/GKeEnTaNtM0/bWYkxWK5urSHXVLOXkkpmFOIxgD",
+            "page_age": "September 22, 2025",
+            "title": "Dustin Tran, a key figure behind Gemini and a senior researcher at Google DeepMind, joins xAI | mashdigi - Technology, New Products, Interesting News, Trends",
+            "type": "web_search_result",
+            "url": "https://mashdigi.com/en/dustin-tran-a-key-contributor-to-gemini-and-a-senior-researcher-at-google-deepmind-has-joined-xai/"
+          },
+          {
+            "encrypted_content": "EtQCCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDMgyM8ExEUmPO4WpZBoMh2jSsZOzwBP34Yi4IjDewqAjuwGkisrDhxTuHYueXkU02gjmQxf5u/bGhnYLa5U+YPTYlDVDo4yde+ZmDUEq1wE9aUv5BEsNIvHiUiAYyfoQ8y+SOkpYpidSHb8mhcdEpQ2lX4CoUEU9C52TpiQSFLISLqBoEzRs4OLX2oE8meZaDrUk1jXkAZmhOj7+uCo2GePasEgSrpNwHtfK7t8hraE3aYhFXajEXlFOkUHqle8c4/1YRGzczlZ8tiyFr5QY7ruhl+5LyYwUuQRQPsB9QE7nDGqRhtdnJTFG2Egyn5UHuVMH8meI/EcZwO0AQg4LyZc0vvFtA7lWsENjjXQZSPNvfjl8tWhhk5zsMYXagkHCiShFw8QWPxgD",
+            "page_age": "October 20, 2017",
+            "title": "Use observations library in all examples · Issue #295 · pyro-ppl/pyro",
+            "type": "web_search_result",
+            "url": "https://github.com/pyro-ppl/pyro/issues/295"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": "June 23, 2013",
+            "title": "Dustin Tran (@dustinvtran) / Posts / X",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran"
+          },
+          {
+            "encrypted_content": "Eu4CCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDOzd+zhFNzKSVn5XtRoMI4jX2v3XF5KW3wBWIjDL3aEvEnaBBfG1IXFO5QLZUBlH28aQLGejgr9QuBJBPFI4DFDXoP3JWaiXpEano0Iq8QHB030wt0bYYl2GekfAD+enMhWA85csCybYlND3GZaJYr3o/yX8s3nOpoDTIaJQC1PR3bvTlkwHvidvL+ExQ0qLGXqbTCYG8s5y2NXTpFcaNxQcTlNwPfWQWQLjBsu3mkGOR/C/flr7SBSmG4syRe6xKeB75w24XsoG/8ZWCuVov222SmZjRCxXQH7cQdfLM5drnLxh2gN9tGKht4XkHR0TuaoTYU9555jSbZXYTMqFQg3hVJtddC6icH7je5dSRZIds91bb/gSykpW8iptfVO3CJZenFaNISF56eMzIDds6zC5tvaXIvNKcNCHq++bnsWpGAM=",
+            "page_age": null,
+            "title": "Dustin Tran on X: \"Variational Lossy Autoencoder by Xi Chen and others at OpenAI. interesting interpretation from information theory https://t.co/VZT9f4KKys\" / X",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran/status/796727808861073409"
+          },
+          {
+            "encrypted_content": "EtUBCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDNqjrBjH/f/17meCiRoMn6wR6+tm+MatenmBIjAPyJpl4S++jhGblxEFuDfnDjVTZOaoyTmrSJIOYn22x62o7VVDn5d6gqMcHONsBpUqWcuMJ6oeYmhl8rmTWPfXIBnVwx2D5zaXIg/9MpV2ks2XKYjYhMAP5tXgrjnEsE4f9l/XAsgUFi8uJlsUhsg4kNNrqWv4wK3r7n12Y2qLbC7SkmJF8fLyjaNZGAM=",
+            "page_age": null,
+            "title": "dustinvtran (Dustin Tran) · GitHub",
+            "type": "web_search_result",
+            "url": "https://github.com/dustinvtran"
+          },
+          {
+            "encrypted_content": "EtUBCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDJgqRElBZ6SHOmR0kBoMh+J+ntLIkYJ8kHQoIjA9smNbSyeT0SD4DFphmBFMUCNv8TlDVyabwrc6I9SOn3yVZLKYp5GxLCrAURWufMEqWTelIldLVKACztgDfxjE3uzYwWW+nUgaR2jJMf7zHM8rVccGVJdsqat/x9B4yHjCZtHLO2ur6WT385SxP/FmkjG3HK5Ht9GVvIok1sEqPseBEq2YQHIYZTNZGAM=",
+            "page_age": null,
+            "title": "dustinvtran (Dustin Tran) / Starred · GitHub",
+            "type": "web_search_result",
+            "url": "https://github.com/dustinvtran?language=python&tab=stars"
+          },
+          {
+            "encrypted_content": "EuMBCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDIYRxLGcK3OFZ8sJhxoMDK9ess3iMW09+A8BIjBRZ/Lo386pVGW4C7hWljjNhwtqfpHZZzZvILKs42lVtLbObtjE/1MRckzjyNv02LgqZ7BwIdyaVxeehvylG1DAJ3fkuOKu6sPUMMod6C3TeqsWpZb2JKXLgcP+H+oyU77qvhV6cDS0OwmxC5Sc+qi8L33+MN/mhdnSiad/eRF6dNIKu3Qhm5Q7yBLI9gYmmML2PB4/URKeSl0YAw==",
+            "page_age": null,
+            "title": "dustinvtran’s gists",
+            "type": "web_search_result",
+            "url": "https://gist.github.com/dustinvtran"
+          }
+        ],
+        "tool_use_id": "srvtoolu_016kv42xiZSjad53xCZiTgF8",
+        "type": "web_search_tool_result"
+      },
+      {
+        "citations": null,
+        "text": "done",
+        "type": "text"
+      }
+    ],
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 8433,
+      "output_tokens": 63,
+      "output_tokens_details": null,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 1
+      },
+      "service_tier": "standard"
+    }
+  }
+}

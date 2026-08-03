@@ -1,0 +1,171 @@
+{
+  "captured_at": "2026-08-03T05:59:48.397468+00:00",
+  "query": "\"Dustin Tran\" \"xAI\" site:news.ycombinator.com",
+  "provider": "anthropic_search",
+  "model": "claude-haiku-4-5-20251001",
+  "usage": {
+    "searches": 1,
+    "input_tokens": 9286,
+    "output_tokens": 80,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "errors": []
+  },
+  "parsed_results": [
+    {
+      "url": "https://x.com/wesselvk/status/1970574373049581693",
+      "title": "Wessel van Keulen on X: \"Exciting news in AI! @xAI just poached top researcher Dustin Tran from @GoogleDeepMind, where he was a core contributor to Gemini. This hire bolsters xAI's team as they push Grok's next-gen capabilities. Tran, a senior AI expert, will lead development on advanced models. https://t.co/lZzkhVbEli\" / X",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://x.com/wesselvk/status/1970574373049581693",
+        "title": "Wessel van Keulen on X: \"Exciting news in AI! @xAI just poached top researcher Dustin Tran from @GoogleDeepMind, where he was a core contributor to Gemini. This hire bolsters xAI's team as they push Grok's next-gen capabilities. Tran, a senior AI expert, will lead development on advanced models. https://t.co/lZzkhVbEli\" / X"
+      }
+    },
+    {
+      "url": "https://x.com/dustinvtran",
+      "title": "Dustin Tran (@dustinvtran) / Posts / X",
+      "snippet": "",
+      "published_at": "2013-06-23T00:00:00Z",
+      "raw": {
+        "url": "https://x.com/dustinvtran",
+        "title": "Dustin Tran (@dustinvtran) / Posts / X",
+        "page_age": "June 23, 2013"
+      }
+    },
+    {
+      "url": "https://www.linkedin.com/in/dustinvtran",
+      "title": "Dustin Tran - Member of Technical Staff at xAI",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://www.linkedin.com/in/dustinvtran",
+        "title": "Dustin Tran - Member of Technical Staff at xAI"
+      }
+    },
+    {
+      "url": "https://dustintran.com/cv.pdf",
+      "title": "Dustin Tran dustinviettran@gmail.com http://www.dustintran.com/",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://dustintran.com/cv.pdf",
+        "title": "Dustin Tran dustinviettran@gmail.com http://www.dustintran.com/"
+      }
+    },
+    {
+      "url": "https://dustintran.com/",
+      "title": "Dustin Tran",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://dustintran.com/",
+        "title": "Dustin Tran"
+      }
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/XAI_(company)",
+      "title": "XAI (company)",
+      "snippet": "",
+      "published_at": null,
+      "raw": {
+        "url": "https://en.wikipedia.org/wiki/XAI_(company)",
+        "title": "XAI (company)"
+      }
+    }
+  ],
+  "raw_message": {
+    "id": "msg_011CdfJbMz4RA3oCY713rZCv",
+    "container": null,
+    "content": [
+      {
+        "id": "srvtoolu_01BYggHC2w63aYcRpnwdv2iM",
+        "caller": null,
+        "input": {
+          "query": "\"Dustin Tran\" \"xAI\" site:news.ycombinator.com"
+        },
+        "name": "web_search",
+        "type": "server_tool_use"
+      },
+      {
+        "caller": {
+          "type": "direct"
+        },
+        "content": [
+          {
+            "encrypted_content": "EqwECioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDMGkDa/48aJ8ahMSoxoM2wqhc0n8Y4AlN2SvIjDUKQP9SxLSfm2ooRO3LDRceimNr4Yfat0PnWb35+r55XDBGBhCQ1RGu2kzryhjnDMqrwM8XrbXGX4vvPBLZUJZ4OcKGbIZNXdbWZOJYsSVlir4OwjN40c9dyjOaqYmcbA4CII3bDCwbmxooeFasdWl45ravbzR76uCwmsmIyfcANtmhQG7P3hCoKJ4vyxqoIJMBHCnTHGJ9DQi66tkzuAC8Huabw8FWrRJM/rbWVJNtdRKO7dY3Vk4jyzylZ11FwjJ+E6HYjs0WbLykn4g1MyXj91RaSDCPhvNm7c9aMLh0b3f2XPiKGDEhPGlmAiLbZV/O6e3eFGs3XvjKLpvfU9OvnJ41SGHlIABW3zRW30iUoCEtYxal1eAWWKofnRV+sThIFnA+8HWNUMg0RZRHOLswrjfgrTzSeU5q8cmzbMjQhc+Oo4sFzYxygMVI1dS1cXGdRXOEh+z0nj066F50rIPaR9M05LKlrZHUoBE7Y8K6pY94H+0RbX8seH+rFwR6gKbNEZyAH6URwvOYny3+wqPoRwdEk1AERIKdjGKwDRKAT+mUYg3fqGTc0xpoYrzYj6yOc7P00VHNCm/eKrPs0gG7QZ1W7zIV9PvrmKzm10HU/aS5mhhO0rwXfUkrdDEtJ6fcBgD",
+            "page_age": null,
+            "title": "Wessel van Keulen on X: \"Exciting news in AI! @xAI just poached top researcher Dustin Tran from @GoogleDeepMind, where he was a core contributor to Gemini. This hire bolsters xAI's team as they push Grok's next-gen capabilities. Tran, a senior AI expert, will lead development on advanced models. https://t.co/lZzkhVbEli\" / X",
+            "type": "web_search_result",
+            "url": "https://x.com/wesselvk/status/1970574373049581693"
+          },
+          {
+            "encrypted_content": "EosGCioIEhgCIiQ5ODkxZjQ0ZS1lZjBjLTRlMWUtYjRkYi1mNDE3ZjYyYmQ5ZTASDGnTwOb+qjoKquOwzhoMI/0Uq1aBcvGX6O2iIjDUiQQZXTNuczODHacgWaNaqtlTm7GmYDEu9GMW0VSHOQcXUttKP6AuqM9+N1CF330qjgX0XhcltEk7l2pAcyfJvWW86hQen4Jsr8o5X3q9H4wMLjyOTzqRmqhg3GuMY+nnTayQ0uLY5yUcvowA1UgiTjHiFJR+ELwihTLA6Ug/2D3nsRUByb/nG4rGu/XbjoQFOkofpEcuqiWev29xx722PWhJbDjNd4jy2O2g+b1aDM/N5XxsqIBPrNHJjTmn/3eU9Uocx4riGanzPhYdLsimRhjK4b0O6AMRtycjjFAXU5/prHg+tvjGa9to5F0aMcz7uoLjk30y9a5gc+reilsEyIEVCSTzb/PyQyWxTnZI74ldsDiL6Zyi/iCPcQEiFlXivGtWhoMjUOXPYcNKH/1VZ9/xvsXfvVC1kpAPXvUW3Mrd4s80PyXszJtqzUlIyYkXhU9lsZWWRx6U1RdXfmo9VoupVvtjbgnp4R3PCIUkVTWYGeEeBHZKKObwKaHh4wSQsEbtVuiHZGsgyyHzSoYJC7OhBIdFvVEbtf0Xq/EVRr/yc6ukMHmEyngRcfKWtwQ7Jpx65AhnnNHXZQqKBA/dZ/QEjW69PVFRZ/7RKwTuPzfWCw2OqxnrJ/JPRDXfyVxfD1JMa//NpV5AhOeQZkBbQZRpqY+xC0jEEhaDCGezotJ+A0ve6n8lIyB6s1aF6sx4XfVsStktOw0ELBynUg3i/0pmLcAc38kFKvaXPSnYteCdVo2K2vAvjlA72qBnCjXvIe8CVrbj3l+tjUZVKFkOSuW8PXx6HqItLIHXePbx6smvbYUX6qipMI3ZYc2a4RyHpP3MAnlHLeuHfobT0xTsYZKrfk5jsHj5BlGM0138u3osa6kbwYdiSgVawtdQAk/NIji0fheVpMliSqaFrKvkgR//nw6V5KGbLGJJH40X7AcYAw==",
+            "page_age": "June 23, 2013",
+            "title": "Dustin Tran (@dustinvtran) / Posts / X",
+            "type": "web_search_result",
+            "url": "https://x.com/dustinvtran"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran - Member of Technical Staff at xAI",
+            "type": "web_search_result",
+            "url": "https://www.linkedin.com/in/dustinvtran"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran dustinviettran@gmail.com http://www.dustintran.com/",
+            "type": "web_search_result",
+            "url": "https://dustintran.com/cv.pdf"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "Dustin Tran",
+            "type": "web_search_result",
+            "url": "https://dustintran.com/"
+          },
+          {
+            "encrypted_content": "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",
+            "page_age": null,
+            "title": "XAI (company)",
+            "type": "web_search_result",
+            "url": "https://en.wikipedia.org/wiki/XAI_(company)"
+          }
+        ],
+        "tool_use_id": "srvtoolu_01BYggHC2w63aYcRpnwdv2iM",
+        "type": "web_search_tool_result"
+      },
+      {
+        "citations": null,
+        "text": "done",
+        "type": "text"
+      }
+    ],
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 9286,
+      "output_tokens": 80,
+      "output_tokens_details": null,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 1
+      },
+      "service_tier": "standard"
+    }
+  }
+}
