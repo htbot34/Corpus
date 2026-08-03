@@ -19,9 +19,45 @@ from pydantic import BaseModel, Field
 
 DocKind = Literal["original", "thread", "reply", "quote", "repost", "media_only"]
 
+# How sure are we that this document was written by the person we are reading?
+#
+# The failure mode this exists to prevent: automated search on a name returns
+# other people, and a confident, well-formatted report that attributes a
+# stranger's blog post to the subject is worse than no report at all, because
+# the output is indistinguishable from a correct one. So every document carries
+# why we believe it is theirs, and the report shows the mix.
+#
+# Descending:
+#   anchor       a URL or handle the user supplied. Certain.
+#   linked       reached by following a link from an anchor — a GitHub bio
+#                pointing at a blog. Near-certain, and the most valuable path,
+#                because people link their own things.
+#   corroborated found by search and independently matching two or more
+#                identity signals (employer named on the page, links back to an
+#                anchor, byline plus role).
+#   name_match   the name matched and nothing else. Never ingested by default.
+Attribution = Literal["anchor", "linked", "corroborated", "name_match"]
+
+# Descending order, for "is this at least as good as X" comparisons.
+ATTRIBUTION_ORDER: tuple[Attribution, ...] = ("anchor", "linked", "corroborated", "name_match")
+
+# The confidence a tier starts at. Discovery may raise it within a tier when
+# several independent signals agree, never across one: a corroborated match is
+# not promoted to linked by being very corroborated.
+ATTRIBUTION_CONFIDENCE: dict[Attribution, float] = {
+    "anchor": 1.0,
+    "linked": 0.85,
+    "corroborated": 0.6,
+    "name_match": 0.3,
+}
+
+# What a run ingests unless told otherwise. `name_match` is deliberately out:
+# it is written to unconfirmed.md for a human to accept or reject.
+DEFAULT_INGESTED_ATTRIBUTIONS: tuple[Attribution, ...] = ("anchor", "linked", "corroborated")
+
 
 class Document(BaseModel):
-    source: str  # "x", "substack", "rss", "web"
+    source: str  # "x", "substack", "rss", "web", "github", ...
     source_id: str
     url: str
     author_handle: str
@@ -35,6 +71,14 @@ class Document(BaseModel):
     outbound_links: list[str] = Field(default_factory=list)
     part_count: int = 1  # 1 unless stitched thread
     raw: dict[str, Any] = Field(default_factory=dict)
+
+    # Why we believe this is theirs. The default is "anchor" because every
+    # document produced before discovery existed came from a handle or URL the
+    # user typed — the certain case. A corpus.json written by an older run
+    # therefore loads with the right value rather than a plausible-looking one.
+    attribution: Attribution = "anchor"
+    attribution_basis: str = ""  # human-readable: "linked from github.com/jsmith bio"
+    attribution_confidence: float = 1.0
 
     @property
     def word_count(self) -> int:
@@ -80,6 +124,13 @@ class Thread(BaseModel):
             outbound_links=merged_links,
             part_count=len(self.parts),
             raw={"root": root.raw, "part_ids": [p.source_id for p in self.parts]},
+            # Every part of a self-reply thread came from the same place as its
+            # root, so the root's attribution is the thread's. Dropping it here
+            # would silently downgrade the best documents in any X corpus to the
+            # field default.
+            attribution=root.attribution,
+            attribution_basis=root.attribution_basis,
+            attribution_confidence=root.attribution_confidence,
         )
 
 

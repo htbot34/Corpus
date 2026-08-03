@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 
 from ..cache import Cache
-from ..models import Document
+from ..models import ATTRIBUTION_CONFIDENCE, Attribution, Document
 from ..redact import RedactingError
 
 USER_AGENT = "corpus/0.1 (personal research tool; +https://github.com/)"
@@ -185,6 +185,9 @@ def make_document(
     links: list[str],
     raw: dict[str, Any],
     paywalled: bool = False,
+    attribution: Attribution = "anchor",
+    attribution_basis: str = "",
+    attribution_confidence: float | None = None,
 ) -> Document:
     text = f"{title}\n\n{body}".strip() if title else body.strip()
     if paywalled:
@@ -201,4 +204,34 @@ def make_document(
         outbound_links=links,
         part_count=1,
         raw=raw,
+        attribution=attribution,
+        attribution_basis=attribution_basis,
+        attribution_confidence=(
+            attribution_confidence
+            if attribution_confidence is not None
+            else ATTRIBUTION_CONFIDENCE[attribution]
+        ),
     )
+
+
+def attribute(
+    docs: list[Document],
+    *,
+    attribution: Attribution,
+    basis: str,
+    confidence: float | None = None,
+) -> list[Document]:
+    """Stamp why we believe a batch of documents belongs to the subject.
+
+    Applied by the caller rather than threaded through `SecondarySource.fetch`,
+    because an adapter has no idea how its target was arrived at: the same
+    Substack fetch is an anchor when the user typed the domain and `linked`
+    when discovery found it in a GitHub bio. The adapter fetches; the caller
+    knows the provenance.
+    """
+    resolved = confidence if confidence is not None else ATTRIBUTION_CONFIDENCE[attribution]
+    for doc in docs:
+        doc.attribution = attribution
+        doc.attribution_basis = basis
+        doc.attribution_confidence = resolved
+    return docs
