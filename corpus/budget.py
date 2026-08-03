@@ -54,6 +54,17 @@ X_COST_PER_TWEET = 0.15 / 1000
 X_COST_PER_PROFILE = 0.18 / 1000
 X_MIN_CHARGE_PER_REQUEST = 0.00015
 
+# Anthropic server-side web search, as published: $10 per 1,000 searches, on top
+# of the tokens the search results consume. Billed per *search*, not per result
+# and not per API call — `usage.server_tool_use.web_search_requests` is the unit,
+# and a search that errors is not billed at all.
+#
+# At $0.01 a search this is the most expensive thing in the tool per call: one
+# `--max-searches 12` run costs ~$0.12 in search fees before a single token. It
+# is also the only cost in Phase 2 that a cache can remove entirely, which is
+# why results are cached by query string.
+SEARCH_COST_PER_QUERY = 10.00 / 1000
+
 # Anthropic list prices, $ per million tokens.
 # Claude Sonnet 5 carries introductory pricing ($2/$10) through 2026-08-31,
 # after which it reverts to $3/$15. We charge the correct rate for today so the
@@ -270,6 +281,17 @@ class Budget:
             minimum=X_MIN_CHARGE_PER_REQUEST,
         )
 
+    def charge_searches(self, endpoint: str, count: int, note: str = "") -> Charge:
+        """Record web searches actually performed.
+
+        `count` comes from `usage.server_tool_use.web_search_requests`, not from
+        how many queries we asked for: the model decides whether to search, and
+        a search that errors is not billed. Charging what we requested rather
+        than what happened would make the spend report a statement about our
+        intentions.
+        """
+        return self.charge("search", endpoint, count, SEARCH_COST_PER_QUERY, note=note)
+
     def charge_anthropic(
         self,
         model: str,
@@ -381,6 +403,7 @@ class Budget:
         b = self.breakdown()
         lines = [
             f"X data (twitterapi.io): ${b.get('x', 0.0):.4f}",
+            f"Web search:             ${b.get('search', 0.0):.4f}",
             f"Anthropic tokens:       ${b.get('anthropic', 0.0):.4f}",
             f"{'-' * 38}",
             f"Total:                  ${self.total:.4f} of ${self.limit:.2f} budget",
@@ -448,6 +471,34 @@ def estimate_anthropic_call(
         + max_output_tokens * out_rate / 1_000_000
         + cache_read_tokens * in_rate * CACHE_READ_MULTIPLIER / 1_000_000
     )
+
+
+def estimate_search_call(
+    model: str,
+    input_tokens: int,
+    max_output_tokens: int,
+    searches: int = 1,
+) -> float:
+    """Worst-case cost of one search call: the search fee plus the model call.
+
+    The search fee dominates — $0.01 against a fraction of a cent of Haiku
+    tokens — but both are reserved, because a reservation that covers only the
+    larger half is not a ceiling.
+    """
+    return searches * SEARCH_COST_PER_QUERY + estimate_anthropic_call(
+        model, input_tokens, max_output_tokens
+    )
+
+
+def estimate_search_phase(max_searches: int, model: str = "claude-haiku-4-5-20251001") -> float:
+    """Pre-flight estimate for the whole discovery-by-search phase.
+
+    Assumes every query runs (the cache makes a re-run cheaper, never dearer)
+    and that each carries ~4k tokens of results back — search results are
+    counted as input tokens, and they are the bulk of what a search call costs
+    beyond the fee itself.
+    """
+    return max_searches * estimate_search_call(model, 4_000, 1_000)
 
 
 def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:
