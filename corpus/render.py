@@ -22,7 +22,7 @@ from typing import Any
 
 from .models import Document, Synthesis
 from .synthesize import EVIDENCE_CAP
-from .tiers import THIN_BELOW, THIN_REMEDY, TierRules, classify_corpus
+from .tiers import THIN_BELOW, THIN_REMEDY, TierRules, classify_corpus, classify_sources
 
 ROLE_LABELS = {
     "load_bearing": "load-bearing",
@@ -113,6 +113,63 @@ def _callout(lines: list[str]) -> str:
     return "\n".join(f"> {line}" for line in lines)
 
 
+def _search_lines(search: dict[str, Any]) -> list[str]:
+    """What Phase 2 did, in the coverage block.
+
+    A run that searched and found nothing and a run that never searched look
+    identical in a report that only lists what it ingested — and they are very
+    different claims about how hard the tool looked.
+    """
+    if not search or not search.get("queries"):
+        return []
+    lines = [
+        f"- Search: {search.get('searches', 0)} quer(y/ies) run"
+        f" ({search.get('cached_searches', 0)} served from cache),"
+        f" {search.get('results_seen', 0)} result(s),"
+        f" {search.get('verified', 0)} verified,"
+        f" {len(search.get('candidates', []))} ingested,"
+        f" {len(search.get('held', []))} held"
+    ]
+    if search.get("common_name"):
+        fields = ", ".join(f"`{f}`" for f in search.get("disambiguators", []))
+        lines.append(
+            "- **The name is too common to resolve by search.** Nothing found by "
+            "search was ingested."
+            + (f" Adding {fields} to the card would narrow it." if fields else "")
+        )
+    if search.get("held"):
+        lines.append(
+            f"- {len(search['held'])} search candidate(s) could not be verified and are "
+            "**not** in this corpus. They are listed in `unconfirmed.md`, with what "
+            "matched and what did not."
+        )
+    if search.get("context"):
+        lines.append(
+            f"- {len(search['context'])} page(s) found by search are *about* the subject "
+            "rather than by them (profiles, interviews, conference bios). They are "
+            "recorded in discovery.json and were never treated as their writing."
+        )
+    return lines
+
+
+def _concentration_line(docs: list[Document]) -> str:
+    """Say when the corpus is really one source wearing several hats.
+
+    The tiers count documents; this counts where they came from. 200 GitHub
+    review comments and 200 documents spread over a blog, a Substack and a
+    talk are not the same evidence base, and a report that treats them alike
+    invites the reader to generalise past what was read.
+    """
+    mix = classify_sources([d.source for d in docs])
+    if not mix.is_concentrated:
+        return ""
+    return (
+        f"- **{mix.share:.0%} of this corpus is a single source ({mix.dominant}).** "
+        f"It speaks to {mix.reach}. Where an axis below reports no signal, that may "
+        f"be a fact about the corpus rather than about the subject."
+    )
+
+
 def _document_count(synthesis: Synthesis | None, docs: list[Document]) -> str:
     """What the header says about how much was read.
 
@@ -193,6 +250,10 @@ def render_report(
             f"- {len(held)} further source(s) matched the name and nothing else, and were "
             "**not** ingested. They are listed in discovery.json."
         )
+    caveats.extend(_search_lines(run_meta.get("search") or {}))
+    concentration = _concentration_line(docs)
+    if concentration:
+        caveats.append(concentration)
     # What a source could not give, in the source's own words. A per-platform
     # ceiling — GitHub's events feed reaching back only ~90 days — is a fact
     # about the corpus, and a reader who has to infer it from a suspiciously

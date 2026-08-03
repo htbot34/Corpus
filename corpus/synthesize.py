@@ -35,7 +35,15 @@ from .budget import (
 )
 from .models import Axis, Document, MapChunk, Synthesis
 from .prefilter import FilterStats, filter_low_signal, is_substantive_engagement
-from .tiers import RICH, TierRules, classify_corpus, prompt_block
+from .tiers import (
+    RICH,
+    SourceMix,
+    TierRules,
+    classify_corpus,
+    classify_sources,
+    prompt_block,
+    source_prompt_block,
+)
 
 # Map is extraction: find the claims, name the moves, point at the ids. It does
 # not need judgment, so it does not need an expensive model — and map is the
@@ -253,10 +261,19 @@ def build_map_system(axes: list[AxisSpec]) -> str:
     return MAP_SYSTEM_BASE + MAP_AXES_SUFFIX.format(axes=axes_prompt_block(axes))
 
 
-def build_reduce_system(axes: list[AxisSpec], tier: TierRules) -> str:
+def build_reduce_system(
+    axes: list[AxisSpec], tier: TierRules, sources: SourceMix | None = None
+) -> str:
+    tier_block = prompt_block(tier)
+    # How the corpus is spread, appended to how big it is: both are facts
+    # about the evidence base, both are counted in Python, and the model is
+    # told rather than asked.
+    concentration = source_prompt_block(sources) if sources is not None else ""
+    if concentration:
+        tier_block = f"{tier_block}\n\n{concentration}"
     return REDUCE_SYSTEM_TEMPLATE.format(
         axes=axes_prompt_block(axes),
-        tier=prompt_block(tier),
+        tier=tier_block,
         cap=EVIDENCE_CAP,
         weak=MIN_WEAK_DOCUMENTS,
     )
@@ -492,6 +509,7 @@ class SynthesisRun:
     filter_stats: FilterStats | None = None
     analyzed_documents: int = 0
     tier: TierRules | None = None
+    sources: SourceMix | None = None
     raw_reduce_output: str = ""
     structured_output: bool = True  # False when the schema was refused
     error: str = ""
@@ -504,6 +522,7 @@ class SynthesisRun:
             "corrected_counts": self.corrected_counts,
             "analyzed_documents": self.analyzed_documents,
             "corpus_tier": self.tier.name if self.tier else "",
+            "source_mix": self.sources.counts if self.sources else {},
             "filter": self.filter_stats.as_dict() if self.filter_stats else {},
             "structured_output": self.structured_output,
             "error": self.error,
@@ -710,6 +729,7 @@ async def run_reduce(
     *,
     axes: list[AxisSpec] | None = None,
     tier: TierRules | None = None,
+    sources: SourceMix | None = None,
     model: str = REDUCE_MODEL,
     effort: str = "high",
     log: Callable[[str], None] = print,
@@ -717,7 +737,9 @@ async def run_reduce(
     """Returns (synthesis, raw_output, error, used_structured_output)."""
     corpus = _corpus_block(map_outputs, signals, highlights)
     system_prompt = build_reduce_system(
-        axes if axes is not None else load_axes(), tier if tier is not None else RICH
+        axes if axes is not None else load_axes(),
+        tier if tier is not None else RICH,
+        sources,
     )
     attempt_note = ""
     structured = True
@@ -1190,6 +1212,8 @@ async def synthesize(
     # when there is nothing to synthesize, so the caller can still report it.
     tier = classify_corpus(run.analyzed_documents)
     run.tier = tier
+    # Counted on what the model will see, for the same reason the tier is.
+    run.sources = classify_sources([d.source for d in synth_docs])
     if not synth_docs:
         run.error = "no synthesizable documents"
         return run
@@ -1211,6 +1235,11 @@ async def synthesize(
     run.chunks = len(chunks)
     log(f"  {len(synth_docs)} documents -> {len(chunks)} map slices ({map_model})")
     log(f"  corpus tier: {tier.name} ({tier.document_count} documents)")
+    if run.sources is not None and run.sources.is_concentrated:
+        log(
+            f"    {run.sources.share:.0%} of the corpus is {run.sources.dominant}; "
+            f"the reduce prompt says so and constrains what it may generalise to"
+        )
     if tier.suppresses_inference:
         log("    inference suppressed; stated positions only")
     elif tier.min_chain_documents > 1:
@@ -1261,6 +1290,7 @@ async def synthesize(
             budget,
             axes=selected_axes,
             tier=tier,
+            sources=run.sources,
             model=reduce_model,
             effort=reduce_effort,
             log=log,

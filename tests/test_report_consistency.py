@@ -178,3 +178,32 @@ def test_a_report_with_no_synthesis_falls_back_to_the_corpus_count() -> None:
     )
 
     assert "7 documents" in report.split("\n")[2]
+
+
+# -- the source-concentration prompt ----------------------------------------
+
+
+def test_a_concentrated_corpus_tells_the_model_what_it_may_generalise_to() -> None:
+    """Counted in Python, injected as ground truth — the same treatment the
+    corpus tier gets, for the same reason: the model must not be asked to
+    assess its own evidence base."""
+    from corpus.axes import load_axes
+    from corpus.synthesize import build_reduce_system
+    from corpus.tiers import RICH, classify_sources
+
+    mix = classify_sources(["github"] * 95 + ["rss"] * 5)
+    prompt = build_reduce_system(load_axes()[:1], RICH, mix)
+
+    assert "95% of it is github" in prompt
+    assert "technical reasoning under disagreement" in prompt
+    assert "Do not generalise past it" in prompt
+
+
+def test_a_spread_corpus_adds_no_concentration_block() -> None:
+    from corpus.axes import load_axes
+    from corpus.synthesize import build_reduce_system
+    from corpus.tiers import RICH, classify_sources
+
+    spread = classify_sources(["github"] * 5 + ["rss"] * 5)
+
+    assert "Where this corpus came from" not in build_reduce_system(load_axes()[:1], RICH, spread)

@@ -190,3 +190,101 @@ inference needs a real reasoning chain and at least one sourced document, and
 def prompt_block(rules: TierRules) -> str:
     """The tier section injected into the reduce system prompt."""
     return _PROMPT_BLOCKS[rules.name].format(n=rules.document_count, k=rules.min_chain_documents)
+
+
+# --------------------------------------------------------------------------
+# how the corpus is spread, not just how big it is
+# --------------------------------------------------------------------------
+# The tiers count documents. A corpus of 200 documents that is 95% GitHub
+# review comments is not the same evidence base as 200 spread across a blog,
+# a Substack and a conference talk, and treating them alike is how a report
+# about someone's technical reasoning acquires a confident section on their
+# politics.
+#
+# Unlike the tiers, this is *not* enforced in code, and the difference is
+# deliberate. "Fewer than 40 documents" is a fact about arithmetic; "a
+# GitHub-only corpus cannot speak to their politics" is a judgement about
+# subject matter, and encoding it as a rule that deletes axes would be the
+# topical filtering this tool has refused everywhere else. So the share is
+# computed in Python, injected as ground truth, and stated in the report —
+# the model is told what its evidence base actually is, and the reader is
+# told the same thing.
+
+#: Share of one source above which a corpus is called concentrated.
+SINGLE_SOURCE_DOMINANCE = 0.80
+
+#: What one source can and cannot support, in its own terms.
+_SOURCE_REACH: dict[str, str] = {
+    "github": (
+        "technical reasoning under disagreement — how they argue about code, "
+        "design and correctness. It says nothing about their politics, their "
+        "cultural views, or how they behave outside a code review"
+    ),
+    "x": (
+        "fast reaction, social positioning, and how they argue in public with "
+        "an audience watching. Sustained long-form argument is under-represented "
+        "by construction"
+    ),
+    "substack": "sustained long-form argument, and little about how they react in the moment",
+    "rss": "sustained long-form argument, and little about how they react in the moment",
+    "web": "whatever those specific pages cover, which may be narrower than it looks",
+}
+
+
+@dataclass(frozen=True)
+class SourceMix:
+    """Where the corpus came from, and what that permits."""
+
+    total: int
+    counts: dict[str, int]
+    dominant: str
+    share: float
+
+    @property
+    def is_concentrated(self) -> bool:
+        return bool(self.dominant) and self.share >= SINGLE_SOURCE_DOMINANCE
+
+    @property
+    def reach(self) -> str:
+        return _SOURCE_REACH.get(self.dominant, "whatever that one source happens to cover")
+
+    def summary(self) -> str:
+        parts = ", ".join(
+            f"{name} {count}" for name, count in sorted(self.counts.items(), key=lambda x: -x[1])
+        )
+        return f"{self.total} document(s) from {len(self.counts)} source(s): {parts}"
+
+
+def classify_sources(sources: list[str]) -> SourceMix:
+    """Count documents per source and name the dominant one."""
+    counts: dict[str, int] = {}
+    for source in sources:
+        counts[source] = counts.get(source, 0) + 1
+    total = len(sources)
+    if not total:
+        return SourceMix(total=0, counts={}, dominant="", share=0.0)
+    dominant = max(counts, key=lambda k: counts[k])
+    return SourceMix(total=total, counts=counts, dominant=dominant, share=counts[dominant] / total)
+
+
+SOURCE_CONCENTRATION_BLOCK = """## Where this corpus came from
+
+This is ground truth, counted in Python from the documents you were given.
+
+**{share:.0%} of it is {dominant}.** A corpus that concentrated speaks to \
+{reach}.
+
+Do not generalise past it. Where an axis would need evidence this corpus \
+structurally cannot contain, `signal: "none"` is the correct answer and is not \
+a failure — it is the difference between "they have no view on this" and "this \
+corpus could not have shown me their view on this", and only the second one is \
+true here. Say what the source supports and stop there."""
+
+
+def source_prompt_block(mix: SourceMix) -> str:
+    """The concentration section of the reduce prompt, or nothing."""
+    if not mix.is_concentrated:
+        return ""
+    return SOURCE_CONCENTRATION_BLOCK.format(
+        share=mix.share, dominant=mix.dominant, reach=mix.reach
+    )
