@@ -16,6 +16,26 @@ from corpus.x.client import XClient
 
 
 @pytest.fixture(autouse=True)
+def cache_db_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may touch the real ~/.corpus/cache.db.
+
+    `default_db_path()` falls through to the developer's own cache, so any
+    code path that builds a `Cache()` without an explicit path lands in it —
+    and the resynth CLI does exactly that, which meant every full test run
+    appended two rows to the real `spend` table ('map slice 1' and 'reduce
+    attempt 1'). The guard below blocks a live search client and nothing
+    else, so it never noticed.
+
+    Redirecting CORPUS_CACHE_DB for every test closes the whole class rather
+    than the one instance: a test that forgets to pass a cache path gets an
+    empty per-test database, not the user's ledger. Tests that point the env
+    var somewhere deliberate still win — their monkeypatch runs after this
+    one.
+    """
+    monkeypatch.setenv("CORPUS_CACHE_DB", str(tmp_path / "suite-cache.db"))
+
+
+@pytest.fixture(autouse=True)
 def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test may construct a real Anthropic client for search.
 

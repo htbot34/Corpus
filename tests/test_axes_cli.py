@@ -10,6 +10,7 @@ from fake_provider import load
 from typer.testing import CliRunner
 
 from corpus.axes import AxisError, load_axes, select_axes
+from corpus.cache import Cache
 from corpus.cli import app, load_synthesis
 from corpus.models import Document, Synthesis
 from corpus.x.hydrate import hydrate
@@ -170,6 +171,19 @@ def test_resynth_itself_still_works_against_an_old_corpus(tmp_path, client, monk
     migrated = load_synthesis(directory / "synthesis.json")
     assert migrated.core_model
     assert "Process quality is measurable" in (directory / "report.md").read_text()
+
+    # This test drives the real CLI, which opens `Cache()` with no path and
+    # logs real spend rows — the two rows every full run used to append to
+    # the developer's ~/.corpus/cache.db. They must land in the suite's
+    # per-test scratch database (conftest.cache_db_in_tmp), where we can see
+    # them, and nowhere else.
+    ledger = Cache()
+    try:
+        notes = [row["note"] for row in ledger.spend_log()]
+    finally:
+        ledger.close()
+    assert any(n.startswith("map slice 1") for n in notes)
+    assert any(n.startswith("reduce attempt 1") for n in notes)
 
 
 def test_a_current_synthesis_loads_without_complaint(tmp_path):

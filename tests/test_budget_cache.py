@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,7 @@ from corpus.budget import (
     estimate_x_cost,
     model_rates,
 )
-from corpus.cache import Cache
+from corpus.cache import Cache, default_db_path
 
 # -- budget -----------------------------------------------------------------
 
@@ -170,3 +171,30 @@ def test_stats_report_counts_by_source(cache):
     stats = cache.stats()
     assert stats["entries"] == 2
     assert stats["by_source"]["x"]["permanent"] == 1
+
+
+# -- the suite must never touch the real cache -------------------------------
+
+
+def test_no_test_process_can_write_to_the_real_spend_ledger():
+    """The guard for the autouse fixture in conftest.py.
+
+    `default_db_path()` falls through to ~/.corpus/cache.db, and any code
+    that builds a `Cache()` without an explicit path — the resynth CLI does —
+    writes its spend there. Every full test run used to append two rows to
+    the developer's real `spend` table. The fixture redirects
+    CORPUS_CACHE_DB for every test; this asserts the redirect is in effect
+    in the same process every other test resolves the default in, and that a
+    pathless `Cache()` — the exact shape of the leak — lands on it.
+    """
+    real = Path.home() / ".corpus" / "cache.db"
+    resolved = default_db_path()
+    assert resolved != real, "the default cache path is the developer's real ledger"
+
+    unwitting = Cache()  # what code that never chose a path gets
+    try:
+        unwitting.log_spend("test-run", "anthropic", "messages", 1, 0.0025, 0.0025)
+        assert unwitting.path == resolved
+        assert unwitting.path != real
+    finally:
+        unwitting.close()

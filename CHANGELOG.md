@@ -1343,3 +1343,37 @@ dustinw run). A reader who sees "24 held" with no fetch story reads it as
 
 - Test suite 808 → 816, still all offline.
 - No new dependencies.
+
+---
+
+## 2026-08-03 — The test suite was writing to the real spend ledger
+
+Every full test run appended two rows to the developer's actual
+`~/.corpus/cache.db` `spend` table: 'map slice 1' at $0.0025 and 'reduce
+attempt 1' at $0.0125. Confirmed at exactly two rows per run by pointing
+`HOME` at a scratch directory and running the suite.
+
+The offender was `test_resynth_itself_still_works_against_an_old_corpus`,
+which drives the real resynth CLI with `tmp_path` for output but never
+overrides the cache location — and `default_db_path()` falls through to the
+real ledger. The suite-wide guard that exists to keep tests offline blocks
+`AnthropicSearchProvider._ensure_client` and nothing else, so a fake-model
+run that logs real-looking spend sailed straight past it.
+
+The fix is class-wide rather than instance-wide: an autouse fixture in
+`conftest.py` points `CORPUS_CACHE_DB` at a per-test path for every test, so
+the next test that forgets gets an empty scratch database instead of the
+user's ledger. Tests that redirect the env var deliberately still win —
+their monkeypatch runs after the autouse one.
+
+Two tests pin it. A guard test asserts the redirect is live in the test
+process and that a pathless `Cache()` — the exact shape of the leak — lands
+on it. And the resynth test now asserts its own two spend rows land in the
+scratch database, where they are visible, instead of leaking somewhere
+nobody looks. Verified by re-running the whole suite under a scratch `HOME`:
+817 tests, zero files written under it.
+
+### Housekeeping
+
+- Test suite 816 → 817, still all offline — and now provably so for the
+  cache, not just the network.
