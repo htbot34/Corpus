@@ -1,10 +1,15 @@
 """Reading a search response, and capturing it verbatim.
 
-The fixture is written from the documented `web_search_20250305` shape, not
-captured from the wire — the same honest status the tweet-endpoint fixtures
-carry. These tests prove the parser and the fixture agree; they do not prove
-either matches the API. `--capture-search` exists to close that gap in one
-run, which is why it is tested here too.
+The fixture is a **real response**, captured on 2026-08-03 and scrubbed — see
+`tests/fixtures/_scrub_search.py`. So these tests prove the parser reads what
+the API actually sends, which is what `--capture-search` existed to make
+possible and is why it is still tested here.
+
+One path has no live example and never will while the search system prompt
+stands: the model is told to answer with the single word "done", a model that
+writes nothing cites nothing, and citations are the only place a snippet can
+come from. `web_search_response_with_citations.json` is written to the
+documented shape and labelled SYNTHETIC for exactly that reason.
 
 Two shapes matter more than the happy path:
 
@@ -39,7 +44,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def response() -> dict[str, Any]:
+    """The real capture: no citations, so no snippets."""
     return json.loads((FIXTURES / "web_search_response.json").read_text())
+
+
+def cited_response() -> dict[str, Any]:
+    """SYNTHETIC — the documented citation shape. See the module docstring."""
+    return json.loads((FIXTURES / "web_search_response_with_citations.json").read_text())
+
+
+#: Index of the `web_search_tool_result` block. Second, after the
+#: `server_tool_use` that ran the query — the order every capture arrived in.
+TOOL_RESULT = 1
 
 
 class StubMessages:
@@ -64,18 +80,33 @@ def test_results_come_out_of_the_tool_result_blocks() -> None:
     results, errors = results_from_message(response(), limit=10)
 
     assert errors == []
-    assert [r.url for r in results] == [
-        "https://thinking.example/rubrics",
-        "https://taxblog.example/post",
-    ]
-    assert results[0].title == "On rubrics — Jane Smith"
+    assert len(results) == 10, "the capture returned ten; RESULTS_PER_QUERY is what trims them"
+    assert results[0].url == "http://janesmith.example/blog/tutorial-on-inference-networks-2"
+    assert results[0].title == "Inference networks | Jane Smith"
+
+
+def test_a_real_response_carries_no_snippet_at_all() -> None:
+    """Not a defect in the fixture — the finding the live run produced.
+
+    A `web_search_result` has no snippet field, snippets are built from the
+    model's citations, and the search system prompt tells the model to write
+    one word. Nine of nine live responses came back `citations: null`, so every
+    candidate reaches scoring with an empty snippet. Nothing may depend on one.
+    """
+    payload = response()
+    text_block = next(b for b in payload["content"] if b["type"] == "text")
+    assert text_block["citations"] is None
+
+    results, _ = results_from_message(payload, limit=10)
+
+    assert all(r.snippet == "" for r in results)
 
 
 def test_the_snippet_comes_from_the_model_citation_for_that_url() -> None:
-    """There is no snippet field on a search result. `cited_text` is a
-    verbatim quotation, matched to its result by URL, and it is not billed as
-    tokens."""
-    results, _ = results_from_message(response(), limit=10)
+    """SYNTHETIC fixture: `cited_text` is a verbatim quotation, matched to its
+    result by URL, and it is not billed as tokens. Unreachable in production
+    today — see the module docstring — which is why it is pinned here."""
+    results, _ = results_from_message(cited_response(), limit=10)
 
     assert results[0].snippet.startswith("Rubrics beat interviews because")
     assert results[1].snippet == "", "a result the model did not cite has no snippet"
@@ -85,7 +116,7 @@ def test_a_page_age_becomes_a_date_and_an_unreadable_one_becomes_nothing() -> No
     results, _ = results_from_message(response(), limit=10)
 
     assert results[0].published_at is not None
-    assert results[0].published_at.year == 2025
+    assert results[0].published_at.year == 2016
     assert results[1].published_at is None, "a date we cannot read must not be guessed at"
 
 
@@ -105,7 +136,7 @@ def test_the_limit_is_honoured() -> None:
 
 def test_an_errored_search_is_reported_rather_than_read_as_empty() -> None:
     payload = response()
-    payload["content"][2]["content"] = {
+    payload["content"][TOOL_RESULT]["content"] = {
         "type": "web_search_tool_result_error",
         "error_code": "max_uses_exceeded",
     }
@@ -118,7 +149,7 @@ def test_an_errored_search_is_reported_rather_than_read_as_empty() -> None:
 
 def test_a_search_that_matched_nothing_is_not_an_error() -> None:
     payload = response()
-    payload["content"][2]["content"] = []
+    payload["content"][TOOL_RESULT]["content"] = []
 
     results, errors = results_from_message(payload, limit=10)
 
@@ -128,11 +159,11 @@ def test_a_search_that_matched_nothing_is_not_an_error() -> None:
 
 def test_a_duplicate_url_across_blocks_is_returned_once() -> None:
     payload = response()
-    payload["content"].append(payload["content"][2])
+    payload["content"].append(payload["content"][TOOL_RESULT])
 
-    results, _ = results_from_message(payload, limit=10)
+    results, _ = results_from_message(payload, limit=20)
 
-    assert len(results) == 2
+    assert len(results) == 10
 
 
 def test_usage_reports_the_billing_unit() -> None:
@@ -140,8 +171,8 @@ def test_usage_reports_the_billing_unit() -> None:
     usage = usage_from_message(response(), "claude-haiku-4-5-20251001")
 
     assert usage.searches == 1
-    assert usage.input_tokens == 6039
-    assert usage.output_tokens == 931
+    assert usage.input_tokens == 9921
+    assert usage.output_tokens == 70
     assert usage.model == "claude-haiku-4-5-20251001"
 
 
@@ -159,7 +190,17 @@ def test_page_age_formats_seen_in_the_wild(value: str, year: int) -> None:
     assert parsed is not None and parsed.year == year
 
 
-@pytest.mark.parametrize("value", ["", None, "sometime last year", "not a date"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        None,
+        "sometime last year",
+        "not a date",
+        # Observed on the wire: page_age is not always an absolute date.
+        "1 month ago",
+    ],
+)
 def test_an_unparseable_page_age_is_none(value: object) -> None:
     assert parse_page_age(value) is None
 
@@ -258,8 +299,11 @@ def test_capture_writes_the_raw_message_and_what_was_parsed(tmp_path: Path) -> N
     assert payload["usage"]["searches"] == 1
     # Both halves: what arrived, and what we made of it. When those two
     # disagree the capture is the only way to tell which one is wrong.
-    assert payload["raw_message"]["content"][2]["type"] == "web_search_tool_result"
-    assert payload["parsed_results"][0]["url"] == "https://thinking.example/rubrics"
+    assert payload["raw_message"]["content"][TOOL_RESULT]["type"] == "web_search_tool_result"
+    assert (
+        payload["parsed_results"][0]["url"]
+        == "http://janesmith.example/blog/tutorial-on-inference-networks-2"
+    )
 
 
 def test_capture_never_writes_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,7 +312,7 @@ def test_capture_never_writes_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     secret = "corpus-test-not-a-real-credential-value"
     monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
     payload = response()
-    payload["content"][0]["text"] = f"echoed back: {secret}"
+    payload["content"][0]["input"]["query"] = f"echoed back: {secret}"
 
     SearchCapture(tmp_path).record(query="q", provider="p", model="m", message=payload, results=[])
 

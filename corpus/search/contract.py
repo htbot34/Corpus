@@ -23,18 +23,31 @@ expected outcome. Nothing in the output would look wrong.
 
 Verification status
 -------------------
-**Everything here is `verified=""` — assumed from documentation, not observed
-on the wire.** The shapes come from platform.claude.com's web-search tool page
-(read 2026-08-03), and `tests/fixtures/web_search_response.json` was written
-from the same reading, so the offline test proves the parser and the fixture
-agree and proves nothing at all about the API.
+**Observed on the wire on 2026-08-03**, across nine live responses from
+`scripts/verify_search_contract.py --target dustinw --capture-search`. The
+fixture is one of those nine, scrubbed — see `tests/fixtures/_scrub_search.py`.
+Every field below marked `confirmed` was read off a real payload rather than
+off the documentation, and the documented shapes held: `content`, `usage`,
+`web_search_tool_result`, and `url`/`title` on every one of 68 results.
 
-`scripts/verify_search_contract.py` is the other half, and it has not been run:
-this environment has no `ANTHROPIC_API_KEY` and its egress policy denies
-CONNECT to every candidate host, so neither the search call nor the page fetch
-behind it can be made. Stated here rather than in a commit message, because a
-contract that quietly asserts unverified shapes is the thing this file exists
-to prevent.
+Four things the docs did not say, all of them observed:
+
+* **No response carried a citation.** All nine came back `citations: null`, so
+  every result's snippet was empty. That is not drift — it is what this tool's
+  own `SEARCH_SYSTEM` produces, since it tells the model to reply with the
+  single word "done" and a model that writes nothing quotes nothing. Snippets
+  are therefore structurally absent in production, which is survivable only
+  because a snippet was never allowed to promote anything; see
+  `corpus/search/verify.py` for what it *was* allowed to do, and what that cost.
+* **Blocks carry an undocumented `caller`** — `null` on `server_tool_use`,
+  `{"type": "direct"}` on `web_search_tool_result`.
+* **`usage` carries more than the docs list**: `cache_creation`,
+  `inference_geo`, `output_tokens_details`, `service_tier`, and
+  `server_tool_use.web_fetch_requests` alongside `web_search_requests`. All
+  additive; nothing the parser reads moved.
+* **`page_age` is sometimes relative prose** ("1 month ago"), not only an
+  absolute date. `parse_page_age` returns None for it, which is the intended
+  behaviour: a guessed date silently reorders a corpus.
 """
 
 from __future__ import annotations
@@ -78,18 +91,23 @@ SEARCH_RESULT_FIELDS: tuple[Field, ...] = (
         CRITICAL,
         "the only part of a result the tool acts on; without it there is no "
         "candidate at all and the search silently returns nothing",
+        confirmed=True,
     ),
     Field(
         ("title",),
         IMPORTANT,
         "shown in unconfirmed.md, where a human decides from it. Absent, every "
-        "held candidate is a bare URL and the decision gets harder",
+        "held candidate is a bare URL and the decision gets harder. With no "
+        "snippet ever arriving, it is also the only text a candidate has",
+        confirmed=True,
     ),
     Field(
         ("page_age",),
         OPTIONAL,
-        "becomes published_at when it parses. Unreadable values are left as "
-        "None rather than guessed, so a change here degrades ordering only",
+        "becomes published_at when it parses. Present-but-null on 53 of 68 "
+        "observed results, and sometimes relative prose ('1 month ago') rather "
+        "than a date; unreadable values are left as None rather than guessed",
+        confirmed=True,
         presence=CONDITIONAL,
         nullable=True,
     ),
@@ -97,7 +115,9 @@ SEARCH_RESULT_FIELDS: tuple[Field, ...] = (
         ("encrypted_content",),
         OPTIONAL,
         "deliberately dropped on the way to discovery.json — opaque, "
-        "kilobytes per result, and only meaningful replayed to the same API",
+        "272 to 1,932 bytes per result observed, and only meaningful replayed "
+        "to the same API",
+        confirmed=True,
         presence=CONDITIONAL,
     ),
 )
@@ -113,7 +133,8 @@ CITATION_FIELDS: tuple[Field, ...] = (
         ("cited_text",),
         IMPORTANT,
         "the snippet itself, and the only readable text a search result ever "
-        "carries — there is no snippet field on a web_search_result",
+        "carries — there is no snippet field on a web_search_result. Never "
+        "observed: see this module's docstring on why none arrive",
     ),
 )
 
@@ -123,11 +144,13 @@ USAGE_FIELDS: tuple[Field, ...] = (
         IMPORTANT,
         "billed tokens; a search call's results arrive as input tokens and are "
         "the bulk of what it costs beyond the per-search fee",
+        confirmed=True,
     ),
     Field(
         ("output_tokens",),
         IMPORTANT,
         "billed tokens",
+        confirmed=True,
     ),
     Field(
         ("server_tool_use",),
@@ -135,6 +158,7 @@ USAGE_FIELDS: tuple[Field, ...] = (
         "carries web_search_requests, which is the billing unit. If this stops "
         "arriving the run bills $0.00 for searches it actually made, and the "
         "budget stops being a ceiling",
+        confirmed=True,
     ),
 )
 
@@ -143,17 +167,22 @@ WEB_SEARCH = EndpointContract(
     name="messages.create(tools=[web_search_20250305])",
     path="POST /v1/messages",
     params=("model", "max_tokens", "system", "tools", "messages"),
-    verified="",  # see the module docstring: assumed, never observed here
+    verified=(
+        "2026-08-03, nine live responses (68 results) captured by "
+        "scripts/verify_search_contract.py --target dustinw --capture-search"
+    ),
     envelope=(
         Field(
             ("content",),
             CRITICAL,
             "the block list every result is read out of",
+            confirmed=True,
         ),
         Field(
             ("usage",),
             CRITICAL,
             "billing; without it a search is free as far as the budget knows",
+            confirmed=True,
         ),
         Field(
             ("stop_reason",),
@@ -171,8 +200,15 @@ WEB_SEARCH = EndpointContract(
         "A search that matched nothing returns an empty list. That is a "
         "finding, not a failure, and must stay distinguishable from an error.",
         "max_uses=1 is pinned so one query is one billable search, which is "
-        "what makes the pre-flight reservation exact.",
-        "Citations are the only source of snippet text, and per the docs are not billed as tokens.",
+        "what makes the pre-flight reservation exact. Observed exactly 1 per "
+        "call across nine calls.",
+        "Citations are the only source of snippet text, and per the docs are not billed as tokens. "
+        "None arrived in nine live responses — SEARCH_SYSTEM tells the model to write one word "
+        "— so in practice every snippet is empty and nothing may depend on one.",
+        "A single web_search_tool_result block carried 6 to 10 results; RESULTS_PER_QUERY "
+        "truncates to 8, so the tail of a broad query is dropped by us, not by the API.",
+        "Blocks carry an undocumented `caller`, and `usage` carries five keys the docs do "
+        "not list. Both additive, neither read.",
     ),
 )
 
@@ -291,8 +327,13 @@ def check_search_response(payload: Any) -> list[Violation]:
                 )
             )
 
-    # Citations only exist when the model quoted something, so their absence is
-    # reported once per payload rather than per result.
+    # A response with no citations is the *observed norm*, not drift: nine of
+    # nine came back `citations: null`, because the search system prompt tells
+    # the model to write one word. Reporting the normal case as a violation on
+    # every single run is how a report gets ignored — the same reasoning that
+    # keeps a rate-limited search off this list. What is still worth catching
+    # is a citation that arrives with its fields renamed, so the shape is
+    # checked whenever one is actually present.
     if saw_results:
         cited = [
             c
@@ -300,16 +341,6 @@ def check_search_response(payload: Any) -> list[Violation]:
             for c in (block.get("citations") or [])
             if isinstance(c, dict)
         ]
-        if not cited:
-            violations.append(
-                Violation(
-                    name,
-                    OPTIONAL,
-                    "no citations in a response that returned results, so every candidate "
-                    "has an empty snippet. Held candidates then reach unconfirmed.md with "
-                    "no preview text for a human to judge from",
-                )
-            )
         for citation in cited:
             for field in CITATION_FIELDS:
                 if field.find(citation) is None:

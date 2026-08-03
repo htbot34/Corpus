@@ -23,11 +23,16 @@ census at the end breaks the outcomes down and, for the held ones, counts *why*
 whether the two-signal threshold is calibrated or merely strict.
 
 Read the census carefully, because one failure mode makes it meaningless:
-**if page fetches are blocked, everything is held regardless of the
-threshold.** A candidate that cannot be fetched has never had its strong
-signals looked at, so a run behind a restrictive egress policy reports 100%
-held for reasons that have nothing to do with scoring. The script checks
-reachability first and refuses to print a census it knows is an artifact.
+**a candidate whose page was never read has never had its strong signals
+looked at**, so a run that fetched nothing reports ~100% held for reasons that
+have nothing to do with the threshold. The script guards that at both ends. It
+probes reachability *before* spending anything, and it checks what the phase
+actually did *afterwards* — because the pre-flight probe answers "can this
+machine fetch a page", which is not the same question as "did this run read
+one". On 2026-08-03 it printed a full census of a run that fetched zero of 50
+candidates: egress was fine, and the phase had stopped before the verification
+pass on evidence it did not have. A census this script knows to be an artifact
+is now refused, with the reason.
 
 NEVER wire this into CI. The offline suite is offline on purpose, and a check
 that silently spends money on every push gets deleted after the first
@@ -36,7 +41,8 @@ surprising invoice. It refuses to run under CI unless forced.
 Budget: one search per query, $0.01 each, plus a few cents of Haiku tokens.
 At the default 12 queries that is ~$0.13. Page fetches are free.
 
-Exit codes: 0 clean, 1 critical drift, 2 could not run.
+Exit codes: 0 clean, 1 critical drift, 2 could not run — or ran and produced a
+census it will not stand behind.
 """
 
 from __future__ import annotations
@@ -84,21 +90,93 @@ def check_reachability() -> str:
         client.close()
 
 
-def census(result: Any) -> None:
-    """What the scorer decided, and why — the calibration question."""
-    _print("Outcome census")
-    buckets = {
+def what_the_phase_did(result: Any) -> None:
+    """Everything the phase recorded about its own run, before any counting.
+
+    Printed unconditionally and first. The run this script exists to support
+    stopped early, said so in `result.notes`, and nothing printed the notes —
+    so the census below it read as a finding about the scorer.
+    """
+    _print("What the phase did")
+    print(
+        f"  {result.searches_run} search(es) ({result.cached_searches} cached), "
+        f"{result.results_seen} result(s) seen"
+    )
+    print(
+        f"  {result.reads_attempted} page read(s) attempted, {result.verified_count} succeeded "
+        f"({result.fetches} request(s), {result.cached_fetches} from cache)"
+    )
+    if result.common_name:
+        print("  the name was judged too common to resolve: nothing was ingested")
+    for note in result.notes:
+        print(f"  note: {note}")
+    for problem in list(dict.fromkeys(result.errors))[:10]:
+        print(f"  error: {problem}")
+
+
+def artifact_reason(result: Any) -> str:
+    """Why this run's census cannot answer the calibration question — "" if it can.
+
+    The condition that matters is not "did anything get corroborated" — zero
+    corroborated is a legitimate and interesting answer. It is whether the
+    scorer was ever shown the evidence it scores on. Every strong signal lives
+    in a fetched page, so a census taken over unread candidates measures the
+    fetcher, and it measures it in a way that looks exactly like a threshold
+    set too high.
+    """
+    if not result.everything:
+        return ""
+    if result.unread:
+        return (
+            f"{result.reads_attempted} candidate(s) needed their page read and "
+            f"{result.verified_count} were read.\n"
+            "  Every held candidate below was scored on a search result alone, so its "
+            "strong\n  signals — author metadata, outbound links, the employer's name — "
+            "were never\n  looked at. The outcome mix measures the fetcher, not the "
+            "threshold, and it\n  looks identical to a scorer that is too strict."
+        )
+    if result.common_name:
+        return (
+            "the phase judged the name too common to resolve and demoted everything it "
+            "found.\n  Nothing could reach `corroborated`, so the corroborated column is "
+            "zero by\n  refusal rather than by scoring, and says nothing about where the "
+            "threshold sits."
+        )
+    return ""
+
+
+def refuse_census(result: Any, reason: str) -> None:
+    """Say what happened and why the numbers are not the ones being asked for."""
+    _print("Refusing to print a census")
+    print(f"  {reason}\n")
+    print("  What the run produced, which is not a calibration table:")
+    for label, items in _buckets(result).items():
+        print(f"    {label:<26} {len(items):>4}")
+    print(
+        "\n  To get a census that answers the threshold question, this run has to read\n"
+        "  the candidate pages. Check the notes above for why it did not."
+    )
+
+
+def _buckets(result: Any) -> dict[str, Any]:
+    return {
         "corroborated (ingested)": result.candidates,
         "held (unconfirmed.md)": result.held,
         "context (about them)": result.context,
         "rejected": result.rejected,
     }
+
+
+def census(result: Any) -> None:
+    """What the scorer decided, and why — the calibration question."""
+    _print("Outcome census")
+    buckets = _buckets(result)
     total = sum(len(v) for v in buckets.values()) or 1
     for label, items in buckets.items():
         print(f"  {label:<26} {len(items):>4}  ({len(items) / total:.0%})")
     print(f"  {'-' * 26} {'-' * 4}")
     print(f"  {'candidates seen':<26} {total:>4}")
-    print(f"  {'verified (page fetched)':<26} {result.verified_count:>4}")
+    print(f"  {'verified (page read)':<26} {result.verified_count:>4}")
 
     if not result.held:
         return
@@ -266,10 +344,17 @@ def main(argv: list[str]) -> int:
             print(f"  {violation}")
     else:
         print(f"  clean: {len(responses)} response(s) match {WEB_SEARCH.name}")
-        print("\n  Now record it: set WEB_SEARCH.verified in corpus/search/contract.py,")
-        print("  update the fixture's _provenance, and the offline test will remind you.")
+        print(f"  the contract records: {WEB_SEARCH.verified or 'nothing — never checked'}")
+        print("\n  If that line is older than what you just ran, update it in")
+        print("  corpus/search/contract.py, rebuild the fixture with")
+        print("  tests/fixtures/_scrub_search.py, and the offline tests will keep both honest.")
 
-    census(result)
+    what_the_phase_did(result)
+    reason = artifact_reason(result)
+    if reason:
+        refuse_census(result, reason)
+    else:
+        census(result)
 
     _print("Spend")
     for line in budget.summary_lines():
@@ -280,7 +365,11 @@ def main(argv: list[str]) -> int:
         print("  Rebuild the fixture from one of these rather than from the docs.")
 
     cache.close()
-    return 1 if worst_severity(violations) == CRITICAL else 0
+    # Critical drift outranks a refused census: a renamed block is the thing
+    # this script exists to catch, and it is actionable on its own.
+    if worst_severity(violations) == CRITICAL:
+        return 1
+    return 2 if reason else 0
 
 
 if __name__ == "__main__":

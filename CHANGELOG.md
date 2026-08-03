@@ -1129,3 +1129,123 @@ having spent nothing.
 - `AnthropicSearchProvider.last_raw_message` exposes the untouched response so
   the checker can inspect what arrived without re-parsing a capture file.
 - No new dependencies.
+
+---
+
+## 2026-08-03 — The live search run, and the gate that made it meaningless
+
+The run the previous entry was waiting for happened: nine queries,
+`$0.18`, nine raw responses captured. It answered the wire-contract question
+completely and the calibration question not at all, because the verification
+pass never ran. **50 candidates seen, 0 pages fetched.**
+
+The census printed anyway: 23 rejected, 26 held, 1 context, every held one for
+"never fetched (page unread)", two signals fired in the whole run. That is
+indistinguishable, from the outside, from a scorer whose threshold is too
+strict — which is the exact misreading the previous entry said the reachability
+probe would prevent.
+
+### What actually stopped it
+
+Not the snippet floor, which was fixed and is intact. Not `--max-fetches`,
+which was 20 and never consulted. **The common-name check, at
+`verify.py`'s stop-and-ask path, which ran between the two passes and returned
+before any page was read.**
+
+The chain, each link confirmed by replaying the captures offline — the replay
+reproduces the live census exactly, 23/26/1 and both `employer` signals:
+
+1. **Every snippet was empty.** A `web_search_result` has no snippet field;
+   `providers.py` builds one from the model's citations. `SEARCH_SYSTEM` tells
+   the model to reply with the single word "done", and a model that writes
+   nothing cites nothing. All nine responses: `citations: null`.
+2. **So every candidate scored "the name and nothing else"** — `name_present`,
+   zero independent signals. That is a fact about the vendor, not the target.
+3. **`detect_common_name` counts exactly that shape**, and reached eight
+   distinct domains against a threshold of eight. Five of the eight were the
+   subject's own academic profiles; one was his own site.
+4. **The phase filed all 50 as held and returned.** Zero fetches, by
+   construction.
+5. **Nothing said so.** The stop appends to `result.notes` and sets
+   `common_name`; the script printed neither. The CLI does print both — this
+   was the script's blind spot alone.
+
+### The fix: ask the question where the evidence is
+
+A name is common when many *pages* turn out to be about different people, and
+only a fetched page can establish that. So `detect_common_name` now counts
+fetched scores only, and the refusal happens **after** the verification pass —
+demoting what was found rather than skipping it, so the pages that proved the
+collision are kept instead of needing a refetch next run.
+
+Asking late costs at most `--max-verify-fetches` plain HTTP requests, which are
+free, cached, and already capped for exactly this reason. Asking early cost a
+whole phase. The same replay against the fixed code attempts 27 page reads
+where it previously attempted none.
+
+`SearchPhaseResult.unread` is the flag that states the condition directly —
+candidates scored, no page read — and it lands in `discovery.json` beside
+`reads_attempted` rather than being left to be inferred from a zero.
+
+### The script now refuses the census it cannot stand behind
+
+The pre-flight reachability probe was necessary and not sufficient: it answers
+"can this machine fetch a page", and the failure was "this run did not read
+one". Those are different questions, and only the second makes a census mean
+anything.
+
+So the checker prints what the phase did — searches, reads attempted, reads
+succeeded, every note, every error — *before* any counting, and then refuses
+the census outright when no candidate page was read, or when the phase declined
+to promote anything for its own reasons. Exit 2, with the reason. The bucket
+counts still print, labelled as what they are: not a calibration table.
+
+### The fixture is real now
+
+`tests/fixtures/web_search_response.json` was rebuilt from one of the nine
+captures by `tests/fixtures/_scrub_search.py`, kept as provenance in the same
+style as `_scrub_github.py`. Key names, nesting, nulls, token counts and the
+`page_age` mix are exactly what arrived; identity is swapped for the suite's
+synthetic subject, and platform hosts are deliberately kept because the scorer
+matches them by name.
+
+**The contract held on every critical and important field** across nine
+responses and 68 results: `content`, `usage`,
+`server_tool_use.web_search_requests` (exactly 1 per call), the
+`web_search_tool_result` block, `url` and `title` on every result. Four things
+the docs did not mention, all additive and none read by the parser: `caller` on
+two block types, five extra `usage` keys, `container`/`stop_details`/
+`stop_sequence`, and `page_age` occasionally arriving as relative prose
+("1 month ago") rather than a date.
+
+The one real mismatch is the absence: **no citations, therefore no snippets,
+ever, while the search prompt stands.** `check_search_response` used to report
+that as a violation and would have fired on all nine — the normal case is not
+drift, and a checker that flags it every run teaches its reader to skip the
+line that matters. It is now a stated contract fact, and
+`web_search_response_with_citations.json` carries the documented citation shape,
+labelled SYNTHETIC, so the code that reads one still has something to run
+against. Same status and same reason as `github_events_with_commits.json`.
+
+`WEB_SEARCH.verified` now names the date and the command that produced it, and
+the test that guarded its emptiness was inverted rather than deleted: it insists
+the claim stays falsifiable.
+
+### `captures/` was committed, and `make check` was red because of it
+
+The previous commit added the nine capture files to the repo. `.gitignore`
+lists `captures/`, `check_secrets.sh` names it as a path that is *supposed* to
+be ignored, and the scanner found **101 high-entropy strings** in them — the
+`encrypted_content` blobs, which look exactly like credential material to any
+scanner worth having. The build was red at HEAD before any of this work
+started.
+
+They are untracked again (still on disk, still gitignored, still in history at
+`231933d` if anyone needs them). The scrubbed fixture is what belongs in the
+repo — the rule `gh_captures/` already followed.
+
+### Housekeeping
+
+- Test suite 792 → 808, still all offline. Three of the new tests fail against
+  the old gate, which is the only reason to trust them.
+- `make check` green again.

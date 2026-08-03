@@ -224,6 +224,28 @@ def test_discovery_json_records_the_search_phase(wired) -> None:
     assert payload["search"]["held"], "a held candidate must be recorded, not forgotten"
 
 
+def test_a_run_that_read_no_candidate_page_says_so_rather_than_reporting_counts(
+    wired,
+) -> None:
+    """A held count over unread candidates measures the fetcher, not the
+    subject, and it is the number a reader would otherwise take at face value.
+
+    The live checker refuses to print a census in this state; the run itself
+    has to say it out loud for the same reason.
+    """
+    wired["use"]([SearchResult(url="https://unreachable.example/post", snippet="Jane Smith")])
+    seed_base(wired)  # the candidate page is deliberately not seeded
+
+    result = run_with(wired)
+    assert result.exit_code == 0, result.output
+
+    assert "no candidate page could be read" in result.output
+    payload = json.loads((outputs(wired["out"], "janesmith") / "discovery.json").read_text())
+    assert payload["search"]["unread"] is True
+    assert payload["search"]["reads_attempted"] == 1
+    assert payload["search"]["verified"] == 0
+
+
 def test_no_search_runs_no_queries(wired) -> None:
     provider = wired["use"]([SearchResult(url="https://x.example/1")])
     seed_base(wired)

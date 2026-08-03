@@ -19,11 +19,12 @@ from corpus.budget import SEARCH_COST_PER_QUERY, Budget, BudgetExceeded
 from corpus.cache import Cache
 from corpus.identity import IdentityCard
 from corpus.search.client import SearchClient
-from corpus.search.pagefacts import facts_from_snippet
+from corpus.search.pagefacts import extract_facts, facts_from_snippet
 from corpus.search.providers import SearchResult, SearchUsage
 from corpus.search.scoring import score_candidate
 from corpus.search.verify import (
     COMMON_NAME_DOMAIN_THRESHOLD,
+    RESULTS_PER_QUERY,
     detect_common_name,
     search_for_sources,
 )
@@ -64,6 +65,25 @@ class EverythingProvider(FakeSearchProvider):
         self.queries.append(query)
         self.last_usage = SearchUsage(searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU)
         return self.hits[:limit] if len(self.queries) == 1 else []
+
+
+class BatchProvider(FakeSearchProvider):
+    """Hands each query the next batch of hits.
+
+    `RESULTS_PER_QUERY` caps what one search returns, so a test that needs more
+    candidates than that has to spread them over several queries — which is
+    also how a real run accumulates them.
+    """
+
+    def __init__(self, batches: list[list[SearchResult]]) -> None:
+        super().__init__()
+        self.batches = list(batches)
+
+    def search(self, query: str, limit: int) -> list[SearchResult]:
+        self.queries.append(query)
+        self.last_usage = SearchUsage(searches=1, input_tokens=1_000, output_tokens=20, model=HAIKU)
+        batch = self.batches.pop(0) if self.batches else []
+        return batch[:limit]
 
 
 @pytest.fixture()
@@ -331,16 +351,91 @@ def test_offline_never_reaches_the_provider(cache: Cache, tmp_path: Path) -> Non
     offline.close()
 
 
+# -- the census is never taken before the pages are read ---------------------
+
+
+def test_a_run_that_scores_candidates_reads_at_least_one_page(cache: Cache) -> None:
+    """The regression that made a live run meaningless, stated as an invariant.
+
+    On 2026-08-03 a verification run scored 50 candidates and fetched zero
+    pages: a gate between the two passes stopped the phase on snippet evidence
+    alone. Every candidate was held for "never fetched", which reads exactly
+    like a scorer whose threshold is too strict, and the census that was
+    supposed to answer whether the threshold is calibrated could not answer
+    anything.
+
+    So: if any candidate survived rejection and a page was readable, a page was
+    read. A phase that scores candidates without reading one has failed,
+    whatever its outcome mix looks like.
+    """
+    urls = [f"https://site{i}.example/page" for i in range(RESULTS_PER_QUERY)]
+    provider = EverythingProvider([hit(url, snippet="") for url in urls])
+    for url in urls:
+        seed(cache, url, "<html><body><p>A post by Jane Smith.</p></body></html>")
+
+    result = search_for_sources(card(), cache, client_for(provider, cache), log=lambda _m: None)
+
+    assert result.results_seen == len(urls)
+    assert result.reads_attempted == len(urls)
+    assert result.verified_count == len(urls)
+    assert not result.unread, "candidates were scored without a single page being read"
+
+
+def test_empty_snippets_do_not_stop_the_phase_before_it_reads_anything(cache: Cache) -> None:
+    """The live shape, reproduced: `anthropic_search` returns no snippet text.
+
+    Its results carry `url`, `title`, `page_age` and an opaque blob; the
+    snippet is built from model citations, and the search system prompt tells
+    the model to write nothing but "done", so there are none. Every candidate
+    therefore scores as "the name and nothing else" — which must not be read as
+    a name collision, because it is a statement about the vendor.
+    """
+    own = "https://janesmith.example/essay"
+    strangers = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD)]
+    provider = BatchProvider(
+        [
+            [hit(url, snippet="", title="Jane Smith") for url in strangers],
+            [hit(own, snippet="", title="On rubrics — Jane Smith")],
+        ]
+    )
+    seed(cache, own, GOOD_PAGE)
+    for url in strangers:
+        # The title carried the name; the page turns out to be somebody else's.
+        # Only the fetch can tell those two apart.
+        seed(cache, url, "<html><body><p>Notes from John Doe.</p></body></html>")
+
+    result = search_for_sources(card(), cache, client_for(provider, cache), log=lambda _m: None)
+
+    assert [c.url for c in result.candidates] == [own], (
+        "the one page that corroborates on its own content was never read"
+    )
+    assert result.verified_count == len(strangers) + 1
+    assert not result.common_name, (
+        "eight snippet-less results are a fact about the search vendor, not about the name"
+    )
+
+
 # -- common names -----------------------------------------------------------
+
+
+def fetched_score(url: str, body: str, **card_kwargs: object) -> Any:
+    """Score a page the way the verification pass does — from its body."""
+    return score_candidate(extract_facts(body, url), card(**card_kwargs))
+
+
+NAME_ONLY_PAGE = "<html><body><p>A post by John Smith.</p></body></html>"
 
 
 def test_many_unrelated_domains_matching_the_name_stops_the_phase() -> None:
     """A tool that guesses on "John Smith" is a liability. Past the threshold
     it must stop and say so rather than pick."""
     scores = [
-        score_candidate(
-            facts_from_snippet(f"https://site{i}.example/page", "", "A post by John Smith."),
-            card(name="John Smith", employer="", anchors={}),
+        fetched_score(
+            f"https://site{i}.example/page",
+            NAME_ONLY_PAGE,
+            name="John Smith",
+            employer="",
+            anchors={},
         )
         for i in range(COMMON_NAME_DOMAIN_THRESHOLD)
     ]
@@ -351,13 +446,34 @@ def test_many_unrelated_domains_matching_the_name_stops_the_phase() -> None:
     assert domains == COMMON_NAME_DOMAIN_THRESHOLD
 
 
+def test_a_name_that_looks_common_only_because_nothing_was_read_is_not_one() -> None:
+    """The bug, at the level of the function that had it.
+
+    Snippet scores carry no page, so "the name and nothing else" is guaranteed
+    rather than observed. Counting them is how a run concludes that a
+    researcher's own arXiv, ACM, OpenReview and Semantic Scholar profiles are
+    four different people.
+    """
+    scores = [
+        score_candidate(
+            facts_from_snippet(f"https://site{i}.example/page", "John Smith", ""),
+            card(name="John Smith", employer="", anchors={}),
+        )
+        for i in range(COMMON_NAME_DOMAIN_THRESHOLD * 2)
+    ]
+    common, domains = detect_common_name(scores)
+
+    assert all(s.name_present and s.independent_count == 0 for s in scores)
+    assert not common
+    assert domains == 0, "an unread page is not evidence of anything, in either direction"
+
+
 def test_many_pages_on_one_domain_is_not_a_common_name() -> None:
     """Ten pages on one news site is one publication writing about one person.
     Counting results rather than domains would call that a name collision."""
     scores = [
-        score_candidate(
-            facts_from_snippet(f"https://news.example/{i}", "", "A post by John Smith."),
-            card(name="John Smith", employer="", anchors={}),
+        fetched_score(
+            f"https://news.example/{i}", NAME_ONLY_PAGE, name="John Smith", employer="", anchors={}
         )
         for i in range(COMMON_NAME_DOMAIN_THRESHOLD * 2)
     ]
@@ -368,23 +484,56 @@ def test_many_pages_on_one_domain_is_not_a_common_name() -> None:
 
 
 def test_a_common_name_run_ingests_nothing_and_names_what_would_help(cache: Cache) -> None:
-    hits = [
-        hit(f"https://site{i}.example/page", snippet="John Smith wrote this.")
-        for i in range(COMMON_NAME_DOMAIN_THRESHOLD + 2)
-    ]
-    provider = EverythingProvider(hits)
+    """The refusal survives the move to after the fetches — what changes is
+    that it is now made on evidence, and the evidence is kept."""
+    urls = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD + 2)]
+    provider = EverythingProvider([hit(url, snippet="John Smith wrote this.") for url in urls])
+    for url in urls:
+        seed(cache, url, NAME_ONLY_PAGE)
     subject = IdentityCard(key="john", name="John Smith", anchors={"github": "jsmith"})
 
     result = search_for_sources(subject, cache, client_for(provider, cache), log=lambda _m: None)
 
     assert result.common_name
-    assert result.candidates == []
-    assert result.fetches == 0, "nothing is fetched once the name is known to be ambiguous"
+    assert result.candidates == [], "nothing is ingested once the name is known to be ambiguous"
     assert len(result.held) == result.results_seen >= COMMON_NAME_DOMAIN_THRESHOLD, (
         "every candidate seen must be held for a human, not silently dropped"
     )
+    assert all(c.verified for c in result.held), (
+        "the pages that proved the collision are kept, so the next run need not refetch them"
+    )
     assert result.disambiguators[:2] == ["employer", "location"]
     assert any("common name" in n for n in result.notes)
+
+
+def test_the_common_name_stop_is_logged_and_not_only_recorded(cache: Cache) -> None:
+    """It was silent in `verify_search_contract.py` for a whole live run."""
+    urls = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD + 2)]
+    provider = EverythingProvider([hit(url, snippet="John Smith wrote this.") for url in urls])
+    for url in urls:
+        seed(cache, url, NAME_ONLY_PAGE)
+    subject = IdentityCard(key="john", name="John Smith", anchors={"github": "jsmith"})
+    logged: list[str] = []
+
+    search_for_sources(subject, cache, client_for(provider, cache), log=logged.append)
+
+    assert any("common name" in line for line in logged)
+
+
+def test_a_run_that_could_not_read_a_page_says_so_in_its_own_notes(cache: Cache) -> None:
+    """`unread` is the flag anything reporting on the phase has to check first,
+    so the phase states it rather than leaving it to be inferred."""
+    provider = EverythingProvider(
+        [hit(f"https://site{i}.example/p", snippet="Jane Smith") for i in range(3)]
+    )
+
+    # Nothing seeded and the HTTP client raises, so every fetch fails.
+    result = search_for_sources(card(), cache, client_for(provider, cache), log=lambda _m: None)
+
+    assert result.reads_attempted == 3
+    assert result.verified_count == 0
+    assert result.unread
+    assert any("fetch failure" in n for n in result.notes)
 
 
 # -- the phase's own guards -------------------------------------------------

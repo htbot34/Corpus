@@ -15,6 +15,11 @@ So:
 2. **Verify.** Fetch the survivors and score against the *fetched page*. Only
    that score can promote anything.
 
+Every judgement that needs to know what a page says is therefore made after
+pass 2, including the common-name refusal. A gate placed between the two passes
+can only see snippets, and a gate that stops the run can only be wrong in one
+direction — see `detect_common_name` for the live run that proved it.
+
 `attribution_basis` records which pass a document's verdict came from, so the
 report can say *why* a document was trusted rather than only how much.
 
@@ -125,6 +130,11 @@ class SearchPhaseResult:
     results_seen: int = 0
     fetches: int = 0
     cached_fetches: int = 0
+    #: Candidates the verification pass tried to read a page for. Rejections on
+    #: the URL alone never reach it, so this is the denominator that says
+    #: whether verification ran at all — `fetches` cannot, because a cache hit
+    #: is a read that costs no request.
+    reads_attempted: int = 0
     #: True when the name is too common to search on. Nothing is ingested.
     common_name: bool = False
     #: Card fields that would most improve the next run.
@@ -137,6 +147,19 @@ class SearchPhaseResult:
         return sum(1 for c in self.everything if c.verified)
 
     @property
+    def unread(self) -> bool:
+        """Did the phase score candidates without reading a single page?
+
+        The one condition that makes every number below it meaningless. Strong
+        signals live in fetched pages, so a run that read nothing scores every
+        candidate on the search result alone and holds all of them — which is
+        indistinguishable, from the outside, from a scorer whose threshold is
+        too strict. Anything reporting on this phase has to check it before
+        drawing a conclusion from the outcome mix.
+        """
+        return self.reads_attempted > 0 and self.verified_count == 0
+
+    @property
     def everything(self) -> list[SearchCandidate]:
         return [*self.candidates, *self.held, *self.context, *self.rejected]
 
@@ -147,7 +170,9 @@ class SearchPhaseResult:
             "cached_searches": self.cached_searches,
             "results_seen": self.results_seen,
             "fetches": self.fetches,
+            "reads_attempted": self.reads_attempted,
             "verified": self.verified_count,
+            "unread": self.unread,
             "common_name": self.common_name,
             "disambiguators": list(self.disambiguators),
             "candidates": [c.as_dict() for c in self.candidates],
@@ -184,11 +209,24 @@ def detect_common_name(scores: list[CandidateScore]) -> tuple[bool, int]:
     signal at all. Distinct domains rather than results, because ten pages on
     one news site is one publication writing about one person, while ten pages
     on ten domains is ten different people.
+
+    **Only fetched scores are counted, and that is load-bearing.** "Carries no
+    other signal" is evidence of a name collision when it describes a page that
+    was read, and evidence of nothing at all when it describes a search result
+    that was not: every strong signal lives in the page. Run against snippet
+    scores the test does not measure the name, it measures how talkative the
+    search vendor is — and `anthropic_search` is not talkative at all, because
+    it builds its snippets from model citations and its system prompt tells the
+    model to write nothing. A live run on 2026-08-03 hit exactly that: 50
+    candidates, every snippet empty, so every candidate scored "the name and
+    nothing else", eight distinct domains cleared the threshold, and the phase
+    stopped before reading a page. Five of those eight domains were the
+    subject's own academic profiles and one was his own site.
     """
     hosts = {
         (urlparse(s.url).hostname or "").lower().removeprefix("www.")
         for s in scores
-        if s.name_present and s.independent_count == 0 and s.outcome != "rejected"
+        if s.fetched and s.name_present and s.independent_count == 0 and s.outcome != "rejected"
     }
     hosts.discard("")
     return len(hosts) >= COMMON_NAME_DOMAIN_THRESHOLD, len(hosts)
@@ -250,26 +288,9 @@ def search_for_sources(
     result.cached_searches = client.cached_searches
     result.errors.extend(client.errors)
 
-    snippet_scores: list[CandidateScore] = []
     for candidate in candidates.values():
         facts = facts_from_snippet(candidate.url, candidate.title, candidate.snippet)
         candidate.score = score_candidate(facts, card, query=candidate.query)
-        snippet_scores.append(candidate.score)
-
-    # ---- the stop-and-ask path -------------------------------------------
-    common, domain_count = detect_common_name(snippet_scores)
-    if common:
-        result.common_name = True
-        result.disambiguators = missing_fields(card)
-        result.notes.append(
-            f"{domain_count} distinct domains matched the name and nothing else. That is "
-            f"a common name, and continuing would mean guessing which of these people is "
-            f"the subject. Nothing from search has been ingested."
-        )
-        for candidate in candidates.values():
-            candidate.skipped = "held: the name is too common to resolve by search alone"
-            _file(result, candidate)
-        return result
 
     # ---- pass 2: verify ---------------------------------------------------
     # Ordered by how promising the snippet was, so a low fetch cap spends its
@@ -294,6 +315,7 @@ def search_for_sources(
                 candidate.skipped = "rejected before fetching"
                 _file(result, candidate)
                 continue
+            result.reads_attempted += 1
             body = fetcher.get(candidate.url)
             if body is None:
                 # A dead host, or the fetch cap. Either way the page was never
@@ -314,10 +336,65 @@ def search_for_sources(
     result.cached_fetches = fetcher.cached
     result.errors.extend(e for e in dict.fromkeys(fetcher.errors) if e not in result.errors)
 
+    # ---- the stop-and-ask path -------------------------------------------
+    # Deliberately after the fetches rather than before them. A name is common
+    # when many *pages* turn out to be about different people, and the only way
+    # to know that is to have read them — see `detect_common_name`. Asking
+    # first, on snippets, is what stopped a live run before it read anything.
+    #
+    # The cost of asking late is bounded by `max_fetches`: plain HTTP against
+    # public pages, capped, cached, and free. The cost of asking early was a
+    # whole phase that never ran.
+    _stop_if_common_name(result, card, log)
+
+    if result.unread:
+        result.notes.append(
+            "no candidate page could be read, so every verdict here rests on a search "
+            "result alone. That is a fetch failure rather than a finding about the "
+            "subject: the signals that promote a candidate live in the page."
+        )
+
     for bucket in (result.candidates, result.held, result.context, result.rejected):
         bucket.sort(key=lambda c: c.url)
     result.notes = list(dict.fromkeys(result.notes))
     return result
+
+
+def _stop_if_common_name(
+    result: SearchPhaseResult,
+    card: IdentityCard,
+    log: Callable[[str], None],
+) -> None:
+    """Demote everything if the pages say this name belongs to several people.
+
+    Demotion rather than an early return, because by this point the pages have
+    been read and throwing that away would mean re-fetching them to answer the
+    same question next run. Nothing is ingested either way — which is the whole
+    guarantee — but the evidence for the refusal is now in `discovery.json`
+    instead of implied by its absence.
+    """
+    fetched = [c.score for c in result.everything if c.score is not None and c.score.fetched]
+    common, domain_count = detect_common_name(fetched)
+    if not common:
+        return
+
+    result.common_name = True
+    result.disambiguators = missing_fields(card)
+    note = (
+        f"{domain_count} distinct domains carried the name and nothing else once their "
+        f"pages were read. That is a common name, and continuing would mean guessing "
+        f"which of these people is the subject. Nothing from search has been ingested."
+    )
+    result.notes.append(note)
+    # Logged, not merely recorded. A phase that refuses to ingest anything must
+    # say so where the run is being watched; `scripts/verify_search_contract.py`
+    # printed a census of this exact outcome without ever mentioning it.
+    log(f"  [search] {note}")
+
+    for candidate in result.candidates:
+        candidate.skipped = "held: the name is too common to resolve by search alone"
+    result.held.extend(result.candidates)
+    result.candidates = []
 
 
 def _file(result: SearchPhaseResult, candidate: SearchCandidate) -> None:

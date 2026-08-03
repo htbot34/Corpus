@@ -296,10 +296,29 @@ exactly how a threshold of two gets defeated.
 
 ### When the name is too common
 
-If eight or more distinct domains match the name with no other signal, the phase
-**stops rather than guessing**. Nothing is ingested, nothing further is even
-fetched, and the run says which card fields would narrow it — `employer` first,
-then `location`, then `role`. A tool that guesses on "John Smith" is a liability.
+If eight or more distinct domains **whose pages were read** match the name with
+no other signal, the phase refuses to guess: nothing is ingested, everything
+found is held for a human, and the run says which card fields would narrow it —
+`employer` first, then `location`, then `role`. A tool that guesses on "John
+Smith" is a liability.
+
+"Whose pages were read" is the whole of it, and it was learned the expensive
+way. The check used to run between the two passes, on snippet scores, and stop
+the phase before it fetched anything. A live run on 2026-08-03 walked straight
+into that: `anthropic_search` builds its snippet from the model's citations and
+the search prompt tells the model to write nothing, so all 50 candidates
+arrived with an empty snippet, all 50 scored as "the name and nothing else",
+eight distinct domains cleared the threshold, and the phase stopped having read
+zero pages. Five of those eight domains were the subject's own academic
+profiles and one was his own site. The census the run existed to produce —
+*is a threshold of two signals calibrated?* — was an artifact of a gate that
+had no evidence to work with.
+
+A name is common when many *pages* turn out to be about different people, and
+only a fetched page can say so. So the refusal now happens after the
+verification pass, on what the pages actually said. Asking late costs at most
+`--max-verify-fetches` plain HTTP requests, which are free and cached; asking
+early cost a whole phase.
 
 ### The unconfirmed workflow
 
@@ -817,7 +836,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-792 tests, all offline. The suite covers both provider regressions (via
+808 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
@@ -853,12 +872,32 @@ many candidates actually come back `corroborated` versus `held` — with a
 breakdown of *why* each held one was held, and how many sat at exactly one
 signal. That last table is the calibration data for the two-signal threshold.
 
-It checks page reachability **before** spending anything and refuses to run if
-fetches are blocked. A candidate whose page cannot be read has never had its
-strong signals looked at, so a run behind a restrictive egress policy reports
-~100% held for reasons that have nothing to do with the threshold — which is
-worse than no data, because it looks exactly like evidence that the scorer is
-too strict.
+It guards that census at **both** ends. Before spending anything it probes page
+reachability and refuses to run if fetches are blocked. Afterwards it checks
+what the run actually did, and refuses to print a census when no candidate page
+was read — or when the phase declined to promote anything for its own reasons.
+A candidate whose page was never read has never had its strong signals looked
+at, so the outcome mix measures the fetcher rather than the threshold, and it
+looks exactly like evidence that the scorer is too strict.
+
+The second guard exists because the first one is not sufficient and a live run
+proved it: egress was fine, `example.com` answered, and the phase still read
+zero of 50 candidates because it stopped before the verification pass. The
+script printed a full census of it. "Can this machine fetch a page" and "did
+this run read one" are different questions, and only the second one makes a
+census mean anything.
+
+> **Fixture provenance, search.** `tests/fixtures/web_search_response.json` is
+> **real** — one of nine responses captured on 2026-08-03 with
+> `--capture-search`, scrubbed by `tests/fixtures/_scrub_search.py`, which
+> records exactly what was swapped and what was kept. The load-bearing finding
+> in it is that `citations` came back **null in all nine**, so every search
+> result's snippet is empty: a `web_search_result` has no snippet field, the
+> snippet is built from the model's citations, and `SEARCH_SYSTEM` tells the
+> model to reply with the single word "done". The snippet path is therefore
+> unreachable in production today, and `web_search_response_with_citations.json`
+> is written to the documented shape and labelled SYNTHETIC so the code that
+> reads a citation still has something to run against.
 
 > **Fixture provenance.** Mixed, and [`docs/wire-contract.md`](docs/wire-contract.md)
 > says exactly which is which.
@@ -923,30 +962,27 @@ is still missing or unproven:
   `IssueCommentEvent`, which *was* captured — but that the path returns a bare
   array of them is assumed. Declared unverified in the contract and pinned by a
   test.
-- **The search wire contract is entirely unverified, and the live check was
-  attempted and blocked.** `corpus/search/contract.py` states every field the
-  parser depends on with a severity, and `tests/test_search_wire_contract.py`
-  checks the fixture against it on every run — but both the fixture and the
-  contract were written from the same documentation, so agreement between them
-  proves the parser is self-consistent and nothing about the API.
-  `WEB_SEARCH.verified` is `""` and a test fails the day someone sets it
-  without recording what they saw.
-
-  The live run to close this could not be made: the environment has no
-  `ANTHROPIC_API_KEY`, and its egress policy answers `403` to `CONNECT` for
-  every candidate host (`simonwillison.net`, `paulgraham.com`,
-  `news.ycombinator.com`, `api.github.com` all denied at the gateway). Either
-  blocker alone is fatal to the check — the second one especially, because a
-  search that runs while page fetches fail produces a *misleading* answer
-  rather than no answer.
-- **The scoring thresholds are judgement, not measurement.** Two independent
-  signals for `corroborated`, eight domains for a common name, 80% for source
-  concentration: round numbers chosen for where the failure mode changes, like
-  the corpus tiers, and the code says so rather than implying precision it does
-  not have. **Nobody has yet seen what fraction of real search results clear
-  two signals**, which is the number that says whether the bar is calibrated or
-  merely strict. `scripts/verify_search_contract.py` prints exactly that
-  breakdown; it needs a key and unblocked egress.
+- **The search *response* shape is now confirmed; the search *snippet* is
+  confirmed absent.** Nine live responses on 2026-08-03 matched
+  `corpus/search/contract.py` on every critical and important field, and the
+  fixture is rebuilt from one of them. What they also showed is that no
+  response carries a citation, so every snippet is empty — see the fixture
+  provenance above. The tool survives that only because a snippet was never
+  allowed to promote anything; a richer vendor (`exa` returns real page text)
+  is the stub to reach for if snippets ever need to carry weight.
+- **The scoring thresholds are still judgement, not measurement.** Two
+  independent signals for `corroborated`, eight domains for a common name, 80%
+  for source concentration: round numbers chosen for where the failure mode
+  changes, like the corpus tiers, and the code says so rather than implying
+  precision it does not have. **Nobody has yet seen what fraction of real
+  search results clear two signals.** The 2026-08-03 run was supposed to
+  produce that number and could not: it read zero of 50 candidate pages,
+  because the common-name check ran before the fetches on evidence it did not
+  have. That gate is fixed and the script now refuses to print a census taken
+  over unread candidates — but the calibration number still needs a run from a
+  machine with egress to candidate hosts. The 50 candidates are worth
+  re-running: 23 were rejected on their URL alone and 27 needed a page read,
+  six of them the subject's own blog posts.
 - **The `about them, not by them` detector is heuristic.** Author metadata
   naming someone else is solid; the URL markers and the third-person-quotation
   count are judgement calls that will occasionally hold a real page. It errs

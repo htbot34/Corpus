@@ -1121,6 +1121,15 @@ def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
         f"({result.cached_searches} cached), {result.results_seen} result(s), "
         f"{result.verified_count} verified"
     )
+    if result.unread:
+        # Same class of misleading output the live checker now refuses to
+        # print: every candidate was scored on a search result alone, so the
+        # held count says nothing about them.
+        warn(
+            f"no candidate page could be read ({result.reads_attempted} attempted). "
+            "Nothing from search can be corroborated without reading the page, so "
+            "everything found is held — check the errors below rather than the counts."
+        )
     if result.common_name:
         # The stop-and-ask path. Loud, because the alternative to saying this
         # is guessing which of several people the subject is.

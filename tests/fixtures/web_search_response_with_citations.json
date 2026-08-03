@@ -1,5 +1,5 @@
 {
-  "_provenance": "REAL. Captured from the wire on 2026-08-03 with `--capture-search`, one of nine responses from a live run, then scrubbed by tests/fixtures/_scrub_search.py — every key name, nesting, null and token count is exactly what arrived. Identity (names, handles, personal domain, ids) is swapped for the suite's synthetic subject and encrypted_content is a placeholder; platform hosts are kept because the scorer matches them by name. The load-bearing finding is `citations: null`: a web_search_result has no snippet field, snippets come from model citations, and there were none in any of the nine.",
+  "_provenance": "SYNTHETIC, and deliberately so — the citation path has no live example. All nine captured responses carried `citations: null`, because SEARCH_SYSTEM tells the model to reply with one word and a model that writes nothing cites nothing. This is the documented citation shape on the real envelope, so the snippet code has something to run against. Same status as github_events_with_commits.json.",
   "id": "msg_scrubbed_placeholder",
   "container": null,
   "content": [
@@ -92,7 +92,15 @@
       "type": "web_search_tool_result"
     },
     {
-      "citations": null,
+      "citations": [
+        {
+          "type": "web_search_result_location",
+          "url": "http://janesmith.example/blog/tutorial-on-inference-networks-2",
+          "title": "Inference networks | Jane Smith",
+          "encrypted_index": "OPAQUE-INDEX-PLACEHOLDER",
+          "cited_text": "Rubrics beat interviews because they force you to decide what you are measuring before you meet anyone."
+        }
+      ],
       "text": "done",
       "type": "text"
     }

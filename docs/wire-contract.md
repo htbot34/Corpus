@@ -4,14 +4,14 @@ What this tool assumes about each provider's responses, which of those
 assumptions have been **observed on the wire**, and which are still **read from
 documentation**. The distinction is the whole point of the document.
 
-Two providers, same machinery:
+Three providers, same machinery:
 
-| | twitterapi.io | GitHub |
-| --- | --- | --- |
-| Machine-readable | `corpus/x/contract.py` | `corpus/sources/github_contract.py` |
-| Checked offline | `tests/test_wire_contract.py` | `tests/test_github_wire_contract.py` |
-| Checked online | `scripts/verify_contract.py` (~$0.01) | — (see below) |
-| Fixture provenance | **synthetic**, except `user_info.json` | **captured live**, then scrubbed |
+| | twitterapi.io | GitHub | Anthropic web search |
+| --- | --- | --- | --- |
+| Machine-readable | `corpus/x/contract.py` | `corpus/sources/github_contract.py` | `corpus/search/contract.py` |
+| Checked offline | `tests/test_wire_contract.py` | `tests/test_github_wire_contract.py` | `tests/test_search_wire_contract.py` |
+| Checked online | `scripts/verify_contract.py` (~$0.01) | — (see below) | `scripts/verify_search_contract.py` (~$0.13) |
+| Fixture provenance | **synthetic**, except `user_info.json` | **captured live**, then scrubbed | **captured live**, then scrubbed |
 
 ## GitHub, in one screen
 
@@ -52,6 +52,71 @@ they cannot be quietly forgotten:
 Two measured limits, reported in every run's coverage block: `events/public`
 reaches ~300 events and ~90 days, and the search API is limited to **30 requests
 per minute**, separately from and far more tightly than core.
+
+---
+
+## Anthropic web search — CONFIRMED
+
+**`POST /v1/messages` with `tools=[{"type": "web_search_20250305", "max_uses": 1}]`**
+
+| | Status |
+| --- | --- |
+| Response envelope, result blocks, usage | **CONFIRMED** 2026-08-03 — nine live responses, 68 results |
+| Citations, and therefore snippets | **CONFIRMED ABSENT** — 0 of 9 responses carried one |
+
+Captured by `scripts/verify_search_contract.py --target dustinw
+--capture-search captures/` and scrubbed into
+`tests/fixtures/web_search_response.json` by `tests/fixtures/_scrub_search.py`,
+which records exactly what was swapped. Key names, nesting, nulls and token
+counts are real; identity and the opaque blobs are not. Platform hosts
+(`x.com`, `linkedin.com`, `youtube.com`) are deliberately kept, because
+`discovery.py` and `scoring.py` match them by name.
+
+Every critical and important field held: `content`, `usage`,
+`usage.server_tool_use.web_search_requests` (exactly 1 per call, nine times
+over), the `web_search_tool_result` block, and `url` plus `title` on all 68
+results.
+
+### The finding: there is no snippet, and there never was
+
+A `web_search_result` carries `url`, `title`, `page_age` and
+`encrypted_content` — no snippet field, as documented. The snippet is built
+from the model's **citations**, and all nine responses came back
+`citations: null`.
+
+That is not provider drift. `SEARCH_SYSTEM` instructs the model to run the
+query and "reply with the single word: done", and a model that writes nothing
+cites nothing. The snippet path is unreachable while that prompt stands, so
+`corpus/search/providers.py` is correct in treating an empty snippet as normal,
+and `web_search_response_with_citations.json` — SYNTHETIC, and named so — is the
+only thing keeping the citation-reading code honest.
+
+**What that cost.** Empty snippets meant every candidate scored as "the name and
+nothing else" in the discover pass, which the common-name check read as eight
+different people sharing the name. It stopped the phase before a single page was
+fetched. The check now runs after the verification pass, on pages that were
+actually read; see the README's "When the name is too common" and
+`corpus/search/verify.py`.
+
+### Undocumented, observed, harmless
+
+- **`caller`** on both `server_tool_use` (`null`) and `web_search_tool_result`
+  (`{"type": "direct"}`).
+- **`usage`** carries `cache_creation`, `inference_geo`,
+  `output_tokens_details`, `service_tier`, and
+  `server_tool_use.web_fetch_requests` beside `web_search_requests`.
+- **Top level** carries `container`, `stop_details`, `stop_sequence`.
+
+All additive. Nothing the parser reads moved.
+
+### Two behaviours worth pinning
+
+- **`page_age` is not always a date.** 53 of 68 were null; the rest were mostly
+  `"June 23, 2013"`, but one was `"1 month ago"`. `parse_page_age` returns None
+  for a value it cannot read rather than guessing, because a wrong
+  `published_at` silently reorders a corpus.
+- **A single result block held 6 to 10 results.** `RESULTS_PER_QUERY` is 8, so
+  the tail of a broad query is dropped by us and not by the API.
 
 ---
 
@@ -337,6 +402,25 @@ python scripts/verify_contract.py --dry-run  # free, prints the plan
 It refuses to run under CI. The offline suite is the CI gate; a check that
 spends money on every push is a check that gets deleted after the first
 surprising invoice.
+
+### The search capture
+
+```bash
+python scripts/verify_search_contract.py --target KEY --capture-search captures/
+python tests/fixtures/_scrub_search.py     # captures/ -> tests/fixtures/
+```
+
+Roughly $0.13 at the default twelve queries. One file per query, holding the
+whole message, what the parser made of it, and the usage that was billed.
+
+**`captures/` is gitignored, and that is not incidental.** A capture holds a
+real person's identifiers, other people's page titles, and a multi-kilobyte
+`encrypted_content` blob per result that `scripts/check_secrets.sh` reads — as
+it should — as high-entropy credential material. Committing one turns the
+secrets gate red and puts real identifiers in the history. What belongs in the
+repo is the scrubbed fixture and the script that produced it, exactly as
+`gh_captures/` was handled. If a capture has to be shared, share the scrub
+script's output.
 
 ---
 
