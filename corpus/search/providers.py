@@ -205,6 +205,15 @@ def results_from_message(message: Any, limit: int) -> tuple[list[SearchResult], 
     errors: list[str] = []
     seen: set[str] = set()
 
+    # A paused turn is the same silent-failure class as a renamed block: the
+    # server stopped mid-search, whatever arrived is partial, and without this
+    # the run reports fewer results — or none — as though that were the answer.
+    # Not resumed, because `max_uses=1` makes a pause unexpected; if it starts
+    # happening, the single-search assumption behind the reservation is wrong
+    # and that is worth surfacing rather than papering over.
+    if _get(message, "stop_reason") == "pause_turn":
+        errors.append("pause_turn: the search turn was paused; results may be incomplete")
+
     for block in _blocks(message):
         if _get(block, "type") != "web_search_tool_result":
             continue
@@ -275,6 +284,11 @@ class AnthropicSearchProvider:
         self.capture = capture
         self.log = log
         self.last_usage = SearchUsage(model=model)
+        #: The most recent response, untouched. Kept so the live contract
+        #: checker can inspect what actually arrived rather than re-parsing a
+        #: capture file — and so a shape change is checkable in the same run
+        #: that hit it.
+        self.last_raw_message: Any = None
         self._client = client
         self._owns_client = client is None
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -316,6 +330,7 @@ class AnthropicSearchProvider:
         except Exception as exc:
             raise SearchError(f"search for {query!r} failed: {exc}") from exc
 
+        self.last_raw_message = message
         self.last_usage = usage_from_message(message, self.model)
         results, errors = results_from_message(message, limit)
         self.last_usage.errors = errors

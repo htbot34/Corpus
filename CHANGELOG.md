@@ -1042,3 +1042,90 @@ fetch was the wrong story.
 - No new dependencies.
 - `Fetcher`, `kind_for`, and `suffix_match` made public in `discovery.py` so
   Phase 2 reuses one fetch cap rather than growing a second.
+
+---
+
+## 2026-08-03 — The live search check, attempted and blocked
+
+The plan was to run Phase 2 against a real target, replace the
+documentation-derived fixture with a real capture, and answer two questions
+with data: whether `web_search_20250305` returns the shape the fixture
+assumes, and what fraction of real candidates actually reach `corroborated`.
+
+**Neither call could be made.** Two independent blockers, both environmental,
+and both verified rather than assumed:
+
+- **No Anthropic credentials.** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`
+  are unset, there is no `ant` CLI or OAuth profile on the box, and no `.env`.
+  `api.anthropic.com` is reachable and answers `401`, so the route is open and
+  unauthenticated.
+- **Egress denies every candidate host.** The gateway answers `403` to
+  `CONNECT` for `simonwillison.net`, `paulgraham.com`,
+  `news.ycombinator.com`, and `api.github.com`; the proxy's own status endpoint
+  records each denial as `connect_rejected`. Its README is explicit that a 403
+  is an organization policy denial and must be reported rather than routed
+  around.
+
+The second blocker is the more interesting one, because it would not have
+stopped a run — it would have corrupted it. **A search that runs while page
+fetches fail produces a misleading answer rather than no answer.** The
+verification pass fetches every candidate before scoring it, and a page nobody
+can read yields no author metadata, no outbound links, and no employer
+mention. Every candidate would have come back held, at 100%, and that number
+looks exactly like evidence that the two-signal threshold is too strict. It
+would have been an artifact of the network.
+
+So the spend was $0.00, and the effort went into making the run one command
+when the blockers lift.
+
+### The search wire contract
+
+`corpus/search/contract.py`, reusing `corpus/x/contract.py`'s primitives for
+the third time. It states every field `results_from_message` depends on with a
+severity and a what-breaks note, and it is honest that **all of it is
+`verified=""`** — assumed from documentation, never observed.
+
+The failure it exists to catch is worse here than on the X side. A zero-result
+X ingest is obvious: the report has no documents. A zero-result *search* looks
+exactly like a target whose anchors already cover their writing, which is a
+normal outcome. If `web_search_tool_result` were renamed tomorrow, every search
+would return nothing, every candidate would be held, and the run would exit 0
+reporting no web presence with nothing in the output looking wrong.
+
+`tests/test_search_wire_contract.py` checks the fixture against the spec on
+every run, in both directions — and the second direction immediately earned
+its keep. It caught the contract describing `stop_reason` while no code read
+it, which was not a documentation slip but a real gap: a `pause_turn` response
+means the server stopped mid-search, and the parser was reading the partial
+result as though it were the answer. `results_from_message` now reports it.
+
+One test asserts `WEB_SEARCH.verified` is still empty. It fails the day
+someone runs the live checker, which is how they are reminded to record what
+they actually saw rather than quietly promoting an assumption.
+
+### The live checker
+
+`scripts/verify_search_contract.py`, the online half, following
+`verify_contract.py`'s conventions: refuses under CI, prints a plan and a price
+under `--dry-run`, exits 1 on critical drift.
+
+It answers both questions in one command. Every raw response is checked
+against the contract field by field. Then a census breaks the outcomes into
+corroborated / held / context / rejected, and — for the held ones — counts why:
+which negative fired, and **how many sat at exactly one independent signal**.
+That last table is the calibration data. If most fetched-and-held candidates
+have exactly one signal and are the right person, the bar of two is too strict
+for real results, and the script says so along with the more likely fix: a
+third weak signal that fires more often, rather than lowering the bar to one.
+
+**It checks page reachability before spending anything**, and refuses to print
+a census it knows would be an artifact. Verified working: in this environment
+it stops at the probe, explains why the number would mislead, and exits 2
+having spent nothing.
+
+### Housekeeping
+
+- Test suite 772 → 792, still all offline.
+- `AnthropicSearchProvider.last_raw_message` exposes the untouched response so
+  the checker can inspect what arrived without re-parsing a capture file.
+- No new dependencies.

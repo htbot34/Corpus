@@ -817,7 +817,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-772 tests, all offline. The suite covers both provider regressions (via
+792 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so
@@ -834,15 +834,31 @@ Coverage floors are enforced per module rather than on the total
 carrying an untested budget over the line. `budget.py`, `ingest.py`, `client.py`, and
 `hydrate.py` each hold at 90%+.
 
-### The two scripts that cost money
+### The scripts that cost money
 
-Never run by CI; `verify_contract.py` refuses to run when `CI` is set.
+Never run by CI; both `verify_*` scripts refuse to run when `CI` is set.
 
 ```bash
 corpus run --x <handle> --max-posts 50 --budget 0.15 --skip-synthesis --capture-raw captures/
-python scripts/verify_contract.py            # ~$0.01, monthly drift check
+python scripts/verify_contract.py            # ~$0.01, monthly X drift check
 python scripts/verify_contract.py --dry-run  # free, prints the plan
+
+python scripts/verify_search_contract.py --target KEY --capture-search captures/
+python scripts/verify_search_contract.py --target KEY --dry-run   # free
 ```
+
+`verify_search_contract.py` answers the two questions the offline suite cannot:
+whether `web_search_20250305` returns the shape the fixture assumes, and how
+many candidates actually come back `corroborated` versus `held` — with a
+breakdown of *why* each held one was held, and how many sat at exactly one
+signal. That last table is the calibration data for the two-signal threshold.
+
+It checks page reachability **before** spending anything and refuses to run if
+fetches are blocked. A candidate whose page cannot be read has never had its
+strong signals looked at, so a run behind a restrictive egress policy reports
+~100% held for reasons that have nothing to do with the threshold — which is
+worse than no data, because it looks exactly like evidence that the scorer is
+too strict.
 
 > **Fixture provenance.** Mixed, and [`docs/wire-contract.md`](docs/wire-contract.md)
 > says exactly which is which.
@@ -907,15 +923,30 @@ is still missing or unproven:
   `IssueCommentEvent`, which *was* captured — but that the path returns a bare
   array of them is assumed. Declared unverified in the contract and pinned by a
   test.
-- **The search fixture is written from documentation, not captured.** Same
-  status as the tweet-endpoint fixtures, and stated in the fixture itself:
-  `tests/fixtures/web_search_response.json` proves the parser and the fixture
-  agree, not that either matches the API. One `--capture-search` run closes it.
+- **The search wire contract is entirely unverified, and the live check was
+  attempted and blocked.** `corpus/search/contract.py` states every field the
+  parser depends on with a severity, and `tests/test_search_wire_contract.py`
+  checks the fixture against it on every run — but both the fixture and the
+  contract were written from the same documentation, so agreement between them
+  proves the parser is self-consistent and nothing about the API.
+  `WEB_SEARCH.verified` is `""` and a test fails the day someone sets it
+  without recording what they saw.
+
+  The live run to close this could not be made: the environment has no
+  `ANTHROPIC_API_KEY`, and its egress policy answers `403` to `CONNECT` for
+  every candidate host (`simonwillison.net`, `paulgraham.com`,
+  `news.ycombinator.com`, `api.github.com` all denied at the gateway). Either
+  blocker alone is fatal to the check — the second one especially, because a
+  search that runs while page fetches fail produces a *misleading* answer
+  rather than no answer.
 - **The scoring thresholds are judgement, not measurement.** Two independent
   signals for `corroborated`, eight domains for a common name, 80% for source
   concentration: round numbers chosen for where the failure mode changes, like
   the corpus tiers, and the code says so rather than implying precision it does
-  not have. They are worth revisiting against a few dozen real targets.
+  not have. **Nobody has yet seen what fraction of real search results clear
+  two signals**, which is the number that says whether the bar is calibrated or
+  merely strict. `scripts/verify_search_contract.py` prints exactly that
+  breakdown; it needs a key and unblocked egress.
 - **The `about them, not by them` detector is heuristic.** Author metadata
   naming someone else is solid; the URL markers and the third-person-quotation
   count are judgement calls that will occasionally hold a real page. It errs
