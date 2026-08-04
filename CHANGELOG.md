@@ -1517,3 +1517,40 @@ Three changes, in order of importance:
 
 The full clock audit — every `datetime.now()`, `utcnow()`, `date.today()`
 and `time.time()` in the tree, with verdicts — is in the commit message.
+
+---
+
+## 2026-08-04 — A verdict page, then the evidence
+
+The report was one long document mixing conclusions with the material
+supporting them — too granular to skim, impossible to hand to someone who
+wants the answer. The synthesis was never the problem; the rendering was,
+so this is a `render.py` change only, reachable through
+`corpus resynth <dir> --render-only` at zero cost. Nothing the model is
+asked to produce changed.
+
+**Part one — "Where they land", one page.** Two or three sentences on how
+the person reasons (the summary, trimmed in code). The axes in a fixed
+order — technology, natsec, politics, institutions, economics, epistemics —
+each in at most four sentences. The load-bearing beliefs, one line each.
+The two or three most likely misreadings. One confidence line: tier,
+document count, date range, and the single caveat that most limits the
+report. Two rules hold the page honest: a no-signal axis appears at the
+same visual weight as a verdict ("Nothing in this corpus locates them on
+this axis" is a finding, never dropped for space), and every claim carries
+the count of documents it rests on.
+
+**Part two — "The evidence".** Everything the report has always contained,
+unchanged: the coverage block, the full generating model, how they reason,
+the axis chains (retitled "The axes in full"), what moved, unresolved,
+misreadings with rebuttals, computed signals, spend. Part one links into it
+by section.
+
+**Confidence is now capped by data quality, not only by document count.**
+The simonw-nox report said "high" while a sixth of its corpus carried
+fabricated timestamps. When more than 10% of documents have an unknown
+date: the label is capped at medium with the cap stated and explained, the
+"What moved" section is suppressed entirely with the reason in place of the
+entries (an absent section would read as "nothing moved", a different
+claim), and part one's confidence line names dates as the limit. Evolution
+analysis on unreliable chronology is worse than no evolution analysis.

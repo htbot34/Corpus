@@ -17,6 +17,7 @@ trustworthy, which the redesign did not touch.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,6 +31,32 @@ ROLE_LABELS = {
     "held_lightly": "held lightly",
     "unclassified": "position in the model not assessed",
 }
+
+#: Share of documents with unknown dates above which chronology-dependent
+#: output is not trusted: "what moved" is suppressed and the confidence label
+#: is capped. Evolution analysis on unreliable chronology is worse than no
+#: evolution analysis — the simonw-nox run put a Later three weeks before its
+#: Earlier and reported it at high confidence.
+DATE_QUALITY_FLOOR = 0.10
+
+#: Part one leads with the axes readers ask about first; anything configured
+#: beyond these six follows in its original order.
+_PART_ONE_AXIS_ORDER = (
+    "technology_and_ai",
+    "defense_intel_natsec",
+    "politics_and_ideology",
+    "institutions_and_authority",
+    "economics_and_markets",
+    "epistemics",
+)
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _first_sentences(text: str, limit: int) -> str:
+    """The first `limit` sentences of a passage, joined back together."""
+    parts = [p.strip() for p in _SENTENCE_END.split(text.strip()) if p.strip()]
+    return " ".join(parts[:limit])
 
 
 def _link_map(docs: list[Document]) -> dict[str, Document]:
@@ -187,6 +214,143 @@ def _concentration_line(docs: list[Document]) -> str:
     )
 
 
+def _ordered_axes(synthesis: Synthesis) -> list[Any]:
+    rank = {name: index for index, name in enumerate(_PART_ONE_AXIS_ORDER)}
+    return sorted(
+        synthesis.axes,
+        key=lambda a: rank.get(a.axis, len(_PART_ONE_AXIS_ORDER)),
+    )
+
+
+def _axis_capsule(axis: Any) -> str:
+    """One axis in at most four sentences, with the count it rests on.
+
+    A no-signal axis renders at the same visual weight as a verdict. "Nothing
+    in this corpus locates them on this axis" is a finding — it is the thing
+    that keeps a one-page report honest, and it is never dropped for space.
+    """
+    label = axis.axis.replace("_", " ")
+    if axis.signal == "none":
+        return (
+            f"**{label}** — no signal, 0 cited documents. "
+            "Nothing in this corpus locates them on this axis."
+        )
+    head = f"**{label}** — {axis.signal} signal, {len(axis.evidence_ids)} cited document(s). "
+    stated = _first_sentences(axis.stated, 2)
+    inferred = _first_sentences(axis.inferred, 1 if stated else 2)
+    parts = []
+    if stated:
+        parts.append(stated)
+    if inferred:
+        parts.append(f"Inferred: {inferred}")
+    if not parts and axis.reasoning:
+        parts.append(_first_sentences(axis.reasoning, 2))
+    return head + " ".join(parts)
+
+
+def _most_limiting_caveat(
+    *,
+    docs: list[Document],
+    unknown: int,
+    tier: TierRules | None,
+    run_meta: dict[str, Any],
+) -> str:
+    """The one caveat part one carries. Ordered by how badly each misleads."""
+    if docs and unknown / len(docs) > DATE_QUALITY_FLOOR:
+        return (
+            f"{unknown} of {len(docs)} documents ({unknown / len(docs):.0%}) carry no "
+            "reliable publication date, so everything chronological is suspect and "
+            '"what moved" is suppressed'
+        )
+    if run_meta.get("budget_stopped"):
+        return "the budget ran out mid-run, so these results are partial"
+    if (run_meta.get("ingest") or {}).get("x_failure"):
+        return "the X source failed mid-run; its timeline is missing from this corpus"
+    if tier is not None and tier.suppresses_inference:
+        return f"only {tier.document_count} documents survived filtering; inference is off"
+    mix = classify_sources([d.source for d in docs])
+    if mix.is_concentrated:
+        return f"{mix.share:.0%} of the corpus is a single source ({mix.dominant})"
+    if unknown:
+        return f"{unknown} document(s) carry no reliable publication date"
+    return "none beyond corpus size"
+
+
+def _part_one(
+    *,
+    synthesis: Synthesis,
+    docs: list[Document],
+    signals: dict[str, Any],
+    run_meta: dict[str, Any],
+    tier: TierRules | None,
+    unknown: int,
+    confidence_display: str,
+) -> list[str]:
+    """The verdict page: one page, no more, every claim carrying its count.
+
+    Everything here is drawn from the same synthesis part two lays out in
+    full — this is selection and compression, never new analysis.
+    """
+    out: list[str] = ["## Where they land", ""]
+
+    lead = _first_sentences(synthesis.summary, 3)
+    if lead:
+        out.append(lead)
+        out.append("")
+
+    structured_header = (
+        "the-generating-model"
+        if (tier is None or tier.allow_belief_structure)
+        else "beliefs-without-the-structure"
+    )
+
+    for axis in _ordered_axes(synthesis):
+        out.append(_axis_capsule(axis))
+        out.append("")
+    if synthesis.axes:
+        out.append("[Full reasoning chains](#the-axes-in-full)")
+        out.append("")
+
+    load_bearing = [b for b in synthesis.core_model if b.role == "load_bearing"]
+    picked = (load_bearing or synthesis.core_model)[:4]
+    if picked:
+        out.append(
+            "**Load-bearing beliefs**"
+            if load_bearing
+            else "**Beliefs** (their place in the model was not assessed at this corpus size)"
+        )
+        out.append("")
+        for belief in picked:
+            out.append(f"- {belief.belief} ({len(belief.evidence_ids)} cited document(s))")
+        out.append("")
+        out.append(f"[Full generating model](#{structured_header})")
+        out.append("")
+
+    if synthesis.misreadings:
+        out.append("**How to misread this**")
+        out.append("")
+        for entry in synthesis.misreadings[:3]:
+            out.append(f"- {entry.misreading} ({len(entry.evidence_ids)} cited document(s))")
+        out.append("")
+        out.append("[All misreadings, with why each is wrong](#how-to-misread-this)")
+        out.append("")
+
+    tier_label = f"{tier.name} corpus" if tier is not None else "corpus tier unknown"
+    date_range = synthesis.coverage.date_range or signals.get("date_range", "unknown")
+    count = synthesis.coverage.total_documents or len(docs)
+    out.append(
+        f"**Confidence:** {confidence_display} · {tier_label} · {count} documents · "
+        f"{date_range} · Most limiting: "
+        f"{_most_limiting_caveat(docs=docs, unknown=unknown, tier=tier, run_meta=run_meta)}."
+    )
+    out.append("")
+    out.append("---")
+    out.append("")
+    out.append("# The evidence")
+    out.append("")
+    return out
+
+
 def _document_count(synthesis: Synthesis | None, docs: list[Document]) -> str:
     """What the header says about how much was read.
 
@@ -228,10 +392,19 @@ def render_report(
     )
     out.append("")
 
-    # ---- coverage caveats, up top where they cannot be missed -------------
+    # ---- coverage caveats, at the top of the evidence half ----------------
     caveats: list[str] = ["**Coverage and caveats**", ""]
     tier = _tier_for(synthesis, run_meta)
     cov = synthesis.coverage if synthesis else None
+    # Data quality bounds confidence before anything else does: a corpus whose
+    # chronology is partly fabricated must not report "high" however many
+    # documents it holds.
+    unknown = sum(1 for d in docs if d.date_unknown)
+    unknown_share = (unknown / len(docs)) if docs else 0.0
+    dates_unreliable = unknown_share > DATE_QUALITY_FLOOR
+    confidence_display = cov.confidence if cov else "low"
+    if cov and dates_unreliable and cov.confidence == "high":
+        confidence_display = "medium"
     if cov:
         caveats.append(f"- Date range: {cov.date_range or signals.get('date_range', 'unknown')}")
         caveats.append(
@@ -251,12 +424,34 @@ def render_report(
         label = (
             "Confidence (set in code, not by the model)" if forced else "Model-assessed confidence"
         )
-        caveats.append(f"- {label}: **{cov.confidence}**")
+        if confidence_display != cov.confidence:
+            caveats.append(
+                f"- Confidence: **{confidence_display}** — the model assessed "
+                f"{cov.confidence}, capped in the render because {unknown} of "
+                f"{len(docs)} documents ({unknown_share:.0%}) carry no reliable "
+                "publication date. Confidence is bounded by data quality, not "
+                "only by document count."
+            )
+        else:
+            caveats.append(f"- {label}: **{confidence_display}**")
         for gap in cov.gaps:
             caveats.append(f"- Gap: {gap}")
     else:
         caveats.append(f"- Date range: {signals.get('date_range', 'unknown')}")
         caveats.append(f"- Documents ingested: {len(docs)}")
+
+    if unknown:
+        emphasis = "**" if dates_unreliable else ""
+        caveats.append(
+            f"- {emphasis}{unknown} of {len(docs)} documents ({unknown_share:.0%}) carry "
+            f"no reliable publication date.{emphasis} They are excluded from every date "
+            "computation rather than stamped with a guess."
+            + (
+                ' Chronology-dependent analysis ("what moved") is suppressed.'
+                if dates_unreliable
+                else ""
+            )
+        )
 
     attribution = _attribution_line(docs)
     if attribution:
@@ -415,6 +610,23 @@ def render_report(
             "values computed in Python; signals.json is authoritative."
         )
 
+    # ---- part one: the verdict page ---------------------------------------
+    # One page a reader can stop after, every claim carrying its count.
+    # Part two below it is the evidence: everything the report has always
+    # contained, unchanged, with the coverage block at its top.
+    if synthesis is not None:
+        out.extend(
+            _part_one(
+                synthesis=synthesis,
+                docs=docs,
+                signals=signals,
+                run_meta=run_meta,
+                tier=tier,
+                unknown=unknown,
+                confidence_display=confidence_display,
+            )
+        )
+
     out.append(_callout(caveats))
     out.append("")
 
@@ -549,8 +761,9 @@ def render_report(
             out.append(f"  - Evidence: {_cite(spot.evidence_ids, links)}")
         out.append("")
 
-    # ---- axes ------------------------------------------------------------
-    out.append("## Where they land")
+    # ---- axes, in full ----------------------------------------------------
+    # Part one carries the capsules; this is where the chains live.
+    out.append("## The axes in full")
     out.append("")
     out.append(
         "Every requested axis appears here. `no signal` means the corpus contains "
@@ -585,7 +798,19 @@ def render_report(
     # ---- evolution -------------------------------------------------------
     out.append("## What moved")
     out.append("")
-    if not synthesis.evolution:
+    if dates_unreliable:
+        # Before/after claims are exactly the output fabricated dates corrupt:
+        # the simonw-nox run dated a Later three weeks before its Earlier.
+        # Suppression is stated, never silent — an absent section reads as
+        # "nothing moved", which is a different claim.
+        out.append(
+            f"_Suppressed: {unknown} of {len(docs)} documents ({unknown_share:.0%}) "
+            "carry no reliable publication date, so earlier and later cannot be told "
+            "apart. Evolution analysis on unreliable chronology is worse than no "
+            "evolution analysis._"
+        )
+        out.append("")
+    elif not synthesis.evolution:
         if tier is not None and not tier.allow_evolution:
             out.append(
                 f"_Not assessed: {tier.document_count} documents cannot separate a before "
@@ -594,14 +819,15 @@ def render_report(
         else:
             out.append("_No view changed inside this corpus. Not manufactured._")
         out.append("")
-    for evo in synthesis.evolution:
-        out.append(f"### {evo.topic}")
-        out.append("")
-        out.append(f"- **Earlier:** {evo.earlier}")
-        out.append(f"- **Later:** {evo.later}")
-        out.append(f"- **Inflection:** {evo.inflection or 'unclear'}")
-        out.append(f"- Evidence: {_cite(evo.evidence_ids, links)}")
-        out.append("")
+    if not dates_unreliable:
+        for evo in synthesis.evolution:
+            out.append(f"### {evo.topic}")
+            out.append("")
+            out.append(f"- **Earlier:** {evo.earlier}")
+            out.append(f"- **Later:** {evo.later}")
+            out.append(f"- **Inflection:** {evo.inflection or 'unclear'}")
+            out.append(f"- Evidence: {_cite(evo.evidence_ids, links)}")
+            out.append("")
 
     # ---- open questions --------------------------------------------------
     out.append("## Unresolved")
