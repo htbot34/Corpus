@@ -1747,6 +1747,40 @@ def budget_accuracy(limit: int = typer.Option(50, "--limit")) -> None:
     cache.close()
 
 
+@app.command()
+def serve(
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Loopback only. Anything else is refused: this serves without auth.",
+    ),
+    port: int = typer.Option(8765, "--port"),
+) -> None:
+    """Local web interface: form, dry-run gate, queue, history, audit log.
+
+    A thin wrapper over this CLI — every run it starts is a `corpus run`
+    with the same budget pre-flight, the same `.env`, and the same output,
+    streamed to the browser. Binds to the loopback interface only; there is
+    no authentication, deliberately, because there is no network exposure.
+    """
+    from .web.app import create_app, ensure_loopback
+    from .web.store import WebStore, default_web_db_path
+
+    try:
+        ensure_loopback(host)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(code=2) from exc
+
+    import uvicorn
+
+    store = WebStore()
+    echo(f"corpus web interface: http://{host}:{port}/")
+    echo(f"  queue and audit database: {default_web_db_path()}")
+    echo("  local only — not reachable from the network. Ctrl-C stops it.")
+    uvicorn.run(create_app(store), host=host, port=port, log_level="warning")
+
+
 def main() -> None:
     try:
         app()

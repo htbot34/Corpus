@@ -28,6 +28,16 @@ dependencies = [
     # which for a config that decides what the report analyzes is the wrong
     # failure mode.
     "pyyaml>=6.0",
+    # fastapi + uvicorn: `corpus serve`, the local web wrapper around this
+    # CLI. Regular dependencies rather than an extra so that `uv run corpus
+    # serve` is the whole setup for a non-technical user. The web layer is
+    # loopback-only and spawns `corpus run` subprocesses; it holds no
+    # pipeline logic of its own.
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    # python-multipart: starlette delegates ALL form parsing to it — including
+    # the plain urlencoded posts the web forms use — and raises without it.
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
@@ -35,6 +45,7 @@ corpus = "corpus.cli:app"
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.9.1",
     "pytest>=8.0",
     # types-PyYAML: without it `mypy --strict` reports a missing stub for
     # `import yaml` in corpus/axes.py. Stubs belong in the dev group rather

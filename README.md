@@ -81,6 +81,25 @@ corpus budget accuracy                  # how wrong --dry-run has been, historic
 corpus run --target janesmith --accept-unconfirmed out/janesmith/2026-08-03/unconfirmed.md
 ```
 
+### The local web interface
+
+```bash
+uv run corpus serve        # then open http://127.0.0.1:8765/
+```
+
+A thin wrapper over the CLI, for running the tool without a terminal: a
+new-run form (saved profiles are one click), the CLI's own `--dry-run`
+estimate as a mandatory confirmation screen before anything is spent, a
+one-at-a-time queue streaming the same progress lines the terminal prints,
+run history, an HTML report view (the verdict page opens first; the evidence
+is one click away), and an append-only audit log recording who ran what,
+when, at what spend, and the required free-text reason why.
+
+Every run it starts is a `corpus run` subprocess: same `.env`, same budget
+hard stop, same output. It binds to 127.0.0.1 only and refuses anything
+else — there is no authentication because there is deliberately no network
+exposure. Keys never reach the browser.
+
 ### Options that matter
 
 | Flag | Default | Notes |

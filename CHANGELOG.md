@@ -1611,3 +1611,57 @@ not — a stated refusal, not a silent gap. The kind mix is broken out per
 source and the report labels it that way ("github: reply 56%…"), because a
 GitHub "reply" is a review comment, not a timeline conversation. Overall
 counts survive for older signals.json shapes.
+
+---
+
+## 2026-08-04 — `corpus serve`: the CLI, wrapped, never reimplemented
+
+A local web interface, built as a wrapper in the strictest sense: every run
+it starts is a `corpus run` subprocess — same functions, same `.env`, same
+`Budget.reserve()` pre-flight, same output, streamed line by line into the
+browser. No pipeline logic exists in the web layer; if the CLI's behaviour
+changes, the web interface changes with it, automatically.
+
+What it adds, in `corpus/web/`:
+
+- **A form** (name, key, X handle, GitHub, site, employer, role, budget,
+  highlights cap; saved profiles are a one-click re-run), headed by the
+  visible statement that this tool profiles how someone thinks from their
+  public writing and is not for candidate screening or employment
+  decisions. A free-text reason is required.
+- **The dry-run gate.** Submitting runs the CLI's own `--dry-run` and shows
+  its estimate and source plan verbatim. The paid run starts only from that
+  screen's confirm button, carrying a per-proposal token — the only path to
+  `queued` in the store is a confirmed proposal, so posting directly at any
+  endpoint cannot start spending. This is the thing standing between a user
+  and an accidental $4.
+- **A serial queue.** One background worker, one run at a time; a failing
+  run is recorded in full — exit code, traceback, the CLI's own words — and
+  the queue moves on.
+- **History and report view.** report.md rendered by a converter that
+  handles exactly the markdown render.py emits (the same reasoning that
+  kept beautifulsoup out of the source adapters); the verdict page opens
+  first, the evidence is one `<details>` click away, evidence citations
+  keep their source links, and report.md / synthesis.json / corpus.json /
+  unconfirmed.md download from a four-name whitelist.
+- **An append-only audit log**: who (always "local", a column so real
+  identities later are a migration, not a redesign), target, timestamp,
+  spend, document count, tier, status, and the reason. The store has no
+  method that deletes from it, and a test pins that.
+
+Loopback only: `ensure_loopback` refuses any bind that is not 127.0.0.1 /
+localhost / ::1, at the CLI boundary, before anything starts. There is no
+authentication because there is deliberately no network exposure — the code
+does not pretend to have what it does not.
+
+New dependencies, all for the web layer: fastapi, uvicorn,
+python-multipart (starlette delegates all form parsing to it), and httpx2
+in the dev group for starlette's test client. SQLite (`web.db`) follows
+cache.py's pragmas. Keys never reach the browser, a URL, or a log — pinned
+by a test that plants sentinel values in the environment and reads every
+page.
+
+### Housekeeping
+
+- Test suite 871 → 889.
+- `make check` green.
