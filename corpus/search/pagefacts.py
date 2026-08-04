@@ -126,7 +126,7 @@ class PageFacts:
     text: str = ""
     links: list[str] = field(default_factory=list)
     #: The subset of `links` that sit in the page's own furniture — an author
-    #: or byline block, the header, the footer — rather than in body prose.
+    #: or byline block, an <address> — rather than in body prose.
     #: Where a page declares itself is worth more than what its prose mentions.
     declared_links: list[str] = field(default_factory=list)
     #: Declared authorship: meta tags, JSON-LD, feed <author>. Strong.
@@ -213,13 +213,22 @@ def _json_ld_authors(html: str) -> list[str]:
 
 
 # Elements whose links are the page's own furniture rather than its prose:
-# <header>, <footer> and <address> by name, anything else by an author or
-# byline word among its class/id/itemprop tokens. `rel="author"` marks the
-# link itself. Tokens rather than substrings, because "authorization-notice"
-# and "authoritative-guide" are prose wrappers, not bylines — while
+# <address> by name, anything else by an author or byline word among its
+# class/id/itemprop tokens. `rel="author"` marks the link itself. Tokens
+# rather than substrings, because "authorization-notice" and
+# "authoritative-guide" are prose wrappers, not bylines — while
 # "post-author", "entry-byline" and "byline__name" still match on their own
 # tokens, which is how real themes spell them.
-_FURNITURE_TAGS = {"header", "footer", "address"}
+#
+# <header> and <footer> are deliberately NOT here. They were, briefly — on
+# the reasoning that site chrome is self-identification — and the exemption
+# from the size cap that came with them let a stranger's footer blogroll
+# ("friends and people I read") declare the target's homepage and GitHub as
+# the page's own. Personal blogs are the entire population of pages that
+# link a researcher's homepage, and their blogrolls live in exactly those
+# unbounded footers. Real bylines and author bios are class-marked or in
+# <address>, which is what this parser is for.
+_FURNITURE_TAGS = {"address"}
 _FURNITURE_WORDS = {"author", "byline"}
 # The document element and <body> are never furniture, whatever their class
 # says: WordPress stamps `author author-<slug>` onto <body> on author archive
@@ -230,7 +239,7 @@ _ATTR_TOKENS = re.compile(r"[a-z0-9]+")
 
 #: A class-marked author/byline block whose text runs past this is a wrapper
 #: wearing the class, not a byline — real bylines and author bios run a line
-#: or three. <header>/<footer> are exempt; site footers are legitimately big.
+#: or three.
 _FURNITURE_TEXT_CAP = 400
 
 _VOID_TAGS = {
@@ -265,7 +274,7 @@ class _DeclaredLinkFinder(HTMLParser):
     """Which links sit in the page's own furniture?
 
     `html_to_text` collects every link on a page; this records the subset
-    found inside a header, footer, or author/byline block, because
+    found inside an author/byline block or an <address>, because
     `scoring.py` weighs a link the page carries while identifying itself
     differently from one its prose happens to mention.
 

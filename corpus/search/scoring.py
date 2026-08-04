@@ -481,12 +481,13 @@ def _anchor_link_signal(
     load-bearing — a declared field versus page prose (a GitHub `blog` field
     is a self-declaration; a link in a README body is prose) — applied one
     level down. A page that carries the link in its own furniture (an author
-    or byline block, the header, the footer), or that links their GitHub
-    *and* declares their handle as its own author, is identifying itself as
+    or byline block, an <address>), or that links their GitHub *and*
+    declares their handle as its own author, is identifying itself as
     theirs: strong, and on its own enough to promote. A bare link in body
     prose is how a stranger's page mentions a person — a post *about*
     someone links their profiles too — so it corroborates without promoting
-    alone: moderate.
+    alone: moderate. A link in a <header> or <footer> is prose here too: a
+    blogroll in a stranger's footer is not the page identifying itself.
 
     Returns the signal and whether it spent the page's handle declaration.
     A strong link that exists only because of the declaration must not let
@@ -497,7 +498,7 @@ def _anchor_link_signal(
         return Signal(
             "links_to_anchor",
             STRONG,
-            f"the page links to {placed} from its own author/byline/header/footer block",
+            f"the page links to {placed} from its own author/byline block",
         ), False
     declared = sorted({h.lower() for h in facts.handles} & _anchor_handles(card))
     if declared:

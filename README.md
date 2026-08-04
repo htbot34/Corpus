@@ -255,7 +255,7 @@ read, argued with, and tested for free.
 
 | Signal | Weight |
 | --- | --- |
-| Page links to a known anchor from its own author/byline/header/footer block, or while declaring the anchor handle as its own | strong |
+| Page links to a known anchor from its own author/byline block (or `<address>`), or while declaring the anchor handle as its own | strong |
 | Page links to a known anchor from body prose only | moderate |
 | Domain is or subdomains an anchor domain | strong |
 | Structured author metadata matches the name (`<meta name="author">`, JSON-LD, OpenGraph, feed `<author>`) | strong |
@@ -269,7 +269,10 @@ The anchor-link split is the declared-field-versus-page-prose distinction the
 attribution model already treats as load-bearing, applied one level down: a
 GitHub `blog` field is a self-declaration, a link in a README body is prose.
 A page that carries the link while identifying itself is very likely theirs; a
-stranger's post *about* them links their GitHub too.
+stranger's post *about* them links their GitHub too. `<header>` and `<footer>`
+deliberately do not count as self-identification: blogrolls and "people I
+read" lists live in footers, and the pages that link a researcher's homepage
+are mostly other people's blogs.
 
 The negatives are the half that makes it work, because **absence of confirmation
 is not the same as presence of contradiction** and a scorer with only positive
@@ -295,7 +298,7 @@ moderate 1, a weak 0.5, and 2.0 points with no negatives → `corroborated`, and
 ingested. One strong self-declaration is enough; so are two moderate
 agreements; anything less → `name_match`, and held. (A count of two was
 backwards — it promoted two moderate agreements while holding a page whose own
-footer links their GitHub.)
+byline links their GitHub.)
 **`linked` is unreachable from search by construction**: it means "reached from
 a declared field on an anchor", and no quantity of search evidence turns into a
 self-declaration.

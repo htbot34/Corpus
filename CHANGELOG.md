@@ -1377,3 +1377,39 @@ nobody looks. Verified by re-running the whole suite under a scratch `HOME`:
 
 - Test suite 816 → 817, still all offline — and now provably so for the
   cache, not just the network.
+
+---
+
+## 2026-08-04 — Footers are where blogrolls live
+
+A live reproduction against HEAD: a stranger's essay on variational inference,
+with a footer reading "Friends and people I read" linking the target's
+homepage and GitHub, scored `corroborated` at 0.6 confidence and would have
+been ingested as the target's own writing. It scored `held` before the
+weight change, so this was a regression introduced by it.
+
+The cause was the one exemption left in the furniture detector: `<header>`
+and `<footer>` counted as self-identification by tag name, exempt from the
+400-character cap on the reasoning that site footers are legitimately big.
+They are — and blogrolls, "people I read" and "friends" lists live in exactly
+those unbounded footers, on personal blogs, which are the entire population
+of pages that link a researcher's homepage.
+
+The fix is a deletion: `header` and `footer` are out of `_FURNITURE_TAGS`.
+`<address>` stays, the class/id/itemprop token markers stay with their cap,
+`rel="author"` stays, and every guard from the adversarial review stays. The
+case the tags bought — a person's own footer linking their own GitHub — is
+worth little, because that page also carries a byline or a declared handle;
+the case they cost was every blogroll on the web.
+
+Both reproductions are pinned as tests, and `scripts/verify_fix.py` runs them
+with no arguments and no network, printing PASS or FAIL in plain English, so
+the fix can be confirmed on any machine in one command.
+
+### Housekeeping
+
+- Test suite 823 → 825, still all offline.
+- Known intermittent, recorded so it is not forgotten:
+  `tests/test_discovery_cli.py::test_discovered_documents_carry_why_they_were_believed`
+  fails roughly twice in fifteen full runs and is not reproducible on demand.
+  Not investigated here.

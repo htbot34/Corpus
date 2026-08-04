@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from corpus.identity import IdentityCard
+from corpus.identity import IdentityCard, build_card
 from corpus.models import ATTRIBUTION_CONFIDENCE
 from corpus.search.pagefacts import extract_facts, facts_from_snippet, name_matches
 from corpus.search.scoring import (
@@ -423,11 +423,12 @@ def test_two_moderate_signals_still_promote() -> None:
 
 
 def test_one_strong_signal_from_the_pages_own_furniture_promotes() -> None:
-    """The fix, from the passing side: a footer link to their GitHub is the
-    page identifying itself, worth 2.0 points on its own."""
+    """The fix, from the passing side: a byline-block link to their GitHub is
+    the page identifying itself, worth 2.0 points on its own."""
     facts = extract_facts(
         "<html><body><p>Jane Smith on rubrics, and why the rubric comes first.</p>"
-        '<footer><a href="https://github.com/jsmith">GitHub</a></footer></body></html>',
+        '<div class="post-author">By <a href="https://github.com/jsmith">jsmith</a></div>'
+        "</body></html>",
         "https://thinking.example/post",
     )
     score = score_candidate(facts, card())
@@ -482,12 +483,13 @@ def test_a_page_that_declares_the_handle_makes_the_anchor_link_strong() -> None:
 
 def test_about_not_by_short_circuits_the_single_strong_signal_path() -> None:
     """Every promotion path, including the new one, sits behind the negatives.
-    An interview page with a furniture link to their GitHub is still a page
-    about them."""
+    An interview page with a byline-block link to their GitHub is still a
+    page about them."""
     facts = extract_facts(
         "<html><head><title>Interview with Jane Smith</title></head>"
         "<body><p>Jane Smith of Acme Corp answers our questions.</p>"
-        '<footer><a href="https://github.com/jsmith">her GitHub</a></footer></body></html>',
+        '<div class="post-author"><a href="https://github.com/jsmith">her GitHub</a></div>'
+        "</body></html>",
         "https://podcast.example/episodes/42",
     )
     score = score_candidate(facts, card())
@@ -500,7 +502,8 @@ def test_about_not_by_short_circuits_the_single_strong_signal_path() -> None:
 def test_citation_only_short_circuits_the_single_strong_signal_path() -> None:
     facts = extract_facts(
         "<html><body><p>A wonderful piece, via Jane Smith.</p>"
-        '<footer><a href="https://github.com/jsmith">source</a></footer></body></html>',
+        '<div class="post-author"><a href="https://github.com/jsmith">source</a></div>'
+        "</body></html>",
         "https://someone-else.example/links",
     )
     score = score_candidate(facts, card())
@@ -511,18 +514,82 @@ def test_citation_only_short_circuits_the_single_strong_signal_path() -> None:
 
 
 def test_declared_links_are_the_pages_furniture_not_its_prose() -> None:
-    """The extraction the placement judgement rests on: links in author,
-    byline, header and footer blocks are kept apart from links in body
-    prose."""
+    """The extraction the placement judgement rests on: links in author and
+    byline blocks and in <address> are kept apart from links in body prose —
+    and a footer is body prose, because blogrolls live there."""
     facts = extract_facts(
         '<html><body><div class="byline">By <a href="https://github.com/jsmith">jsmith</a></div>'
         '<p>See also <a href="https://github.com/other">someone else</a>.</p>'
-        '<footer><a href="https://janesmith.com">home</a></footer></body></html>',
+        '<address><a href="https://janesmith.com">home</a></address>'
+        '<footer><a href="https://blogroll.example/friend">a friend</a></footer></body></html>',
         "https://thinking.example/post",
     )
 
     assert facts.declared_links == ["https://github.com/jsmith", "https://janesmith.com"]
     assert "https://github.com/other" in facts.links
+    assert "https://blogroll.example/friend" in facts.links
+
+
+BLOGROLL_PAGE = """<html><body><article><h1>Notes on variational inference</h1>
+<p>Dustin Tran's work on Edward is the obvious starting point, and I want to
+write down what I took from it. The rest is my own confusion, worked through
+slowly, with no particular authority behind it.</p></article>
+<footer><h3>Friends and people I read</h3><ul>
+<li><a href="https://dustintran.com">Dustin Tran</a></li>
+<li><a href="https://github.com/dustinvtran">his github</a></li>
+<li><a href="https://example.org/someone">Someone Else</a></li>
+</ul></footer></body></html>"""
+
+
+def blogroll_card() -> IdentityCard:
+    return build_card(
+        name="Dustin Tran",
+        key="dustinw",
+        x="dustinvtran",
+        github="dustinvtran",
+        site="https://dustintran.com",
+    )
+
+
+def test_a_strangers_footer_blogroll_must_not_ingest_the_page() -> None:
+    """The live reproduction, verbatim: a stranger's essay whose footer
+    blogroll ("friends and people I read") links the target's homepage and
+    GitHub. When <footer> counted as the page's own furniture, those links
+    scored strong, the page corroborated at 2.0 points, and someone else's
+    confusion entered the corpus as the target's writing at 0.6 confidence.
+    A footer is where blogrolls live; it is never self-identification."""
+    facts = extract_facts(BLOGROLL_PAGE, "https://randomblog.example/vi-notes")
+    score = score_candidate(facts, blogroll_card())
+
+    assert score.outcome == "held"
+    assert not score.ingestible
+
+
+def test_a_bigger_footer_blogroll_is_still_not_self_identification() -> None:
+    """Same shape, five footer links to five different hosts, one of them the
+    target's. More company in the blogroll must not change the verdict."""
+    links = "".join(
+        f'<li><a href="{href}">someone</a></li>'
+        for href in (
+            "https://dustintran.com",
+            "https://alice.example",
+            "https://bob.example/blog",
+            "https://carol.example",
+            "https://dave.example/notes",
+        )
+    )
+    page_html = BLOGROLL_PAGE.replace(
+        '<li><a href="https://dustintran.com">Dustin Tran</a></li>\n'
+        '<li><a href="https://github.com/dustinvtran">his github</a></li>\n'
+        '<li><a href="https://example.org/someone">Someone Else</a></li>',
+        links,
+    )
+    assert 'href="https://alice.example"' in page_html, "the replace must have applied"
+    facts = extract_facts(page_html, "https://randomblog.example/vi-notes")
+    score = score_candidate(facts, blogroll_card())
+
+    assert score.outcome == "held"
+    assert not score.ingestible
 
 
 def test_a_wordpress_author_body_class_does_not_make_the_page_furniture() -> None:
