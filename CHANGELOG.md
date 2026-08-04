@@ -1413,3 +1413,40 @@ the fix can be confirmed on any machine in one command.
   `tests/test_discovery_cli.py::test_discovered_documents_carry_why_they_were_believed`
   fails roughly twice in fifteen full runs and is not reproducible on demand.
   Not investigated here.
+
+---
+
+## 2026-08-04 — A dying X provider degrades the run; it does not end it
+
+A live run on `simonw` crashed with the provider's free-tier QPS limit:
+
+    ProviderError: /twitter/tweet/advanced_search failed after 5 attempts:
+    429 ... {"error":"Too Many Requests","message":"For free-tier users, the
+    QPS limit is one request every 5 seconds."}
+
+At that moment the run held 215 documents from 36 non-X sources, at zero
+cost — a rich-tier corpus — and discarded all of it. `ingest_timeline()` was
+called with no exception guard, so the ProviderError walked straight up to
+the CLI and aborted the run.
+
+That violates the constraint every other source already honours: adapters
+never raise to the CLI — they return ok/partial/failed and the run degrades
+with an honest report. X was the one source that could still kill a run.
+
+Now a ProviderError during ingest marks X `failed` (or `partial`, when the
+checkpoints had already banked posts — those are recovered from the manifest
+ids and the permanent cache rather than re-paid for), records the reason in
+`ingest_meta` and the report's coverage block, and the run continues on
+whatever the other sources produced. The manifest is deliberately not marked
+`ingest_complete`, so a later run resumes the walk from the saved frontier.
+Hydration gets the same guard: after a rate-limited ingest, the batch-lookup
+call is exactly the next one that would have crashed, and un-hydrated
+documents were already worth keeping under a spent budget. If no source
+produced anything, the run still exits with "nothing to synthesize" — and
+that gate now asks whether the other sources *produced documents*, not
+whether discovery merely proposed candidates.
+
+Pinned end to end: a CLI run whose provider raises the live 429 on every
+timeline call still synthesizes from RSS documents, reports
+`x_status: failed` in signals.json, states the loss in the coverage block,
+and leaves the manifest resumable.

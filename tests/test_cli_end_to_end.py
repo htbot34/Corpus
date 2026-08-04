@@ -28,7 +28,9 @@ from fake_search import SilentSearchProvider
 from typer.testing import CliRunner
 
 from corpus import cli as cli_module
+from corpus.cache import Cache
 from corpus.cli import app
+from corpus.x.providers import ProviderError
 
 runner = CliRunner()
 
@@ -406,3 +408,91 @@ def test_an_unknown_log_format_is_rejected(wired) -> None:
         ["run", "--x", "testsubject", "--out", str(wired["out"]), "--log-format", "yaml"]
     )
     assert result.exit_code == 2
+
+
+# ==========================================================================
+# A dying X provider degrades the run; it does not end it
+# ==========================================================================
+
+RATE_LIMIT_ERROR = (
+    "/twitter/tweet/advanced_search failed after 5 attempts: 429 "
+    '{"error":"Too Many Requests","message":"For free-tier users, the QPS '
+    'limit is one request every 5 seconds."}'
+)
+
+FEED_URL = "https://blog.example.com/feed"
+FEED_XML = """<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Blog</title>
+  <item>
+    <title>On rubrics</title>
+    <link>https://blog.example.com/rubrics</link>
+    <pubDate>Tue, 12 Mar 2024 10:00:00 +0000</pubDate>
+    <description>An argument, at length, about rubrics and why they beat
+    interviews for hiring engineers, with the failure modes of each spelled
+    out and weighed against the other.</description>
+    <guid>https://blog.example.com/rubrics</guid>
+  </item>
+  <item>
+    <title>On evals</title>
+    <link>https://blog.example.com/evals</link>
+    <pubDate>Wed, 12 Jun 2024 10:00:00 +0000</pubDate>
+    <description>Ground truth is the hard part of every evaluation, and most
+    teams discover that only after the harness is built and trusted.</description>
+    <guid>https://blog.example.com/evals</guid>
+  </item>
+</channel></rss>"""
+
+
+class RateLimitedProvider(FakeProvider):
+    """The live simonw failure: the profile read works, then every timeline
+    request dies on the provider's free-tier QPS limit."""
+
+    def advanced_search(self, query: str, cursor: str | None = None):  # type: ignore[no-untyped-def]
+        raise ProviderError(RATE_LIMIT_ERROR)
+
+    def last_tweets(self, handle: str, cursor: str | None = None):  # type: ignore[no-untyped-def]
+        raise ProviderError(RATE_LIMIT_ERROR)
+
+
+def test_a_dead_x_provider_degrades_the_run_instead_of_killing_it(wired, monkeypatch) -> None:
+    """The load-bearing constraint, proven at the CLI: adapters never raise to
+    the CLI — they degrade, and the run reports it. On the live run this
+    reproduces, the crash discarded 215 free documents from 36 non-X sources.
+    """
+    monkeypatch.setattr(cli_module, "get_provider", lambda **_: RateLimitedProvider())
+    seed = Cache()  # CORPUS_CACHE_DB points at the wired scratch db
+    seed.put("rss", f"rss:{FEED_URL}", FEED_XML)
+    seed.close()
+
+    result = invoke(
+        [
+            "run",
+            "--x",
+            "testsubject",
+            "--rss",
+            FEED_URL,
+            "--out",
+            str(wired["out"]),
+            "--yes",
+            *REACH_FIXTURES,
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    directory = outputs(wired["out"])
+    documents = json.loads((directory / "corpus.json").read_text())
+    assert documents, "the non-X documents were discarded along with the failed source"
+    assert all(d["source"] != "x" for d in documents)
+
+    signals = json.loads((directory / "signals.json").read_text())
+    assert signals["ingest"]["x_status"] == "failed"
+    assert "Too Many Requests" in signals["ingest"]["x_failure"]
+
+    assert (directory / "synthesis.json").exists(), (
+        "the run must still synthesize from the non-X documents"
+    )
+    report = (directory / "report.md").read_text()
+    assert "The X source failed" in report, "the coverage block must say what was lost"
+
+    manifest = json.loads((directory / "run.json").read_text())
+    assert manifest["ingest_complete"] is False, "a later run must resume the X walk"

@@ -305,6 +305,19 @@ def render_report(
         )
 
     ingest = run_meta.get("ingest", {})
+    # A run that lost its X source mid-way must say so before any number
+    # below, because every count and every axis is missing that timeline.
+    if ingest.get("x_failure"):
+        lost = (
+            "its timeline is **absent from this corpus**"
+            if ingest.get("x_status") == "failed"
+            else "its timeline is **incomplete in this corpus**"
+        )
+        caveats.append(
+            f"- **The X source {ingest.get('x_status', 'failed')}** and {lost}: "
+            f"{ingest['x_failure']} The run continued on the other sources, and "
+            "a later run will resume the X walk from the saved checkpoint."
+        )
     if ingest.get("empty_windows"):
         ranges = ", ".join(f"{a}..{b}" for a, b in ingest.get("empty_window_ranges", [])[:6])
         caveats.append(

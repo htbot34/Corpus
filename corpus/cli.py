@@ -418,6 +418,10 @@ def run(
     profile: dict[str, Any] = {}
     public_posts = 0
     post_target = 0
+    # Why the X source failed, when it did. Empty means it did not. The status
+    # is "partial" when the checkpoints had already banked some posts.
+    x_failure = ""
+    x_status = "ok"
 
     if handle and offline:
         cached = cache.get("x", f"corpus:{handle.lower()}")
@@ -630,30 +634,66 @@ def run(
             manifest.prior_spend = budget.total
             manifest.save(out_dir)
 
-        raw_tweets, ingest_stats = ingest_timeline(
-            client,
-            handle,
-            since=since_dt,
-            max_posts=max_posts,
-            window_days=window_days,
-            empty_window_tolerance=empty_window_tolerance,
-            max_pages=max_pages,
-            include_replies=replies,
-            probe_enabled=hiatus_probe,
-            # statusesCount from the profile, so the report can say
-            # "400 of 53,901" instead of leaving it to be inferred.
-            public_post_count=public_posts or None,
-            resume_until_ts=manifest.until_ts if not manifest.ingest_complete else None,
-            resume_seen=resume_seen or None,
-            on_progress=_checkpoint,
-            log=echo,
-        )
-        cache.put("x", f"corpus:{handle.lower()}", raw_tweets)
-        manifest.ingest_complete = True
-        manifest.raw_tweet_ids = [t.get("id") or t.get("id_str") or "" for t in raw_tweets]
-        manifest.ingest_stats = ingest_stats.as_dict()
-        manifest.prior_spend = budget.total
-        manifest.save(out_dir)
+        try:
+            raw_tweets, ingest_stats = ingest_timeline(
+                client,
+                handle,
+                since=since_dt,
+                max_posts=max_posts,
+                window_days=window_days,
+                empty_window_tolerance=empty_window_tolerance,
+                max_pages=max_pages,
+                include_replies=replies,
+                probe_enabled=hiatus_probe,
+                # statusesCount from the profile, so the report can say
+                # "400 of 53,901" instead of leaving it to be inferred.
+                public_post_count=public_posts or None,
+                resume_until_ts=manifest.until_ts if not manifest.ingest_complete else None,
+                resume_seen=resume_seen or None,
+                on_progress=_checkpoint,
+                log=echo,
+            )
+        except ProviderError as exc:
+            # The load-bearing constraint: a source that dies degrades the
+            # run, it does not end it. Every non-X adapter already returns a
+            # status instead of raising; X was the one that could still kill
+            # a run from inside ingest — and on the run that exposed it, a
+            # rate-limited provider discarded 215 free documents from 36
+            # other sources.
+            #
+            # What was already paid for is recoverable: `_checkpoint` has
+            # been writing ids into the manifest as the walk went, and every
+            # fetched tweet is in the permanent cache. The manifest is
+            # deliberately NOT marked ingest_complete, so a later run
+            # resumes the walk from the saved frontier.
+            from .x.ingest import IngestStats
+
+            x_failure = str(exc)
+            raw_tweets = [
+                tweet
+                for tid in manifest.raw_tweet_ids
+                if (tweet := cache.get("x", f"tweet:{tid}")) is not None
+            ]
+            x_status = "partial" if raw_tweets else "failed"
+            ingest_stats = IngestStats(
+                fetched=len(raw_tweets),
+                unique=len(raw_tweets),
+                public_post_count=public_posts or None,
+                stop_reason=f"the X provider failed: {x_failure}",
+            )
+            error(f"X ingestion {x_status}: {x_failure}")
+            warn(
+                f"recovered {len(raw_tweets)} already-paid-for post(s) from the "
+                "checkpoint; continuing on what the other sources produced. A "
+                "later run will resume the X walk where this one stopped."
+            )
+        else:
+            cache.put("x", f"corpus:{handle.lower()}", raw_tweets)
+            manifest.ingest_complete = True
+            manifest.raw_tweet_ids = [t.get("id") or t.get("id_str") or "" for t in raw_tweets]
+            manifest.ingest_stats = ingest_stats.as_dict()
+            manifest.prior_spend = budget.total
+            manifest.save(out_dir)
 
     if dry_run:
         echo("--dry-run with --offline: nothing to estimate.")
@@ -673,6 +713,11 @@ def run(
             if not offline
             else {"stop_reason": "loaded from cache (--offline)"}
         )
+        if x_failure:
+            # The report's coverage block reads these; a run that lost its X
+            # source must say so where the reader decides how much to trust.
+            ingest_meta["x_status"] = x_status
+            ingest_meta["x_failure"] = x_failure
         share = ingest_meta.get("ingested_share")
         total_known = ingest_meta.get("public_post_count")
         if share is not None and total_known:
@@ -686,9 +731,12 @@ def run(
 
         if not raw_tweets:
             error("no posts ingested from X.")
-            if not discovery.candidates:
+            # `other` holds the documents the non-X sources actually produced,
+            # which is the question here — candidates that produced nothing
+            # cannot carry a run.
+            if not other:
                 raise typer.Exit(code=1)
-            warn("continuing on the discovered sources alone")
+            warn("continuing on the other sources alone")
 
         # ---- hydrate -----------------------------------------------------
         if raw_tweets:
@@ -706,16 +754,21 @@ def run(
                     include_replies=replies,
                     log=echo,
                 )
-            except BudgetExceeded as exc:
-                # Un-hydrated documents are still worth keeping — we paid for them.
-                echo(f"  [budget] {exc} — continuing with un-hydrated documents")
+            except (BudgetExceeded, ProviderError) as exc:
+                # Un-hydrated documents are still worth keeping — we paid for
+                # them. A dying provider is handled like a spent budget here:
+                # hydration is a bonus pass, never the reason a run ends —
+                # and after a rate-limited ingest it is exactly the next call
+                # that would have crashed.
+                label = "budget" if isinstance(exc, BudgetExceeded) else "provider"
+                echo(f"  [{label}] {exc} — continuing with un-hydrated documents")
                 from .x.client import normalize_tweet
 
                 docs = [normalize_tweet(t) for t in raw_tweets]
                 hyd_stats = HydrationStats(
                     input_documents=len(raw_tweets),
                     output_documents=len(docs),
-                    notes=["budget exhausted before hydration completed; context is missing"],
+                    notes=[f"hydration stopped early ({label}: {exc}); context is missing"],
                 )
             echo("")
 
