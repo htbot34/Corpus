@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 
 from ..cache import Cache
-from ..models import ATTRIBUTION_CONFIDENCE, Attribution, Document
+from ..models import ATTRIBUTION_CONFIDENCE, DATE_UNKNOWN, Attribution, Document
 from ..redact import RedactingError
 
 USER_AGENT = "corpus/0.1 (personal research tool; +https://github.com/)"
@@ -149,12 +149,23 @@ def html_to_text(html: str) -> tuple[str, list[str]]:
     return text.strip(), list(dict.fromkeys(parser.links))
 
 
-def parse_date(value: Any) -> datetime:
+def parse_date(value: Any) -> datetime | None:
+    """A datetime from whatever a source carries, or None when it carries none.
+
+    None, never the clock. This function used to fall back to
+    `datetime.now()` twice — on empty input and on unparseable input — which
+    is the same silent-clock bug previously dug out of the X timestamp
+    parser, and here it stamped every document on a live run with the run
+    date: fake slice spans, a fake date cluster, and "what moved" entries
+    whose Later predated their Earlier. The clock is not a publication date.
+    A caller that gets None records the date as unknown (`make_document`
+    does this) rather than inventing one.
+    """
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc)
     text = str(value or "").strip()
     if not text:
-        return datetime.now(tz=timezone.utc)
+        return None
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
@@ -170,7 +181,7 @@ def parse_date(value: Any) -> datetime:
     try:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
-        return datetime.now(tz=timezone.utc)
+        return None
 
 
 def make_document(
@@ -179,7 +190,7 @@ def make_document(
     source_id: str,
     url: str,
     author_handle: str,
-    published_at: datetime,
+    published_at: datetime | None,
     title: str,
     body: str,
     links: list[str],
@@ -197,7 +208,10 @@ def make_document(
         source_id=source_id,
         url=url,
         author_handle=author_handle,
-        published_at=published_at,
+        # None means no date could be established, and it stays established-
+        # nothing: DATE_UNKNOWN plus the flag, never the clock.
+        published_at=published_at if published_at is not None else DATE_UNKNOWN,
+        date_unknown=published_at is None,
         kind="original",
         body=text,
         engagement={},

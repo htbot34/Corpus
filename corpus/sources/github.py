@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..cache import Cache
-from ..models import Document
+from ..models import DATE_UNKNOWN, Document
 from .base import SourceError, http_client, parse_date
 
 API = "https://api.github.com"
@@ -256,12 +256,16 @@ def _document(
     context_url: str | None,
     raw: dict[str, Any],
 ) -> Document:
+    when = parse_date(published)
     return Document(
         source="github",
         source_id=source_id,
         url=url,
         author_handle=author,
-        published_at=parse_date(published),
+        # A GitHub payload without a timestamp yields an unknown date, stated
+        # as such — never approximated with the clock.
+        published_at=when if when is not None else DATE_UNKNOWN,
+        date_unknown=when is None,
         kind="reply" if context else "original",
         body=body.strip(),
         context=context,
@@ -328,9 +332,10 @@ class GitHubSource:
         unique.sort(key=lambda d: d.published_at, reverse=True)
         unique = unique[:limit]
 
-        if unique:
-            stats.earliest = min(d.published_at for d in unique).strftime("%Y-%m-%d")
-            stats.latest = max(d.published_at for d in unique).strftime("%Y-%m-%d")
+        dated = [d for d in unique if not d.date_unknown]
+        if dated:
+            stats.earliest = min(d.published_at for d in dated).strftime("%Y-%m-%d")
+            stats.latest = max(d.published_at for d in dated).strftime("%Y-%m-%d")
         stats.notes.extend(reader.errors[:5])
         self._add_coverage_notes(stats)
         log(f"  github: {stats.summary_line()}")

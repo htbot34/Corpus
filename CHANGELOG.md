@@ -1480,3 +1480,40 @@ The retry tests construct the provider with the throttle off — they test
 the retry *decisions*, and the throttle would add its own sleeps to every
 count — and the throttle has its own section pinning the default, the
 override, the every-endpoint coverage, and that retries are spaced too.
+
+---
+
+## 2026-08-04 — The clock is not a publication date
+
+Every simonwillison.net document on the simonw-nox run carried
+`published_at = 2026-08-04` — the run date. The page carried its real date
+(16th July 2026) in four places: the `/2026/Jul/16/` URL path,
+`og:updated_time` as unix seconds, visible "Posted 16th July 2026" text, and
+a dated archive link. The old web parser read one meta shape, found nothing,
+and `parse_date` fell back to `datetime.now()` — the same silent-clock bug
+previously dug out of the X timestamp parser, alive in the web path, where
+it corrupts output instead of spinning a loop. Six of fifteen map slices
+collapsed into a fake one-day bucket, the coverage block manufactured a
+2026-07/08 cluster, and two "what moved" entries came out inverted.
+
+Three changes, in order of importance:
+
+- **`parse_date` returns None instead of the clock**, on empty and on
+  unparseable input both. Every adapter now records a missing date as
+  missing.
+- **`Document.date_unknown` is an explicit state**, not a sentinel.
+  `published_at` holds the epoch placeholder (`DATE_UNKNOWN`) so the
+  newest-first sort sinks it, but the flag is the truth, it survives
+  corpus.json round trips, and old corpora load with dates known. Date
+  arithmetic — `date_range`, cadence, hiatuses, vocabulary buckets, GitHub
+  span stats — runs over dated documents only, with
+  `date_unknown_documents` counted in signals.json.
+- **The web source resolves dates through a chain**: JSON-LD
+  `datePublished`/`dateModified`, the date meta tags (unix seconds or ISO),
+  `<time datetime>`, a date in the URL path (`/2026/Jul/16/` or
+  `/2026/07/16/`), visible "Posted 16th July 2026" prose. Each form is
+  pinned by a fixture test; a page with none of them is unknown, and the log
+  says so at fetch time.
+
+The full clock audit — every `datetime.now()`, `utcnow()`, `date.today()`
+and `time.time()` in the tree, with verdicts — is in the commit message.

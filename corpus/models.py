@@ -12,12 +12,19 @@ mouth said has been cut.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 DocKind = Literal["original", "thread", "reply", "quote", "repost", "media_only"]
+
+#: What `published_at` holds when the real date could not be established.
+#: The epoch rather than the fetch time, because under the newest-first sort a
+#: document of unknown date must never surface as the most recent thing the
+#: subject wrote — a clock is not a publication date. `date_unknown` is the
+#: authoritative flag: code branches on it, never on this value.
+DATE_UNKNOWN = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 # How sure are we that this document was written by the person we are reading?
 #
@@ -63,6 +70,13 @@ class Document(BaseModel):
     url: str
     author_handle: str
     published_at: datetime
+    #: True when no publication date could be established for this document.
+    #: `published_at` then holds `DATE_UNKNOWN` so the newest-first sort puts
+    #: it last, but the flag is the truth: an unknown date is a fact about the
+    #: document, and substituting the run date for it corrupted a live run's
+    #: entire chronology — slice spans, the date-cluster claim, and both
+    #: directions of "what moved".
+    date_unknown: bool = False
     kind: DocKind
     body: str  # for threads, all parts concatenated
     context: str | None = None  # parent tweet or quoted tweet text, verbatim
@@ -113,6 +127,7 @@ class Thread(BaseModel):
             url=root.url,
             author_handle=root.author_handle,
             published_at=root.published_at,
+            date_unknown=root.date_unknown,
             kind="thread" if len(self.parts) > 1 else root.kind,
             body="\n\n".join(p.body for p in self.parts if p.body.strip()),
             # A thread root can itself be a reply to someone else; keep that context.

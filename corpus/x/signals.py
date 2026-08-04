@@ -172,6 +172,10 @@ def _median(values: Iterable[float]) -> float:
 
 def cadence(docs: list[Document]) -> dict[str, Any]:
     """Posts per month over the full range, plus bursts and 14+ day hiatuses."""
+    # An unknown date carries the epoch placeholder; counting it would open a
+    # decades-long fake hiatus. Cadence is about documents that have a place
+    # in time.
+    docs = [d for d in docs if not d.date_unknown]
     if not docs:
         return {
             "posts_per_month": {},
@@ -371,7 +375,9 @@ def vocabulary_drift(docs: list[Document]) -> list[dict[str, Any]]:
 
     buckets: dict[str, list[str]] = defaultdict(list)
     for doc in docs:
-        if doc.kind == "media_only":
+        if doc.kind == "media_only" or doc.date_unknown:
+            # A document with no date has no bucket; guessing one would put
+            # its vocabulary in a period the subject may never have used it.
             continue
         half = 1 if doc.published_at.month <= BUCKET_MONTHS else 2
         label = f"{doc.published_at.year}-H{half}"
@@ -415,18 +421,26 @@ def vocabulary_drift(docs: list[Document]) -> list[dict[str, Any]]:
 def compute_signals(docs: list[Document], extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything above, in one JSON-serializable dict."""
     synth = [d for d in docs if d.kind in SYNTHESIZABLE_KINDS]
-    dates = sorted(d.published_at for d in docs)
+    # Every date computation runs over the documents whose dates are real.
+    # An unknown date is recorded (`date_unknown_documents`), never averaged
+    # in: its placeholder is the epoch, and one such document would stretch
+    # every range and gap back to 1970.
+    dated = [d for d in docs if not d.date_unknown]
+    dates = sorted(d.published_at for d in dated)
     date_range = (
-        f"{dates[0].strftime('%Y-%m-%d')} to {dates[-1].strftime('%Y-%m-%d')}" if dates else "empty"
+        f"{dates[0].strftime('%Y-%m-%d')} to {dates[-1].strftime('%Y-%m-%d')}"
+        if dates
+        else ("all dates unknown" if docs else "empty")
     )
     signals: dict[str, Any] = {
         "author_handle": docs[0].author_handle if docs else "",
         "date_range": date_range,
         "total_documents": len(docs),
         "synthesizable_documents": len(synth),
-        # Cadence counts every document, media-only included: silence and
-        # low-effort posting are both real signals about tempo.
-        "cadence": cadence(docs),
+        "date_unknown_documents": len(docs) - len(dated),
+        # Cadence counts every dated document, media-only included: silence
+        # and low-effort posting are both real signals about tempo.
+        "cadence": cadence(dated),
         "kind_mix": kind_mix(docs),
         "conversation_graph": conversation_graph(docs),
         "outbound_domains": outbound_domains(docs),
