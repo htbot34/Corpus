@@ -865,23 +865,43 @@ def render_report(
     )
     out.append("")
     cadence = signals.get("cadence", {})
-    out.append(
-        f"- Cadence: {cadence.get('mean_posts_per_month', 0)} posts/month mean, "
-        f"{cadence.get('median_posts_per_month', 0)} median across "
-        f"{cadence.get('active_months', 0)} active months "
-        f"({cadence.get('silent_months', 0)} silent)"
-    )
+    if cadence.get("omitted"):
+        # Not a gap: a stated refusal. "2.82 posts/month, 0 median" over a
+        # pile of scraped pages measured the fetcher, not the subject.
+        out.append(f"- Cadence: not computed — {cadence['omitted']}")
+    elif cadence:
+        out.append(
+            f"- Cadence (X timeline): {cadence.get('mean_posts_per_month', 0)} "
+            f"posts/month mean, {cadence.get('median_posts_per_month', 0)} median "
+            f"across {cadence.get('active_months', 0)} active months "
+            f"({cadence.get('silent_months', 0)} silent)"
+        )
     if cadence.get("hiatuses"):
         top = cadence["hiatuses"][0]
         out.append(
             f"- Longest hiatus: {top['days']} days ({top['from']} → {top['to']}); "
             f"{len(cadence['hiatuses'])} gaps of 14+ days total"
         )
-    mix = signals.get("kind_mix", {}).get("shares", {})
-    if mix:
+    kind = signals.get("kind_mix", {})
+    by_source = kind.get("by_source") or {}
+    if by_source:
+        # Per source, because the kinds mean different things per platform:
+        # a GitHub "reply" is a review comment, not a timeline conversation.
+        parts = []
+        for source in sorted(by_source):
+            shares = by_source[source].get("shares", {})
+            inner = ", ".join(
+                f"{k} {v:.0%}" for k, v in sorted(shares.items(), key=lambda x: -x[1])
+            )
+            parts.append(f"{source}: {inner}")
+        out.append("- Kind mix, per source — " + "; ".join(parts))
+    elif kind.get("shares"):
+        # signals.json written before the per-source split existed.
         out.append(
             "- Kind mix: "
-            + ", ".join(f"{k} {v:.0%}" for k, v in sorted(mix.items(), key=lambda x: -x[1]))
+            + ", ".join(
+                f"{k} {v:.0%}" for k, v in sorted(kind["shares"].items(), key=lambda x: -x[1])
+            )
         )
     graph = signals.get("conversation_graph", [])[:6]
     if graph:

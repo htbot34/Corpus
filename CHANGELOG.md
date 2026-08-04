@@ -1584,3 +1584,30 @@ changed corpus or filter re-runs rather than attaching an old extraction
 to different documents. Pinned by tests: a second invocation against the
 same directory makes zero map-model calls; a changed corpus invalidates
 instead of reusing.
+
+---
+
+## 2026-08-04 — Signals that measure the subject, not the pipeline
+
+Two data-quality bugs, both visible in the simonw-nox report's computed
+signals block.
+
+**Vocabulary drift returned garbage.** 2025-H2 came back "test, swh, snp,
+ecd, bcc, abf, git, def" — hex shrapnel and code fragments; 2026-H2
+included "href" (markup reaching the tokenizer) and "simon" (the subject's
+own name counted as their vocabulary). The tokenizer now strips tags and
+entities before TF-IDF, drops tokens that are not plausible words (under
+three characters, no vowel, or made entirely of hex letters), drops a
+short markup stoplist, and excludes the subject's own name, key and handle
+— passed in from the identity card, because page boilerplate repeats a
+person's name and a name is not vocabulary.
+
+**Cadence wore a timeline's labels on corpora with none.** "2.82
+posts/month mean, 0 median" and "Kind mix: reply 56%, original 44%" on a
+205-document corpus containing no X data measured what the fetcher found,
+not how often the subject writes. Cadence is now computed over the X
+timeline when there is one and omitted with a stated reason when there is
+not — a stated refusal, not a silent gap. The kind mix is broken out per
+source and the report labels it that way ("github: reply 56%…"), because a
+GitHub "reply" is a review comment, not a timeline conversation. Overall
+counts survive for older signals.json shapes.

@@ -794,7 +794,13 @@ def run(
     # ---- signals ---------------------------------------------------------
     _ACTIVE_LOGGER.context.phase = "signals"
     echo("Computing signals (Python, no API calls)...")
-    signals = compute_signals(docs, extra={"ingest": ingest_meta, "hydration": hyd_stats.as_dict()})
+    signals = compute_signals(
+        docs,
+        extra={"ingest": ingest_meta, "hydration": hyd_stats.as_dict()},
+        # The subject's own name and handles are boilerplate on their pages,
+        # not their vocabulary; drift excludes them.
+        subject_terms=[card.name, card.key, handle or ""],
+    )
     echo(
         f"  {signals['total_documents']} documents, "
         f"{len(signals['conversation_graph'])} network handles, "

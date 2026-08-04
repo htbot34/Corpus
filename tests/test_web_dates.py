@@ -179,5 +179,14 @@ def test_signals_date_math_excludes_unknown_dates() -> None:
         "an epoch placeholder stretched the date range"
     )
     assert signals["date_unknown_documents"] == 1
-    # No decades-long fake hiatus from the epoch placeholder.
+
+
+def test_an_unknown_date_opens_no_fake_hiatus_on_a_timeline() -> None:
+    """The epoch placeholder must not read as a decades-long silence."""
+    x_docs = [
+        _doc("a", datetime(2026, 6, 1, tzinfo=timezone.utc)).model_copy(update={"source": "x"}),
+        _doc("b", datetime(2026, 7, 1, tzinfo=timezone.utc)).model_copy(update={"source": "x"}),
+        _doc("mystery", None).model_copy(update={"source": "x"}),
+    ]
+    signals = compute_signals(x_docs)
     assert all(h["days"] < 365 for h in signals["cadence"]["hiatuses"])

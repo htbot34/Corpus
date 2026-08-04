@@ -215,3 +215,26 @@ def test_the_floor_is_strictly_more_than_ten_percent() -> None:
     report = render(dated_corpus(unknown=2, total=20))  # exactly 10%
     assert DATE_QUALITY_FLOOR == 0.10
     assert "### Coding agents" in report, "10% is the floor, not past it"
+
+
+def test_computed_signals_render_honest_cadence_and_kind_labels() -> None:
+    report = render_report(
+        handle="jane",
+        synthesis=synthesis(),
+        docs=dated_corpus(),
+        signals={
+            "date_range": "2020-01-01 to 2025-03-01",
+            "cadence": {"omitted": "no X timeline in this corpus; posting cadence ..."},
+            "kind_mix": {
+                "by_source": {
+                    "github": {"shares": {"reply": 0.56, "original": 0.44}},
+                    "rss": {"shares": {"original": 1.0}},
+                }
+            },
+        },
+        budget_lines=[],
+        run_meta={"analyzed_documents": 100, "corpus_tier": "moderate"},
+    )
+    assert "- Cadence: not computed — no X timeline" in report
+    assert "Kind mix, per source — github: reply 56%, original 44%; rss: original 100%" in report
+    assert "posts/month mean" not in report
