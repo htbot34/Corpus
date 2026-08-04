@@ -31,7 +31,10 @@ SAMPLE = {
 
 
 def _provider(handler: object, capture: RawCapture | None = None) -> TwitterApiIoProvider:
-    provider = TwitterApiIoProvider(api_key=FAKE_KEY, capture=capture)
+    # min_request_interval=0: capture semantics are under test, and the
+    # proactive throttle would put a real 5s sleep between the two calls in
+    # the one-file-per-call test. The throttle is tested in test_retry.py.
+    provider = TwitterApiIoProvider(api_key=FAKE_KEY, capture=capture, min_request_interval=0.0)
     provider.client = httpx.Client(
         base_url=provider.base_url,
         headers={"X-API-Key": FAKE_KEY},

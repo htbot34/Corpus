@@ -50,8 +50,13 @@ def no_sleep(monkeypatch):
 
 
 def build(handler, logs: list[str] | None = None) -> TwitterApiIoProvider:
+    # min_request_interval=0: these tests are about the *retry* decisions, and
+    # the proactive throttle would add its own sleeps to every count below.
+    # The throttle has its own section at the bottom of this file.
     provider = TwitterApiIoProvider(
-        api_key=FAKE_KEY, log=(logs.append if logs is not None else (lambda _m: None))
+        api_key=FAKE_KEY,
+        log=(logs.append if logs is not None else (lambda _m: None)),
+        min_request_interval=0.0,
     )
     provider.client = httpx.Client(
         base_url=provider.base_url,
@@ -307,3 +312,91 @@ def test_retry_messages_never_leak_the_key(no_sleep):
         provider.user_info("paulg")
     assert FAKE_KEY not in str(exc.value)
     assert all(FAKE_KEY not in line for line in logs)
+
+
+# -- the proactive throttle -------------------------------------------------
+# Reactive backoff handles a 429 after it happens. The throttle exists so the
+# free tier's measured one-request-per-5s limit does not fire on every call
+# and burn the retry budget on a wall of known height.
+
+
+def throttled(interval: float = 5.0) -> TwitterApiIoProvider:
+    provider = build(responder(httpx.Response(200, json=OK_BODY)))
+    provider.min_request_interval = interval
+    return provider
+
+
+def test_the_default_interval_is_the_measured_free_tier_limit(monkeypatch):
+    monkeypatch.delenv("X_MIN_REQUEST_INTERVAL", raising=False)
+    provider = TwitterApiIoProvider(api_key=FAKE_KEY)
+    assert provider.min_request_interval == P.MIN_REQUEST_INTERVAL_SECONDS == 5.0
+    provider.close()
+
+
+def test_the_interval_is_configurable_for_paid_tiers(monkeypatch):
+    monkeypatch.setenv("X_MIN_REQUEST_INTERVAL", "0.5")
+    provider = TwitterApiIoProvider(api_key=FAKE_KEY)
+    assert provider.min_request_interval == 0.5
+    provider.close()
+
+
+def test_a_malformed_interval_fails_loudly(monkeypatch):
+    """A paid key whose typo'd override was silently ignored would throttle at
+    5s forever with nothing in the output saying why the run is slow."""
+    monkeypatch.setenv("X_MIN_REQUEST_INTERVAL", "fast")
+    with pytest.raises(ProviderError) as exc:
+        TwitterApiIoProvider(api_key=FAKE_KEY)
+    assert "X_MIN_REQUEST_INTERVAL" in str(exc.value)
+
+
+def test_requests_are_spaced_by_the_minimum_interval(monkeypatch, no_sleep):
+    now = {"t": 1000.0}
+    monkeypatch.setattr(P.time, "monotonic", lambda: now["t"])
+    provider = throttled()
+
+    provider.user_info("paulg")
+    assert no_sleep == [], "the first request must go immediately"
+
+    now["t"] += 1.0
+    provider.user_info("pmarca")
+    assert no_sleep == [pytest.approx(4.0)], "1s after the first, the second waits out the other 4"
+
+
+def test_the_throttle_covers_every_endpoint_not_just_search(monkeypatch, no_sleep):
+    """The limit is on requests, so one call to any endpoint delays the next
+    call to any other."""
+    now = {"t": 1000.0}
+    monkeypatch.setattr(P.time, "monotonic", lambda: now["t"])
+    provider = throttled()
+
+    provider.advanced_search("from:paulg")
+    provider.tweets_by_ids(["1"])
+    provider.last_tweets("paulg")
+    provider.user_info("paulg")
+
+    assert [round(s, 1) for s in no_sleep] == [5.0, 5.0, 5.0]
+
+
+def test_retries_are_throttled_too(monkeypatch, no_sleep):
+    """A retry is a request. Backing off from a 429 and then firing the retry
+    early would walk straight back into the limit."""
+    now = {"t": 1000.0}
+    monkeypatch.setattr(P.time, "monotonic", lambda: now["t"])
+    provider = build(
+        responder(httpx.Response(429, text="slow down"), httpx.Response(200, json=OK_BODY))
+    )
+    provider.min_request_interval = 5.0
+
+    provider.user_info("paulg")
+
+    # attempt 1: no throttle (first request), then the reactive backoff sleep;
+    # attempt 2: the throttle tops the spacing up to the full interval.
+    assert len(no_sleep) == 2
+    assert no_sleep[1] == pytest.approx(5.0)
+
+
+def test_an_interval_of_zero_disables_the_throttle(monkeypatch, no_sleep):
+    provider = throttled(0.0)
+    provider.user_info("paulg")
+    provider.user_info("pmarca")
+    assert no_sleep == []

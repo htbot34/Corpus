@@ -41,6 +41,19 @@ TWITTERAPI_IO_BASE = "https://api.twitterapi.io"
 # reaching the provider directly gets a clear error rather than a 400.
 BATCH_LOOKUP_MAX = 50
 
+# Minimum seconds between requests to the provider. MEASURED, not documented:
+# a live run on 2026-08-04 died on
+#
+#   429 {"error":"Too Many Requests","message":"For free-tier users, the QPS
+#   limit is one request every 5 seconds."}
+#
+# after burning all five reactive retries on a limit that fires on every call.
+# The provider's docs say nothing about request pacing, so — like
+# BATCH_LOOKUP_MAX above — this records the real shape rather than the
+# documented one. Overridable with X_MIN_REQUEST_INTERVAL (seconds), because
+# paid tiers are not subject to the free-tier rule; 0 disables the throttle.
+MIN_REQUEST_INTERVAL_SECONDS = 5.0
+
 # Raw page: (tweets, next_cursor, has_next_page)
 Page = tuple[list[dict[str, Any]], str | None, bool]
 
@@ -160,6 +173,25 @@ def _is_quota_exhausted(resp: httpx.Response) -> bool:
     return any(marker in body for marker in _QUOTA_EXHAUSTED_MARKERS)
 
 
+def _min_request_interval_from_env() -> float:
+    """The configured request spacing, in seconds.
+
+    A malformed value fails loudly rather than silently falling back: a paid
+    key whose typo'd override was ignored would throttle at 5s forever, and
+    nothing in the output would say why the run is slow.
+    """
+    raw = (os.environ.get("X_MIN_REQUEST_INTERVAL") or "").strip()
+    if not raw:
+        return MIN_REQUEST_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ProviderError(
+            f"X_MIN_REQUEST_INTERVAL must be a number of seconds, got {raw!r}"
+        ) from exc
+    return max(0.0, value)
+
+
 def _is_retryable_transport_error(exc: Exception) -> bool:
     """Is this transport failure worth trying again?
 
@@ -229,6 +261,7 @@ class TwitterApiIoProvider:
         max_retries: int = MAX_ATTEMPTS,
         capture: RawCapture | None = None,
         log: Callable[[str], None] = lambda _msg: None,
+        min_request_interval: float | None = None,
     ) -> None:
         self.capture = capture
         # Every retry is logged with its attempt number and reason; silent
@@ -249,6 +282,14 @@ class TwitterApiIoProvider:
             )
         self.base_url = (base_url or os.environ.get("X_BASE_URL") or TWITTERAPI_IO_BASE).rstrip("/")
         self.max_retries = max_retries
+        self.min_request_interval = (
+            _min_request_interval_from_env()
+            if min_request_interval is None
+            else max(0.0, min_request_interval)
+        )
+        # Monotonic time before which no request may start. 0.0 means the
+        # first request goes immediately.
+        self._next_request_at = 0.0
         self.client = httpx.Client(
             base_url=self.base_url,
             headers={"X-API-Key": self.api_key},
@@ -265,10 +306,28 @@ class TwitterApiIoProvider:
 
     # -- transport --------------------------------------------------------
 
+    def _throttle(self) -> None:
+        """Space requests out instead of walking into the provider's QPS limit.
+
+        The reactive backoff below handles a 429 after it happens; this stops
+        the free tier's one-request-per-5s limit from firing on every call and
+        burning the retry budget on a wall we know the height of. Start to
+        start, on the monotonic clock, and in front of every request this
+        provider makes — retries included — because the limit is on requests,
+        not on endpoints or on successes.
+        """
+        if self.min_request_interval <= 0:
+            return
+        wait = self._next_request_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._next_request_at = time.monotonic() + self.min_request_interval
+
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         params = {k: v for k, v in params.items() if v is not None}
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
+            self._throttle()
             try:
                 resp = self.client.get(path, params=params)
             except httpx.HTTPError as exc:

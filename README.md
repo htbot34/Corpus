@@ -42,6 +42,7 @@ cp .env.example .env    # then fill in the two keys
 | `X_API_KEY` | only for X | twitterapi.io key, sent as the `X-API-Key` header. New keys get ~$1 trial credit, enough for ~6,000 posts. Not needed for a run with no X anchor. |
 | `X_PROVIDER` | no | Provider selector. Defaults to `twitterapi_io`. |
 | `X_BASE_URL` | no | Override the provider base URL (proxy, testing). |
+| `X_MIN_REQUEST_INTERVAL` | no | Seconds between provider requests. Defaults to 5 — the free tier's measured QPS limit is one request per 5 seconds. Lower it on a paid tier; `0` disables the throttle. |
 | `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes, and for Phase 2 search via the server-side `web_search` tool. One key, no second vendor. |
 | `SEARCH_PROVIDER` | no | Search provider selector. Defaults to `anthropic_search`. `exa` and `brave` are stubs naming what to add. |
 | `GITHUB_TOKEN` | no | Raises the GitHub API rate limit from 60/hr to 5,000/hr. Discovery reads at most two public endpoints per target, which fits in the anonymous allowance. |

@@ -1450,3 +1450,33 @@ Pinned end to end: a CLI run whose provider raises the live 429 on every
 timeline call still synthesizes from RSS documents, reports
 `x_status: failed` in signals.json, states the loss in the coverage block,
 and leaves the manifest resumable.
+
+---
+
+## 2026-08-04 — The free tier is one request per five seconds. Measured.
+
+The same live run that exposed the crash above also measured the limit that
+caused it. The provider's documentation says nothing about request pacing;
+the wire says:
+
+    429 {"error":"Too Many Requests","message":"For free-tier users, the QPS
+    limit is one request every 5 seconds."}
+
+Like `BATCH_LOOKUP_MAX = 50`, the real shape and the documented shape
+differ, and the real one is now recorded at the constant that enforces it:
+`MIN_REQUEST_INTERVAL_SECONDS = 5.0` in `x/providers.py`.
+
+Before this, the provider had reactive backoff after a 429 and no spacing
+before one, so every call walked into the limit at full speed and burned up
+to five retries on a wall of known height. Now a client-side throttle
+enforces the minimum interval in front of **every** request the provider
+makes — all four endpoints, retries included, start-to-start on the
+monotonic clock. `X_MIN_REQUEST_INTERVAL` overrides it for paid tiers,
+which are not subject to the free-tier rule; `0` disables it; a malformed
+value fails loudly, because a typo'd override that silently fell back to 5s
+would make a paid run slow with nothing in the output saying why.
+
+The retry tests construct the provider with the throttle off — they test
+the retry *decisions*, and the throttle would add its own sleeps to every
+count — and the throttle has its own section pinning the default, the
+override, the every-endpoint coverage, and that retries are spaced too.
