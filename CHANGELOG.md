@@ -1554,3 +1554,33 @@ date: the label is capped at medium with the cap stated and explained, the
 entries (an absent section would read as "nothing moved", a different
 claim), and part one's confidence line names dates as the limit. Evolution
 analysis on unreliable chronology is worse than no evolution analysis.
+
+---
+
+## 2026-08-04 — The reduce bill, and paying for maps once
+
+Two costs on the simonw-nox run, one avoidable and one invisible:
+
+**`--highlights N`.** `select_highlights` pasted up to sixty complete
+documents into the reduce prompt with the cap hardcoded. On that run, 43
+highlights produced 461,439 reduce input tokens — about $2.31 of a $3.87
+run, roughly 60% of total spend. The cap is now `--highlights` on both
+`run` and `resynth`, defaulting to 60 so behaviour is unchanged, and the
+chosen value plus the estimated reduce input tokens print *before* the
+reduce call. The moment to see the number is before the money is spent,
+not on the invoice.
+
+**Map slices are reused across invocations.** A budget stop during
+synthesis followed by a re-run re-billed the entire map phase: the first
+attempt spent $0.6129 on 15 slices, the second $0.6258 running the same 15
+again. The slices were persisted — `run` checkpoints each one into
+run.json as it completes — but `resynth` never read them back, and the
+in-process reuse path only fired inside a single invocation. `resynth` now
+loads the run directory's manifest, reuses every completed slice, logs
+"reusing N map slice(s)", and checkpoints new ones the same way. Reuse is
+validated against the current chunking by document ids inside
+`synthesize()` — a saved slice belongs to the documents it covered, and a
+changed corpus or filter re-runs rather than attaching an old extraction
+to different documents. Pinned by tests: a second invocation against the
+same directory makes zero map-model calls; a changed corpus invalidates
+instead of reusing.

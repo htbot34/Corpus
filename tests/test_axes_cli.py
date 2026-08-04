@@ -186,6 +186,102 @@ def test_resynth_itself_still_works_against_an_old_corpus(tmp_path, client, monk
     assert any(n.startswith("reduce attempt 1") for n in notes)
 
 
+def _stub_synthesize(monkeypatch, anthropic):
+    import corpus.cli as cli_module
+
+    real_synthesize = cli_module.synthesize
+
+    async def stubbed(*args, **kwargs):
+        kwargs["client"] = anthropic
+        return await real_synthesize(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "synthesize", stubbed)
+
+
+def _map_calls(anthropic) -> int:
+    from corpus.synthesize import MAP_MODEL
+
+    return sum(1 for c in anthropic.calls if c.get("model") == MAP_MODEL)
+
+
+def test_a_second_resynth_reuses_map_slices_and_never_calls_the_map_model(
+    tmp_path, client, monkeypatch
+):
+    """Budget stop, raise budget, re-run is the most common workflow this
+    tool has. The simonw-nox run paid $0.61 for 15 map slices and then $0.63
+    to run the same 15 again, because completed slices were persisted by
+    `run` but never read back by `resynth`."""
+    directory = tmp_path / "out" / "testsubject" / "2026-08-02"
+    _seed(directory, client)
+    anthropic = FakeAnthropic()
+    _stub_synthesize(monkeypatch, anthropic)
+
+    first = runner.invoke(app, ["resynth", str(directory)])
+    assert first.exit_code == 0, first.output
+    paid_once = _map_calls(anthropic)
+    assert paid_once > 0, "the first invocation must actually run the map stage"
+    assert (directory / "run.json").exists(), "completed slices were not persisted"
+
+    second = runner.invoke(app, ["resynth", str(directory)])
+    assert second.exit_code == 0, second.output
+    assert _map_calls(anthropic) == paid_once, "the second invocation re-paid the map stage"
+    assert "reusing" in second.output and "map slice(s)" in second.output
+
+
+def test_a_changed_corpus_invalidates_saved_slices_instead_of_reusing_them(
+    tmp_path, client, monkeypatch
+):
+    """A saved slice belongs to the documents it covered. When the corpus
+    changes, reusing it by index would attach an old extraction to different
+    documents — worse than re-paying."""
+    directory = tmp_path / "out" / "testsubject" / "2026-08-02"
+    docs = _seed(directory, client)
+    anthropic = FakeAnthropic()
+    _stub_synthesize(monkeypatch, anthropic)
+
+    first = runner.invoke(app, ["resynth", str(directory)])
+    assert first.exit_code == 0, first.output
+    paid_once = _map_calls(anthropic)
+
+    # Drop a document: the chunking no longer matches the saved slices.
+    (directory / "corpus.json").write_text(
+        json.dumps([d.model_dump() for d in docs[:-1]], default=str), encoding="utf-8"
+    )
+    second = runner.invoke(app, ["resynth", str(directory)])
+    assert second.exit_code == 0, second.output
+    assert _map_calls(anthropic) > paid_once, "stale slices were reused against a changed corpus"
+    assert "no longer match the chunking" in second.output
+
+
+def test_the_highlights_cap_is_configurable_and_printed_before_reduce(
+    tmp_path, client, monkeypatch
+):
+    """The reduce input is the biggest cost lever in the tool — ~60% of a
+    real run's spend — so the chosen cap and the token estimate print before
+    the call, not on the invoice."""
+    directory = tmp_path / "out" / "testsubject" / "2026-08-02"
+    _seed(directory, client)
+    anthropic = FakeAnthropic()
+    _stub_synthesize(monkeypatch, anthropic)
+
+    result = runner.invoke(app, ["resynth", str(directory), "--highlights", "2"])
+    assert result.exit_code == 0, result.output
+    assert "--highlights 2" in result.output
+    assert (
+        "reduce input: ~" in result.output and "tokens estimated before the call" in result.output
+    )
+
+
+def test_select_highlights_honours_the_cap(client):
+    from corpus.synthesize import select_highlights
+
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    ids = [d.source_id for d in docs]
+    outputs = [{"highest_signal_document_ids": ids}]
+    assert len(select_highlights(docs, outputs, cap=2)) == 2
+    assert len(select_highlights(docs, outputs)) == min(60, len(ids))
+
+
 def test_a_current_synthesis_loads_without_complaint(tmp_path):
     path = tmp_path / "synthesis.json"
     raw = FakeAnthropic()._default_reduce({"messages": [{"c": "[id: 1]"}]})

@@ -116,6 +116,13 @@ CHARS_PER_TOKEN = 4
 # Three ids is enough to prove a claim and few enough that the report reads as
 # analysis with citations rather than a citation dump with commentary.
 EVIDENCE_CAP = 3
+
+# Complete documents pasted verbatim into the reduce prompt. This is the
+# single biggest cost lever in the tool: on the simonw-nox run, 43 highlights
+# produced 461,439 reduce input tokens — roughly 60% of the whole run's
+# spend. Configurable as --highlights on `run` and `resynth`; the default
+# keeps behaviour unchanged.
+DEFAULT_HIGHLIGHTS = 60
 # An inference whose reasoning is this short is not a chain, it is a restatement.
 MIN_REASONING_CHARS = 80
 
@@ -1162,7 +1169,7 @@ def enforce_signal_counts(
 
 
 def select_highlights(
-    docs: list[Document], map_outputs: list[dict[str, Any]], cap: int = 60
+    docs: list[Document], map_outputs: list[dict[str, Any]], cap: int = DEFAULT_HIGHLIGHTS
 ) -> list[Document]:
     by_id = {d.source_id: d for d in docs}
     picked: list[Document] = []
@@ -1190,6 +1197,7 @@ async def synthesize(
     client: Any | None = None,
     completed_slices: dict[int, dict[str, Any]] | None = None,
     on_slice: Callable[[int, dict[str, Any]], None] | None = None,
+    highlights_cap: int = DEFAULT_HIGHLIGHTS,
     log: Callable[[str], None] = print,
 ) -> SynthesisRun:
     """Run map+reduce. Pass `client` to iterate on prompts against a stub
@@ -1233,6 +1241,21 @@ async def synthesize(
 
     chunks = chunk_documents(synth_docs)
     run.chunks = len(chunks)
+    if completed_slices:
+        # A saved slice is only a saved slice if it covers the same documents
+        # this run's chunking produced. Reusing by index alone would attach a
+        # previous attempt's extraction to different documents the moment the
+        # corpus or the prefilter changed — worse than re-paying.
+        chunk_ids = [[d.source_id for d in chunk] for chunk in chunks]
+        usable = {
+            index: payload
+            for index, payload in completed_slices.items()
+            if 0 <= index < len(chunks) and payload.get("document_ids") == chunk_ids[index]
+        }
+        stale = len(completed_slices) - len(usable)
+        if stale:
+            log(f"  {stale} saved map slice(s) no longer match the chunking; re-running them")
+        completed_slices = usable or None
     log(f"  {len(synth_docs)} documents -> {len(chunks)} map slices ({map_model})")
     log(f"  corpus tier: {tier.name} ({tier.document_count} documents)")
     if run.sources is not None and run.sources.is_concentrated:
@@ -1277,11 +1300,16 @@ async def synthesize(
             )
             return run
 
-        highlights = select_highlights(synth_docs, run.map_outputs)
+        highlights = select_highlights(synth_docs, run.map_outputs, cap=highlights_cap)
+        # The chosen cap and what it costs, printed before the reduce call —
+        # this is the biggest cost lever in the tool, and the moment to see
+        # the number is before the money is spent, not on the invoice.
+        reduce_input_estimate = estimate_tokens(_corpus_block(run.map_outputs, signals, highlights))
         log(
             f"  reduce over {len(run.map_outputs)} slices + {len(highlights)} "
-            f"highlights ({reduce_model})"
+            f"highlights (--highlights {highlights_cap}) ({reduce_model})"
         )
+        log(f"  reduce input: ~{reduce_input_estimate:,} tokens estimated before the call")
         synthesis, raw, error, structured = await run_reduce(
             client,
             run.map_outputs,

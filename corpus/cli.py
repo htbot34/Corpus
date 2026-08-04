@@ -69,7 +69,7 @@ from .search.verify import (
     SearchPhaseResult,
     search_for_sources,
 )
-from .synthesize import MAP_MODEL, REDUCE_MODEL, synthesize
+from .synthesize import DEFAULT_HIGHLIGHTS, MAP_MODEL, REDUCE_MODEL, synthesize
 from .tiers import THIN_BELOW
 from .x.capture import RawCapture
 from .x.client import XClient
@@ -275,6 +275,12 @@ def run(
     reduce_model: str = typer.Option(REDUCE_MODEL, "--reduce-model"),
     map_effort: str = typer.Option("medium", "--map-effort", help="low|medium|high|xhigh|max"),
     reduce_effort: str = typer.Option("high", "--reduce-effort"),
+    highlights: int = typer.Option(
+        DEFAULT_HIGHLIGHTS,
+        "--highlights",
+        help="Complete documents pasted into the reduce prompt. The biggest cost "
+        "lever in the tool: ~60% of a real run's spend at the default.",
+    ),
     no_filter: bool = typer.Option(
         False, "--no-filter", help="Keep low-signal documents (acks, link-only, fragments)."
     ),
@@ -853,6 +859,7 @@ def run(
                 prefilter=not no_filter,
                 completed_slices=completed or None,
                 on_slice=_slice_done,
+                highlights_cap=highlights,
                 log=echo,
             )
         )
@@ -1409,6 +1416,12 @@ def resynth(
     reduce_model: str = typer.Option(REDUCE_MODEL, "--reduce-model"),
     map_effort: str = typer.Option("medium", "--map-effort"),
     reduce_effort: str = typer.Option("high", "--reduce-effort"),
+    highlights: int = typer.Option(
+        DEFAULT_HIGHLIGHTS,
+        "--highlights",
+        help="Complete documents pasted into the reduce prompt. The biggest cost "
+        "lever in the tool: ~60% of a real run's spend at the default.",
+    ),
     no_filter: bool = typer.Option(False, "--no-filter"),
     render_only: bool = typer.Option(
         False,
@@ -1443,6 +1456,23 @@ def resynth(
     echo(f"  axes: {', '.join(a.name for a in selected_axes)}")
     echo("")
 
+    # The run directory's manifest holds every map slice a previous attempt
+    # completed — the X walk's checkpoint discipline, applied to synthesis.
+    # "Budget stop, raise budget, re-run" is the most common workflow this
+    # tool has, and it used to re-bill the entire map phase on every lap:
+    # the simonw-nox run paid $0.61 for 15 slices and then $0.63 to run the
+    # same 15 again. Slices are validated against the current chunking inside
+    # `synthesize`, so a changed corpus or filter re-runs rather than reuses.
+    manifest = RunManifest.load(directory) or RunManifest(handle=handle, run_id=budget.run_id)
+    completed = {int(k): v for k, v in manifest.map_slices.items()}
+    if completed:
+        echo(f"  {len(completed)} map slice(s) already done; not re-paying for them")
+
+    def _slice_done(index: int, payload: dict[str, Any]) -> None:
+        manifest.record_slice(index, payload)
+        manifest.prior_spend = budget.total
+        manifest.save(directory)
+
     result = asyncio.run(
         synthesize(
             docs,
@@ -1454,9 +1484,16 @@ def resynth(
             map_effort=map_effort,
             reduce_effort=reduce_effort,
             prefilter=not no_filter,
+            completed_slices=completed or None,
+            on_slice=_slice_done,
+            highlights_cap=highlights,
             log=echo,
         )
     )
+    manifest.map_total = result.chunks
+    manifest.reduce_complete = result.synthesis is not None
+    manifest.prior_spend = budget.total
+    manifest.save(directory)
     run_meta = {
         "ingest": signals.get("ingest", {}),
         "hydration": signals.get("hydration", {}),
