@@ -406,3 +406,108 @@ def test_the_serve_command_refuses_a_public_bind_before_starting_anything() -> N
     result = runner.invoke(cli_app, ["serve", "--host", "0.0.0.0"])
     assert result.exit_code == 2
     assert "refusing to bind" in result.output
+
+
+# -- the redesign: theme, stylesheet, and the honest meters -----------------
+
+
+def test_the_theme_renders_server_side_from_the_cookie(store: WebStore) -> None:
+    """No flash of the wrong theme: the cookie decides before the HTML leaves."""
+    with make_app(store) as client:
+        assert "data-theme='light'" in client.get("/").text
+
+        resp = client.post("/theme", data={"to": "dark"}, follow_redirects=False)
+        assert resp.status_code == 303
+        assert "corpus-theme=dark" in resp.headers.get("set-cookie", "")
+
+        client.cookies.set("corpus-theme", "dark")
+        assert "data-theme='dark'" in client.get("/").text
+        # An unknown cookie value falls back to light, never to broken.
+        client.cookies.set("corpus-theme", "mauve")
+        assert "data-theme='light'" in client.get("/").text
+
+
+def test_the_stylesheet_is_local_and_carries_both_palettes(store: WebStore) -> None:
+    with make_app(store) as client:
+        resp = client.get("/static/corpus.css")
+        assert resp.status_code == 200
+        assert "text/css" in resp.headers["content-type"]
+        # Both token sets present; nothing fetched from anywhere.
+        assert "#0A0A0A" in resp.text and "#FAFAF8" in resp.text
+        assert "@import" not in resp.text and "url(" not in resp.text
+
+
+def test_the_purpose_statement_is_plain_visible_text_above_the_fields(
+    store: WebStore,
+) -> None:
+    from corpus.web.pages import DISCLAIMER
+
+    with make_app(store) as client:
+        body = client.get("/").text
+    assert DISCLAIMER in body
+    # Above the fields, in the open — not inside a disclosure or dialog.
+    assert body.index(DISCLAIMER) < body.index("<form class='run'")
+    purpose_zone = body[: body.index(DISCLAIMER)]
+    assert "<details" not in purpose_zone and "<dialog" not in purpose_zone
+
+
+def test_the_tier_meter_encodes_real_tiers_and_nothing_else() -> None:
+    from corpus.web.pages import tier_meter
+
+    assert tier_meter("thin").count("class='on'") == 1
+    assert tier_meter("moderate").count("class='on'") == 2
+    assert tier_meter("rich").count("class='on'") == 3
+    assert tier_meter("") == "", "no quantity, no meter — the motif never decorates"
+    assert tier_meter("weird") == ""
+
+
+def test_the_axis_meter_is_derived_from_the_reports_own_words() -> None:
+    from corpus.web.pages import decorate_verdict
+
+    strong = markdown_to_html("**epistemics** — strong signal, 3 cited document(s). Stated.")
+    assert decorate_verdict(strong).count("class='on'") == 3
+    weak = markdown_to_html("**technology and ai** — weak signal, 1 cited document(s). Hmm.")
+    assert decorate_verdict(weak).count("class='on'") == 1
+    none_sig = markdown_to_html(
+        "**defense intel natsec** — no signal, 0 cited documents. Nothing here."
+    )
+    decorated = decorate_verdict(none_sig)
+    assert "class='meter'" in decorated, "a no-signal axis still shows its (empty) meter"
+    assert decorated.count("class='on'") == 0
+    # Prose that is not an axis capsule gets no meter at all.
+    plain = markdown_to_html("A paragraph with **bold** that mentions no signal at all.")
+    assert "class='meter'" not in decorate_verdict(plain)
+
+
+def test_the_coverage_bar_matches_the_stated_fraction() -> None:
+    from corpus.web.pages import decorate_evidence
+
+    out = decorate_evidence("<blockquote>Documents analyzed: 90 of 120 in corpus</blockquote>")
+    assert "width:75%" in out
+    # Numbers that make no fraction get no bar.
+    assert "width:" not in decorate_evidence("<p>Documents analyzed: 5 of 0 in corpus</p>")
+
+
+def test_run_progress_squares_come_from_the_logs_own_map_lines(store: WebStore) -> None:
+    from corpus.web import pages
+
+    run_id, token = store.propose(
+        target_key="jane",
+        name="Jane",
+        params=RunParams(key="jane", name="Jane").as_dict(),
+        reason="test",
+        dry_run_output="estimate",
+    )
+    store.confirm(run_id, token)
+    store.append_log(run_id, "  [map 3/15] 2024-01-01 to 2024-02-01: 4 topics ($0.1234)")
+    row = store.get_run(run_id)
+    assert row is not None
+    html = pages.run_page(row, store.log_lines(run_id))
+    assert "map 3/15" in html
+    import re
+
+    meter = re.search(r"aria-label='map 3/15'>((?:<i[^>]*></i>)+)</span>", html)
+    assert meter is not None, "the server-rendered progress meter is missing"
+    assert meter.group(1).count("class='on'") == 3
+    assert meter.group(1).count("<i") == 15
+    assert "$0.1234" in html

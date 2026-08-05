@@ -1,0 +1,368 @@
+/* corpus — hand-written, no build step, no framework.
+ *
+ * Same family as the Zelcast console, deliberately not the same skin:
+ * Zelcast is a card-based review room; this is a ruled ledger. Shared type
+ * and accent; different structure. Dark IS the Zelcast palette; light is
+ * the default and its accent is the same hue darkened to hold AA contrast
+ * (every pair below is computed, not assumed — see the redesign commit).
+ *
+ * The dotted-square meter is the one signature element, and it only ever
+ * encodes a real quantity: corpus tier, axis signal, map-slice progress,
+ * coverage. Never decoration.
+ */
+
+:root {
+  --bg: #FAFAF8;
+  --surface: #FFFFFF;
+  --hairline: #E4E2DC;
+  --text: #14140F;
+  --muted: #6B6B63;
+  --accent: #8A6420;
+  --accent-ink: #FFFFFF;
+  --err: #B42318;
+  /* The log is a terminal in both themes. */
+  --log-bg: #0A0A0A;
+  --log-text: #E8E4DA;
+  --log-muted: #9A948A;
+
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, "Helvetica Neue", Helvetica, "Segoe UI", Arial, sans-serif;
+}
+
+[data-theme="dark"] {
+  --bg: #0A0A0A;
+  --surface: #121212;
+  --hairline: #262626;
+  --text: #F5F5F5;
+  --muted: #8A8A8A;
+  --accent: #D9B47A;
+  --accent-ink: #0A0A0A;
+  --err: #F97066;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 15px; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.55;
+}
+
+a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+a:hover { color: var(--accent); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- type scale ------------------------------------------------------- */
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+h1, .t-display {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  margin: 0.4rem 0 1rem;
+}
+
+h2 { font-size: 24px; font-weight: 720; letter-spacing: -0.02em; margin: 2.2rem 0 0.6rem; }
+h3 { font-size: 18px; font-weight: 680; letter-spacing: -0.01em; margin: 1.6rem 0 0.4rem; }
+
+.small { font-size: 13px; }
+.muted { color: var(--muted); }
+.num, code, pre, .log { font-family: var(--mono); }
+.num { font-size: 13px; }
+
+/* ---- chrome ------------------------------------------------------------ */
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 1.6rem;
+  padding: 0.7rem 1.4rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.topbar .wordmark {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: 17px;
+  text-decoration: none;
+}
+
+.topbar nav { display: flex; gap: 1.2rem; flex-wrap: wrap; }
+
+.topbar nav a {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--muted);
+  padding: 0.2rem 0;
+}
+
+.topbar nav a[aria-current="page"] { color: var(--accent); }
+.topbar nav a:hover { color: var(--text); }
+
+.topbar form.theme { margin-left: auto; }
+
+main { max-width: 72rem; margin: 0 auto; padding: 1.6rem 1.4rem 4rem; }
+
+/* Section rule: an eyebrow label sitting on a full-width hairline. */
+.rule {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 2rem 0 0.9rem;
+}
+.rule::after { content: ""; flex: 1; border-top: 1px solid var(--hairline); }
+
+/* ---- the purpose statement --------------------------------------------- */
+/* Full-contrast body text between two hairlines: a statement, not a
+ * warning sticker. It must be MORE legible than everything around it. */
+.purpose {
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.9rem 0;
+  margin: 1.2rem 0 1.6rem;
+  font-size: 15px;
+  max-width: 46rem;
+}
+
+/* ---- buttons ----------------------------------------------------------- */
+
+button, .btn {
+  font: 600 13px/1 var(--sans);
+  letter-spacing: 0.01em;
+  padding: 0.6rem 1.1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+button:hover, .btn:hover { border-color: var(--text); color: var(--text); }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn-primary:hover { filter: none; border-color: var(--text); color: var(--accent-ink); }
+
+.btn-quiet { background: none; border-color: var(--hairline); }
+
+.actions { display: flex; align-items: center; gap: 0.9rem; margin: 1.4rem 0; }
+
+/* ---- forms ------------------------------------------------------------- */
+
+form.run { max-width: 46rem; }
+
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem 1.6rem; }
+
+.field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 0.25rem; }
+
+.field .flag {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 0.5rem;
+}
+
+.field input, .field select, .field textarea, form.run textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: 14px var(--sans);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+}
+
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 0.2rem; }
+
+.field-wide { grid-column: 1 / -1; }
+
+.error {
+  border: 1px solid var(--err);
+  border-left-width: 3px;
+  color: var(--text);
+  padding: 0.7rem 0.9rem;
+  margin: 1rem 0;
+  max-width: 46rem;
+}
+
+/* ---- the dotted-square meter ------------------------------------------- */
+
+.meter { display: inline-flex; gap: 4px; align-items: center; }
+
+.meter i {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--muted);
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.meter i.on { background: var(--text); border-color: var(--text); }
+
+/* Live progress is the active state — the one meter that takes the accent. */
+.meter.live i.on { background: var(--accent); border-color: var(--accent); }
+
+.meter .meter-label { margin-left: 0.45rem; }
+
+/* Coverage: a continuous fraction, so a bar rather than squares. */
+.fraction { max-width: 22rem; margin: 0.4rem 0 0.2rem; }
+.fraction .track { height: 4px; border: 1px solid var(--hairline); border-radius: 1px; }
+.fraction .fill { height: 100%; background: var(--text); }
+
+/* ---- tables ------------------------------------------------------------ */
+
+table { border-collapse: collapse; width: 100%; margin: 0.8rem 0 1.6rem; font-size: 13px; }
+
+th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--text);
+}
+
+td { padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+
+tr.rowlink { cursor: pointer; }
+tr.rowlink:hover td { background: var(--surface); }
+
+td.reason { max-width: 26rem; }
+
+.status { font-weight: 600; }
+.status-failed { color: var(--err); }
+.status-running, .status-queued { color: var(--accent); }
+
+/* ---- the run page ------------------------------------------------------ */
+
+.runbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.6rem;
+  padding: 0.7rem 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.runbar .spend { font-family: var(--mono); font-size: 14px; }
+
+pre.log {
+  background: var(--log-bg);
+  color: var(--log-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 1rem 1.1rem;
+  margin: 1rem 0;
+  border-radius: 2px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the estimate receipt ---------------------------------------------- */
+
+.receipt {
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  background: var(--surface);
+  padding: 1rem 1.2rem;
+  margin: 1rem 0;
+  max-width: 56rem;
+}
+
+.receipt pre {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the report -------------------------------------------------------- */
+
+.prose { max-width: 68ch; font-size: 16px; line-height: 1.65; }
+
+.prose h1 { font-size: 33px; letter-spacing: -0.025em; }
+.prose h2 { border-top: 1px solid var(--hairline); padding-top: 1.1rem; margin-top: 2.4rem; }
+.prose blockquote {
+  border-left: 2px solid var(--hairline);
+  margin: 1rem 0;
+  padding: 0.1rem 0 0.1rem 1rem;
+  color: var(--muted);
+  font-size: 14px;
+}
+.prose pre { background: var(--log-bg); color: var(--log-text); padding: 0.9rem 1rem;
+             border-radius: 2px; font-size: 12.5px; overflow-x: auto; }
+.prose li { margin: 0.25rem 0; }
+.prose hr { border: 0; border-top: 1px solid var(--hairline); margin: 2rem 0; }
+
+.axis-meter { display: flex; align-items: baseline; gap: 0.6rem; margin: 1.4rem 0 0.2rem; }
+.axis-meter .eyebrow { color: var(--text); }
+.axis-meter + p { margin-top: 0.3rem; }
+
+details.evidence > summary {
+  cursor: pointer;
+  font-size: 24px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  margin: 2.2rem 0 1rem;
+  border-top: 1px solid var(--hairline);
+  padding-top: 1.1rem;
+}
+
+details.evidence > summary:hover { color: var(--accent); }
+
+.downloads { margin: 1.6rem 0; font-size: 13px; }
+
+/* ---- empty states ------------------------------------------------------ */
+
+.empty { padding: 2.2rem 0; max-width: 34rem; }
+
+/* ---- small screens ----------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .fields { grid-template-columns: 1fr; }
+  main { padding: 1rem 0.9rem 3rem; }
+  .topbar { padding: 0.6rem 0.9rem; gap: 1rem; }
+  td.reason { max-width: none; }
+}
+
+/* ---- motion: earned or absent ------------------------------------------ */
+
+@media (prefers-reduced-motion: no-preference) {
+  a, button, .btn, .topbar nav a { transition: color 120ms ease, border-color 120ms ease; }
+}

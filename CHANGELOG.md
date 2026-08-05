@@ -1665,3 +1665,54 @@ page.
 
 - Test suite 871 → 889.
 - `make check` green.
+
+---
+
+## 2026-08-05 — The web interface, redesigned. Visual only.
+
+Behaviour is frozen and every behavioural test passed unchanged: the
+dry-run gate, the 409s on replay and bad tokens, the loopback refusal, the
+required reason, the append-only audit store, the serial queue, and
+no-key-in-any-response. This entry is about how the same thing looks.
+
+The design is the Zelcast family, deliberately not the Zelcast skin: same
+near-black ground (dark mode IS the Zelcast palette; light is the default,
+its gold darkened to the same hue at AA contrast), same tight heavy
+grotesque and uppercase eyebrow labels, hairline rules, square corners —
+but built as a ruled ledger rather than a card room, so the two products
+read as siblings and never as each other. Every token pair in both themes
+was computed against WCAG AA, not assumed; the check script and results
+are in the redesign commit. Theme persists in a cookie and renders
+server-side, so the right theme arrives in the HTML.
+
+The dotted-square meter is the one signature element, and it only ever
+encodes a real quantity: corpus tier (thin/moderate/rich, three segments),
+axis signal strength on the report (none 0, weak 1, strong 3), map-slice
+progress on the run page (parsed live from the CLI's own `[map i/N]`
+lines, the one meter that takes the accent because it is the active
+state), and documents-analyzed coverage as a continuous fraction bar. A
+run with no tier gets no meter — the motif never decorates.
+
+Page by page: the new-run form leads with the profiling-purpose statement
+as full-contrast body text between two hairlines — a statement, not a
+warning sticker — and groups fields under who-they-are / where-to-look /
+limits / why-this-run, each labelled in plain language with its CLI flag
+as muted mono. The estimate screen reads as a receipt, mono, with "Start
+the run" and "Discard this estimate" equally easy. The run page pins
+status, live progress squares and running cost above a terminal-dark log
+that stays terminal-dark in both themes. History is a dense ledger with
+row-click. The audit page gives the reason column real width. The report
+gets a 68-character measure and generous leading — the one deliberately
+un-dense screen — with the evidence still one `<details>` click away.
+
+Copy rewritten to sentence case and active voice; empty states invite
+("Every run starts as a free estimate") instead of shrugging. One
+stylesheet, hand-written, served by FastAPI; no build step, no framework,
+no webfont, no network fetch of any kind.
+
+### Housekeeping
+
+- Test suite 889 → 896. No existing test was modified; the seven new ones
+  pin the server-side theme, the local stylesheet, the purpose statement's
+  placement, and that every meter is derived from the numbers it claims.
+- No new dependencies.
