@@ -403,3 +403,59 @@ def test_secondary_documents_merge_into_the_same_corpus(client, cache):
     signals = compute_signals(x_docs + rss_docs)
     assert signals["total_documents"] == len(x_docs) + 1
     assert signals["kind_mix"]["counts"]["original"] >= 1
+
+
+def test_atom_entry_dates_are_the_entrys_own(cache):
+    """Each entry's date comes from that entry, never from a sibling."""
+    xml = """<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <updated>2020-04-30T00:00:00+00:00</updated>
+      <entry><title>A</title><link href="https://t.example/a"/><id>a</id>
+        <published>2024-03-01T10:00:00Z</published><content>First body.</content></entry>
+      <entry><title>B</title><link href="https://t.example/b"/><id>b</id>
+        <updated>2025-07-16T10:00:00Z</updated><content>Second body.</content></entry>
+    </feed>"""
+    cache.put("rss", "rss:https://t.example/feed", xml)
+    docs = RSSSource().fetch(
+        "https://t.example/feed", author_handle="s", cache=cache, log=lambda _: None
+    )
+    dates = {d.source_id: d.published_at.date().isoformat() for d in docs}
+    assert dates == {"a": "2024-03-01", "b": "2025-07-16"}
+    assert not any(d.date_unknown for d in docs)
+
+
+def test_an_undated_atom_entry_is_unknown_and_never_inherits_the_feed_date(cache):
+    """The TIL-feed failure: a feed-level <updated> of 2020-04-30 must not
+    stamp every dateless entry. An entry with no date of its own has an
+    unknown date, stated as such."""
+    xml = """<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <title>TIL</title>
+      <updated>2020-04-30T00:00:00+00:00</updated>
+      <entry><title>No date</title><link href="https://til.example/x"/><id>x</id>
+        <content>A dateless entry.</content></entry>
+    </feed>"""
+    cache.put("rss", "rss:https://til.example/feed", xml)
+    docs = RSSSource().fetch(
+        "https://til.example/feed", author_handle="s", cache=cache, log=lambda _: None
+    )
+    assert len(docs) == 1
+    assert docs[0].date_unknown is True
+    assert docs[0].published_at.year != 2020, "the feed's own date leaked into the entry"
+
+
+def test_an_undated_rss_item_does_not_inherit_the_channel_pubdate(cache):
+    xml = """<?xml version="1.0"?>
+    <rss version="2.0"><channel><title>Blog</title>
+      <pubDate>Thu, 30 Apr 2020 00:00:00 +0000</pubDate>
+      <lastBuildDate>Thu, 30 Apr 2020 00:00:00 +0000</lastBuildDate>
+      <item><title>No date</title><link>https://b.example/x</link>
+        <description>A dateless item.</description><guid>x</guid></item>
+    </channel></rss>"""
+    cache.put("rss", "rss:https://b.example/feed", xml)
+    docs = RSSSource().fetch(
+        "https://b.example/feed", author_handle="s", cache=cache, log=lambda _: None
+    )
+    assert len(docs) == 1
+    assert docs[0].date_unknown is True
+    assert docs[0].published_at.year != 2020

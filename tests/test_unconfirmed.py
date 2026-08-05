@@ -93,11 +93,15 @@ def test_a_common_name_run_says_which_fields_would_help() -> None:
     result = result_with("https://site1.example/a")
     result.common_name = True
     result.disambiguators = ["employer", "location"]
-    result.notes = ["9 distinct domains matched the name and nothing else."]
+    result.notes = [
+        "2 independent page(s) attach conflicting identity facts to this name: "
+        "acme.example: employer conflicts."
+    ]
 
     text = render_unconfirmed(card(name="John Smith"), result)
 
-    assert "too common to search on" in text
+    assert "This name is ambiguous" in text
+    assert "conflicting identity facts" in text
     assert "`employer`" in text and "`location`" in text
     assert "corpus profile --target jane" in text
 

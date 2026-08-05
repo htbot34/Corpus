@@ -95,7 +95,7 @@ only thing keeping the citation-reading code honest.
 nothing else" in the discover pass, which the common-name check read as eight
 different people sharing the name. It stopped the phase before a single page was
 fetched. The check now runs after the verification pass, on pages that were
-actually read; see the README's "When the name is too common" and
+actually read; see the README's "When the name is ambiguous" and
 `corpus/search/verify.py`.
 
 ### Undocumented, observed, harmless

@@ -57,10 +57,16 @@ RESULTS_PER_QUERY = 8
 #: pages it already decided to read manufactures holds out of nothing.
 DEFAULT_MAX_VERIFY_FETCHES = 40
 
-#: Distinct domains that match the name and nothing else before the name is
-#: treated as too common to search on. Eight unrelated domains all matching
-#: "John Smith" means the queries are not selecting a person.
-COMMON_NAME_DOMAIN_THRESHOLD = 8
+#: The negatives that count as identity contradictions: a fetched page
+#: attaching a different employer, a different professional field, or a
+#: different location to the target's name.
+CONFLICT_NEGATIVES = ("different_employer", "different_field", "different_location")
+
+#: Distinct hosts carrying conflicting identity facts before the name is
+#: treated as ambiguous. Two independent pages putting the same name at two
+#: different employers is a collision; forty domains all putting it at the
+#: same one is fame.
+COMMON_NAME_CONFLICT_HOSTS = 2
 
 
 @dataclass
@@ -140,7 +146,8 @@ class SearchPhaseResult:
     reads_attempted: int = 0
     #: The fetch ceiling this run was given, so the report can say what bound.
     max_fetches: int = 0
-    #: True when the name is too common to search on. Nothing is ingested.
+    #: True when independent pages attach conflicting identity facts to the
+    #: name. Nothing is ingested.
     common_name: bool = False
     #: Card fields that would most improve the next run.
     disambiguators: list[str] = field(default_factory=list)
@@ -211,34 +218,49 @@ def snippet_promise(score: CandidateScore) -> tuple[float, bool]:
     return score.points, score.name_present
 
 
-def detect_common_name(scores: list[CandidateScore]) -> tuple[bool, int]:
-    """Is this name returning too many unrelated people to reason about?
+def detect_common_name(scores: list[CandidateScore]) -> tuple[bool, list[str]]:
+    """Does the candidate set carry mutually contradictory identity claims?
 
-    Counts *distinct domains* whose page matches the name and carries no other
-    signal at all. Distinct domains rather than results, because ten pages on
-    one news site is one publication writing about one person, while ten pages
-    on ten domains is ten different people.
+    This used to count distinct domains that matched the name and nothing
+    else, and that inference is backwards for a public figure: many domains
+    mentioning one name is evidence of reach, not of several people sharing
+    it. It fired on Simon Willison — 54 results, 25 pages read, every
+    candidate silently held — and the better known the target, the more
+    certainly it misfired. Domain diversity is what search looking *well*
+    looks like.
 
-    **Only fetched scores are counted, and that is load-bearing.** "Carries no
-    other signal" is evidence of a name collision when it describes a page that
-    was read, and evidence of nothing at all when it describes a search result
-    that was not: every strong signal lives in the page. Run against snippet
-    scores the test does not measure the name, it measures how talkative the
-    search vendor is — and `anthropic_search` is not talkative at all, because
-    it builds its snippets from model citations and its system prompt tells the
-    model to write nothing. A live run on 2026-08-03 hit exactly that: 50
-    candidates, every snippet empty, so every candidate scored "the name and
-    nothing else", eight distinct domains cleared the threshold, and the phase
-    stopped before reading a page. Five of those eight domains were the
-    subject's own academic profiles and one was his own site.
+    Ambiguity is a different signal: independent pages attaching
+    *conflicting* identity facts to the same name — different employers,
+    different fields, different locations — which are exactly the negatives
+    `scoring.py` already computes against the card. Two independent pages
+    putting the same name at two different employers is a collision; this
+    fires on that and on nothing else.
+
+    **Only fetched scores are counted, and that is still load-bearing**: a
+    snippet can neither confirm nor contradict anything (see the 2026-08-03
+    run, where empty vendor snippets made 50 candidates look like eight
+    people). And where the card supplies no employer, role or location,
+    contradiction cannot be established at all — the caller declines to run
+    this check and says so, rather than falling back to counting domains.
+
+    Returns (fired, conflict descriptions). The descriptions name the actual
+    conflict per host, because "the name is too common" is not a finding;
+    "two pages put this name at different employers" is.
     """
-    hosts = {
-        (urlparse(s.url).hostname or "").lower().removeprefix("www.")
-        for s in scores
-        if s.fetched and s.name_present and s.independent_count == 0 and s.outcome != "rejected"
-    }
-    hosts.discard("")
-    return len(hosts) >= COMMON_NAME_DOMAIN_THRESHOLD, len(hosts)
+    conflicts_by_host: dict[str, str] = {}
+    for score in scores:
+        if not score.fetched or not score.name_present or score.outcome == "rejected":
+            continue
+        host = (urlparse(score.url).hostname or "").lower().removeprefix("www.")
+        if not host:
+            continue
+        for negative in score.negatives:
+            if negative.name in CONFLICT_NEGATIVES:
+                conflicts_by_host.setdefault(host, f"{host}: {negative.detail}")
+                break
+    if len(conflicts_by_host) < COMMON_NAME_CONFLICT_HOSTS:
+        return False, []
+    return True, [conflicts_by_host[host] for host in sorted(conflicts_by_host)]
 
 
 def search_for_sources(
@@ -347,10 +369,11 @@ def search_for_sources(
     result.errors.extend(e for e in dict.fromkeys(fetcher.errors) if e not in result.errors)
 
     # ---- the stop-and-ask path -------------------------------------------
-    # Deliberately after the fetches rather than before them. A name is common
-    # when many *pages* turn out to be about different people, and the only way
-    # to know that is to have read them — see `detect_common_name`. Asking
-    # first, on snippets, is what stopped a live run before it read anything.
+    # Deliberately after the fetches rather than before them. A name is
+    # ambiguous when independent *pages* attach conflicting identity facts to
+    # it, and the only way to know that is to have read them — see
+    # `detect_common_name`. Asking first, on snippets, is what stopped a live
+    # run before it read anything.
     #
     # The cost of asking late is bounded by `max_fetches`: plain HTTP against
     # public pages, capped, cached, and free. The cost of asking early was a
@@ -384,16 +407,29 @@ def _stop_if_common_name(
     instead of implied by its absence.
     """
     fetched = [c.score for c in result.everything if c.score is not None and c.score.fetched]
-    common, domain_count = detect_common_name(fetched)
+    if not (card.employer or card.role or card.location):
+        # Contradiction needs something to contradict. With none of the
+        # fields a conflict could be read against, this check declines to
+        # run and says so — the old fallback of counting domains fired
+        # hardest exactly where search works best, on well-known names.
+        if any(s.name_present for s in fetched):
+            result.notes.append(
+                "the name-collision check did not run: the card names no employer, "
+                "role or location for a page to contradict, so ambiguity cannot be "
+                "told apart from reach. Adding one of those fields enables it."
+            )
+        return
+    common, conflicts = detect_common_name(fetched)
     if not common:
         return
 
     result.common_name = True
     result.disambiguators = missing_fields(card)
+    shown = "; ".join(conflicts[:4]) + ("; …" if len(conflicts) > 4 else "")
     note = (
-        f"{domain_count} distinct domains carried the name and nothing else once their "
-        f"pages were read. That is a common name, and continuing would mean guessing "
-        f"which of these people is the subject. Nothing from search has been ingested."
+        f"{len(conflicts)} independent page(s) attach conflicting identity facts to "
+        f"this name: {shown}. Continuing would mean guessing which of these people "
+        f"is the subject, so nothing from search has been ingested."
     )
     result.notes.append(note)
     # Logged, not merely recorded. A phase that refuses to ingest anything must
@@ -402,7 +438,7 @@ def _stop_if_common_name(
     log(f"  [search] {note}")
 
     for candidate in result.candidates:
-        candidate.skipped = "held: the name is too common to resolve by search alone"
+        candidate.skipped = "held: independent pages attach conflicting identity facts to this name"
     result.held.extend(result.candidates)
     result.candidates = []
 

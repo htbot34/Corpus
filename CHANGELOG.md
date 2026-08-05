@@ -1716,3 +1716,49 @@ no webfont, no network fetch of any kind.
   pin the server-side theme, the local stylesheet, the purpose statement's
   placement, and that every meter is derived from the numbers it claims.
 - No new dependencies.
+
+## 2026-08-05 — Fame is not ambiguity
+
+A live run on Simon Willison ended with 54 results, 25 verified, 0
+ingested, 18 held, and the message "The name is too common to resolve by
+search." The old heuristic counted distinct domains and fired at eight —
+but many domains all describing one person is *reach*, not collision. A
+well-known subject looked exactly like an unresolvable one, and the
+better-known the subject, the more certain the misfire.
+
+### Changed
+
+- `detect_common_name` no longer counts domains. It fires only on
+  **mutually contradictory identity claims**: two or more independent
+  hosts whose read pages attach conflicting facts (a different employer,
+  field, or location — the negatives `scoring.py` already produces) to
+  the same name. Forty domains agreeing about one person is not ambiguity;
+  two pages putting the subject at different employers is.
+- When the identity card supplies no employer, role, or location, there is
+  nothing a page can contradict, so the check **declines to run and says
+  so** in `result.notes` — it does not fall back to domain counting.
+- The stop message names the actual conflict ("2 independent page(s)
+  attach conflicting identity facts to this name: acme.example: employer
+  conflicts …") instead of asserting commonness it never measured.
+  `unconfirmed.md`, the CLI warning, and the live-contract checker all
+  say "conflicting identity facts" / "This name is ambiguous" now;
+  "too common" survives only in `render.py`'s report wording (out of
+  scope this pass) and in historical notes.
+
+### Fixed
+
+- Atom entries in a feed no longer risk inheriting the feed-level date:
+  `RSSSource._entry_date` reads only the entry's own `<published>`/
+  `<updated>` (or RSS `pubDate`), and an undated entry is recorded
+  `date_unknown` rather than stamped with the feed header's day. This is
+  the TIL-feed failure shape — every entry dated 2020-04-30 because the
+  feed header was.
+
+### Housekeeping
+
+- Test suite 896 → 901: fame-with-forty-domains does not trigger;
+  conflicting employers across two hosts does; conflicts on one host are
+  one source; a card with nothing to contradict declines rather than
+  counts; a real collision ingests nothing and names the conflict; the
+  stop is logged, not only recorded; entry dates are the entry's own and
+  undated Atom/RSS entries never inherit the feed's.

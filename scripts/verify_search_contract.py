@@ -108,7 +108,7 @@ def what_the_phase_did(result: Any) -> None:
         f"({result.fetches} request(s), {result.cached_fetches} from cache)"
     )
     if result.common_name:
-        print("  the name was judged too common to resolve: nothing was ingested")
+        print("  conflicting identity facts were found for the name: nothing was ingested")
     for note in result.notes:
         print(f"  note: {note}")
     for problem in list(dict.fromkeys(result.errors))[:10]:
@@ -138,9 +138,9 @@ def artifact_reason(result: Any) -> str:
         )
     if result.common_name:
         return (
-            "the phase judged the name too common to resolve and demoted everything it "
-            "found.\n  Nothing could reach `corroborated`, so the corroborated column is "
-            "zero by\n  refusal rather than by scoring, and says nothing about where the "
+            "the phase found conflicting identity facts attached to the name and demoted "
+            "everything.\n  Nothing could reach `corroborated`, so the corroborated column "
+            "is zero by\n  refusal rather than by scoring, and says nothing about where the "
             "threshold sits."
         )
     return ""

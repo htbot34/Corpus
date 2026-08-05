@@ -64,21 +64,40 @@ class RSSSource:
         log(f"  rss: {len(docs)} entries from {target}")
         return docs
 
+    @staticmethod
+    def _entry_date(item: ET.Element, is_atom: bool) -> str:
+        """The entry's own date, and only the entry's own.
+
+        Entry-level dates live on each <entry>/<item>; the feed's own
+        <updated> or channel pubDate describes the feed, not any post in
+        it. An entry that carries no date of its own therefore has an
+        UNKNOWN date — `make_document` records it as such via
+        `date_unknown` — and never inherits the feed's. A TIL feed whose
+        header said 2020-04-30 is how a whole source ends up stamped with
+        one misleading day.
+
+        `Element.find` searches direct children only, which is what scopes
+        this to the entry — including past Atom's <source> element, whose
+        embedded <updated> belongs to the origin feed, not the entry.
+        """
+        if is_atom:
+            return _text(item.find(f"{_ATOM}published")) or _text(item.find(f"{_ATOM}updated"))
+        return _text(item.find("pubDate"))
+
     def _entry(self, item: ET.Element, feed_url: str, author_handle: str) -> Document:
         is_atom = item.tag.startswith(_ATOM)
         if is_atom:
             title = _text(item.find(f"{_ATOM}title"))
             link_node = item.find(f"{_ATOM}link")
             url = (link_node.get("href") if link_node is not None else "") or feed_url
-            published = _text(item.find(f"{_ATOM}published")) or _text(item.find(f"{_ATOM}updated"))
             html = _text(item.find(f"{_ATOM}content")) or _text(item.find(f"{_ATOM}summary"))
             guid = _text(item.find(f"{_ATOM}id")) or url
         else:
             title = _text(item.find("title"))
             url = _text(item.find("link")) or feed_url
-            published = _text(item.find("pubDate"))
             html = _text(item.find(f"{_CONTENT}encoded")) or _text(item.find("description"))
             guid = _text(item.find("guid")) or url
+        published = self._entry_date(item, is_atom)
 
         body, links = html_to_text(html)
         return make_document(

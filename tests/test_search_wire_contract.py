@@ -302,7 +302,7 @@ def test_a_common_name_refusal_is_not_reported_as_calibration() -> None:
 
     reason = module.artifact_reason(result)
 
-    assert "too common" in reason
+    assert "conflicting identity facts" in reason
 
 
 def test_a_run_that_found_nothing_is_not_called_an_artifact() -> None:

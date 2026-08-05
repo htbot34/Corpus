@@ -23,7 +23,7 @@ from corpus.search.pagefacts import extract_facts, facts_from_snippet
 from corpus.search.providers import SearchResult, SearchUsage
 from corpus.search.scoring import score_candidate
 from corpus.search.verify import (
-    COMMON_NAME_DOMAIN_THRESHOLD,
+    COMMON_NAME_CONFLICT_HOSTS,
     RESULTS_PER_QUERY,
     detect_common_name,
     search_for_sources,
@@ -391,7 +391,7 @@ def test_empty_snippets_do_not_stop_the_phase_before_it_reads_anything(cache: Ca
     a name collision, because it is a statement about the vendor.
     """
     own = "https://janesmith.example/essay"
-    strangers = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD)]
+    strangers = [f"https://site{i}.example/page" for i in range(8)]
     provider = BatchProvider(
         [
             [hit(url, snippet="", title="Jane Smith") for url in strangers],
@@ -413,6 +413,9 @@ def test_empty_snippets_do_not_stop_the_phase_before_it_reads_anything(cache: Ca
     assert not result.common_name, (
         "eight snippet-less results are a fact about the search vendor, not about the name"
     )
+    assert not any("collision" in n for n in result.notes), (
+        "the card names an employer, so the check ran; it simply found no conflict"
+    )
 
 
 # -- common names -----------------------------------------------------------
@@ -426,67 +429,98 @@ def fetched_score(url: str, body: str, **card_kwargs: object) -> Any:
 NAME_ONLY_PAGE = "<html><body><p>A post by John Smith.</p></body></html>"
 
 
-def test_many_unrelated_domains_matching_the_name_stops_the_phase() -> None:
-    """A tool that guesses on "John Smith" is a liability. Past the threshold
-    it must stop and say so rather than pick."""
+def test_fame_does_not_look_like_ambiguity() -> None:
+    """The Simon Willison misfire, pinned from the passing side.
+
+    Forty distinct domains all matching the name, none contradicting the
+    card: that is reach, not several people sharing a name. The old
+    domain-count trigger fired here and silently held every candidate —
+    hardest exactly where search works best.
+    """
     scores = [
         fetched_score(
             f"https://site{i}.example/page",
             NAME_ONLY_PAGE,
             name="John Smith",
-            employer="",
-            anchors={},
         )
-        for i in range(COMMON_NAME_DOMAIN_THRESHOLD)
+        for i in range(40)
     ]
-    common, domains = detect_common_name(scores)
+    common, conflicts = detect_common_name(scores)
 
-    assert all(s.name_present and s.independent_count == 0 for s in scores)
+    assert all(s.name_present for s in scores)
+    assert not common
+    assert conflicts == []
+
+
+def test_two_pages_at_different_employers_is_ambiguity() -> None:
+    """Two independent pages putting the same name at two different
+    employers is a collision, and the finding names the conflict."""
+    scores = [
+        fetched_score(
+            "https://taxblog.example/post",
+            "<html><body><p>John Smith is a partner at Beta Industries.</p></body></html>",
+            name="John Smith",
+        ),
+        fetched_score(
+            "https://clinic.example/staff",
+            "<html><body><p>John Smith works at Gamma Labs on dermatology.</p></body></html>",
+            name="John Smith",
+        ),
+    ]
+    common, conflicts = detect_common_name(scores)
+
     assert common
-    assert domains == COMMON_NAME_DOMAIN_THRESHOLD
+    assert len(conflicts) == COMMON_NAME_CONFLICT_HOSTS
+    joined = " ".join(conflicts)
+    assert "Beta Industries" in joined and "Gamma Labs" in joined, (
+        "the finding must name the actual conflict, not just declare one"
+    )
+    assert "taxblog.example" in joined and "clinic.example" in joined
 
 
 def test_a_name_that_looks_common_only_because_nothing_was_read_is_not_one() -> None:
-    """The bug, at the level of the function that had it.
-
-    Snippet scores carry no page, so "the name and nothing else" is guaranteed
-    rather than observed. Counting them is how a run concludes that a
-    researcher's own arXiv, ACM, OpenReview and Semantic Scholar profiles are
-    four different people.
-    """
+    """Snippet scores carry no page, so they can neither confirm nor
+    contradict anything. Counting them is how a run once concluded that a
+    researcher's own arXiv, ACM, OpenReview and Semantic Scholar profiles
+    were four different people."""
     scores = [
         score_candidate(
-            facts_from_snippet(f"https://site{i}.example/page", "John Smith", ""),
-            card(name="John Smith", employer="", anchors={}),
+            facts_from_snippet(
+                f"https://site{i}.example/page", "John Smith", "John Smith of Beta Industries"
+            ),
+            card(name="John Smith"),
         )
-        for i in range(COMMON_NAME_DOMAIN_THRESHOLD * 2)
+        for i in range(16)
     ]
-    common, domains = detect_common_name(scores)
+    common, conflicts = detect_common_name(scores)
 
-    assert all(s.name_present and s.independent_count == 0 for s in scores)
     assert not common
-    assert domains == 0, "an unread page is not evidence of anything, in either direction"
+    assert conflicts == [], "an unread page is not evidence of anything, in either direction"
 
 
-def test_many_pages_on_one_domain_is_not_a_common_name() -> None:
-    """Ten pages on one news site is one publication writing about one person.
-    Counting results rather than domains would call that a name collision."""
+def test_conflicts_on_one_host_are_one_conflicting_source() -> None:
+    """Ten contradicting pages on one site is one publication being wrong
+    (or covering someone else) — not independent corroboration of a
+    collision."""
     scores = [
         fetched_score(
-            f"https://news.example/{i}", NAME_ONLY_PAGE, name="John Smith", employer="", anchors={}
+            f"https://news.example/{i}",
+            "<html><body><p>John Smith is a partner at Beta Industries.</p></body></html>",
+            name="John Smith",
         )
-        for i in range(COMMON_NAME_DOMAIN_THRESHOLD * 2)
+        for i in range(10)
     ]
-    common, domains = detect_common_name(scores)
+    common, conflicts = detect_common_name(scores)
 
     assert not common
-    assert domains == 1
+    assert conflicts == []
 
 
-def test_a_common_name_run_ingests_nothing_and_names_what_would_help(cache: Cache) -> None:
-    """The refusal survives the move to after the fetches — what changes is
-    that it is now made on evidence, and the evidence is kept."""
-    urls = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD + 2)]
+def test_a_card_with_nothing_to_contradict_declines_rather_than_counts(cache: Cache) -> None:
+    """No employer, no role, no location: contradiction cannot be
+    established, and the check must not fall back to counting domains. It
+    declines, and says so."""
+    urls = [f"https://site{i}.example/page" for i in range(RESULTS_PER_QUERY)]
     provider = EverythingProvider([hit(url, snippet="John Smith wrote this.") for url in urls])
     for url in urls:
         seed(cache, url, NAME_ONLY_PAGE)
@@ -494,30 +528,60 @@ def test_a_common_name_run_ingests_nothing_and_names_what_would_help(cache: Cach
 
     result = search_for_sources(subject, cache, client_for(provider, cache), log=lambda _m: None)
 
+    assert not result.common_name, "domain count alone must never trigger the refusal"
+    assert any("collision check did not run" in n for n in result.notes)
+
+
+CONFLICT_PAGES = {
+    "https://taxblog.example/post": (
+        "<html><body><p>John Smith is a partner at Beta Industries.</p></body></html>"
+    ),
+    "https://clinic.example/staff": (
+        "<html><body><p>John Smith works at Gamma Labs on dermatology.</p></body></html>"
+    ),
+    "https://blog.example/notes": (
+        "<html><body><p>A post by John Smith about rubrics at Acme Corp.</p></body></html>"
+    ),
+}
+
+
+def test_a_real_collision_ingests_nothing_and_names_the_conflict(cache: Cache) -> None:
+    """The refusal is made on evidence, the evidence is kept, and the note
+    says what was actually found rather than "the name is too common"."""
+    provider = EverythingProvider([hit(url, snippet="John Smith") for url in CONFLICT_PAGES])
+    for url, body in CONFLICT_PAGES.items():
+        seed(cache, url, body)
+    subject = IdentityCard(
+        key="john", name="John Smith", employer="Acme Corp", anchors={"github": "jsmith"}
+    )
+
+    result = search_for_sources(subject, cache, client_for(provider, cache), log=lambda _m: None)
+
     assert result.common_name
     assert result.candidates == [], "nothing is ingested once the name is known to be ambiguous"
-    assert len(result.held) == result.results_seen >= COMMON_NAME_DOMAIN_THRESHOLD, (
+    assert len(result.held) == result.results_seen == len(CONFLICT_PAGES), (
         "every candidate seen must be held for a human, not silently dropped"
     )
     assert all(c.verified for c in result.held), (
         "the pages that proved the collision are kept, so the next run need not refetch them"
     )
-    assert result.disambiguators[:2] == ["employer", "location"]
-    assert any("common name" in n for n in result.notes)
+    conflict_note = next(n for n in result.notes if "conflicting identity facts" in n)
+    assert "Beta Industries" in conflict_note and "Gamma Labs" in conflict_note
 
 
-def test_the_common_name_stop_is_logged_and_not_only_recorded(cache: Cache) -> None:
+def test_the_collision_stop_is_logged_and_not_only_recorded(cache: Cache) -> None:
     """It was silent in `verify_search_contract.py` for a whole live run."""
-    urls = [f"https://site{i}.example/page" for i in range(COMMON_NAME_DOMAIN_THRESHOLD + 2)]
-    provider = EverythingProvider([hit(url, snippet="John Smith wrote this.") for url in urls])
-    for url in urls:
-        seed(cache, url, NAME_ONLY_PAGE)
-    subject = IdentityCard(key="john", name="John Smith", anchors={"github": "jsmith"})
+    provider = EverythingProvider([hit(url, snippet="John Smith") for url in CONFLICT_PAGES])
+    for url, body in CONFLICT_PAGES.items():
+        seed(cache, url, body)
+    subject = IdentityCard(
+        key="john", name="John Smith", employer="Acme Corp", anchors={"github": "jsmith"}
+    )
     logged: list[str] = []
 
     search_for_sources(subject, cache, client_for(provider, cache), log=logged.append)
 
-    assert any("common name" in line for line in logged)
+    assert any("conflicting identity facts" in line for line in logged)
 
 
 def test_a_run_that_could_not_read_a_page_says_so_in_its_own_notes(cache: Cache) -> None:

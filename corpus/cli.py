@@ -1200,8 +1200,8 @@ def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
         # The stop-and-ask path. Loud, because the alternative to saying this
         # is guessing which of several people the subject is.
         warn(
-            f"'{card.display}' is too common a name to resolve by search alone. "
-            f"Nothing from search was ingested."
+            f"independent pages attach conflicting identity facts to "
+            f"'{card.display}'. Nothing from search was ingested."
         )
         fields = ", ".join(f"--{f}" for f in result.disambiguators)
         if fields:

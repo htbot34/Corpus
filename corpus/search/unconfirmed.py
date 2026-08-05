@@ -121,9 +121,7 @@ def render_unconfirmed(
     if result.common_name:
         fields = ", ".join(f"`{f}`" for f in result.disambiguators) or "`employer`, `location`"
         out.append("")
-        out.append(
-            f"> **This name is too common to search on.** {result.notes[0] if result.notes else ''}"
-        )
+        out.append(f"> **This name is ambiguous.** {result.notes[0] if result.notes else ''}")
         out.append(">")
         out.append(
             f"> Adding {fields} to the identity card would narrow it more than any "

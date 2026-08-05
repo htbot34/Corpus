@@ -328,31 +328,33 @@ weight. A `<meta name="author">` tag and a visible "By Jane Smith" are usually
 the same byline rendered twice, and scoring both would manufacture 3.0 points
 out of a single claim.
 
-### When the name is too common
+### When the name is ambiguous
 
-If eight or more distinct domains **whose pages were read** match the name with
-no other signal, the phase refuses to guess: nothing is ingested, everything
-found is held for a human, and the run says which card fields would narrow it —
-`employer` first, then `location`, then `role`. A tool that guesses on "John
-Smith" is a liability.
+If two or more independent hosts **whose pages were read** attach conflicting
+identity facts to the name — a different employer, a different professional
+field, a different location than the card's — the phase refuses to guess:
+nothing is ingested, everything found is held for a human, and the refusal
+names the actual conflict ("taxblog.example: the page puts this name at 'Beta
+Industries', not Acme Corp"). A tool that guesses between two people sharing a
+name is a liability.
 
-"Whose pages were read" is the whole of it, and it was learned the expensive
-way. The check used to run between the two passes, on snippet scores, and stop
-the phase before it fetched anything. A live run on 2026-08-03 walked straight
-into that: `anthropic_search` builds its snippet from the model's citations and
-the search prompt tells the model to write nothing, so all 50 candidates
-arrived with an empty snippet, all 50 scored as "the name and nothing else",
-eight distinct domains cleared the threshold, and the phase stopped having read
-zero pages. Five of those eight domains were the subject's own academic
-profiles and one was his own site. The census the run existed to produce —
-*is a threshold of two signals calibrated?* — was an artifact of a gate that
-had no evidence to work with.
+Conflict, not domain count. An earlier version counted distinct domains that
+matched the name and nothing else, and that inference is backwards for a
+public figure: many domains mentioning one name is evidence of reach, not of
+several people sharing it. It fired on Simon Willison — 54 results, 25 pages
+read, every candidate silently held — and the better known the target, the
+more certainly it misfired. Domain diversity is what search working *well*
+looks like; ambiguity is contradiction.
 
-A name is common when many *pages* turn out to be about different people, and
-only a fetched page can say so. So the refusal now happens after the
-verification pass, on what the pages actually said. Asking late costs at most
-`--max-verify-fetches` plain HTTP requests, which are free and cached; asking
-early cost a whole phase.
+Two consequences follow. Where the card supplies no employer, role or
+location, contradiction cannot be established, and the check declines to run
+and says so in the report rather than falling back to counting domains. And
+the check still runs only on **fetched** pages, learned the expensive way on
+2026-08-03: snippet scores can neither confirm nor contradict anything, and a
+gate fed snippets once concluded a researcher's own academic profiles were
+several different people before reading a single page. Asking after the
+fetches costs at most `--max-verify-fetches` plain HTTP requests, free and
+cached; asking early cost a whole phase.
 
 ### The unconfirmed workflow
 
@@ -1007,7 +1009,7 @@ is still missing or unproven:
   is the stub to reach for if snippets ever need to carry weight.
 - **The scoring thresholds are still judgement, not measurement.** 2.0
   corroboration points for `corroborated` (strong 2, moderate 1, weak 0.5),
-  eight domains for a common name, 80% for source concentration: round numbers
+  two conflicting hosts for an ambiguous name, 80% for source concentration: round numbers
   chosen for where the failure mode changes, like the corpus tiers, and the
   code says so rather than implying precision it does not have. The
   strong/moderate split inside `links_to_anchor` — furniture versus prose — is
