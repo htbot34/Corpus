@@ -10,6 +10,7 @@ Offline.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,9 @@ from typer.testing import CliRunner
 from corpus.budget import (
     Budget,
     estimate_anthropic_cost,
+    estimate_anthropic_split,
     estimate_x_cost,
+    model_rates,
 )
 from corpus.cache import Cache
 from corpus.cli import app
@@ -141,9 +144,47 @@ def test_anthropic_estimate_scales_with_posts() -> None:
 
 
 def test_documented_worked_example_still_holds() -> None:
-    """README claims ~$1.83 total for 3,000 posts. Keep the doc honest."""
+    """README claims ~$1.34 total for 3,000 posts. Keep the doc honest."""
     total = estimate_x_cost(3000) + estimate_anthropic_cost(3000)
     assert 1.0 < total < 3.0, f"3,000-post estimate is now ${total:.2f}"
+
+
+# -- the reduce-model default ------------------------------------------------
+
+
+def test_run_and_resynth_default_the_reduce_model_to_sonnet() -> None:
+    """Both commands inherit REDUCE_MODEL, and the flag stays: --reduce-model
+    claude-opus-5 must remain a complete one-flag revert."""
+    import inspect
+
+    from corpus import cli
+    from corpus.synthesize import REDUCE_MODEL
+
+    assert REDUCE_MODEL == "claude-sonnet-5"
+    for command in (cli.run, cli.resynth):
+        option = inspect.signature(command).parameters["reduce_model"].default
+        assert option.default == "claude-sonnet-5", command.__name__
+        assert "--reduce-model" in option.param_decls, command.__name__
+
+
+def test_estimate_uses_the_configured_reduce_models_rate() -> None:
+    """The dry-run estimate must move with --reduce-model, and the default must
+    price the reduce phase at Sonnet's rate from model_rates(), not an assumed
+    one."""
+    map_default, reduce_default = estimate_anthropic_split(1000)
+    map_opus, reduce_opus = estimate_anthropic_split(1000, reduce_model="claude-opus-5")
+    assert map_default == pytest.approx(map_opus), "the reduce model must not move map"
+    assert reduce_default < reduce_opus
+
+    in_rate, out_rate = model_rates("claude-sonnet-5")
+    reduce_in = 4 * 1_500 + 3_000  # 4 map chunks at 1,000 posts, plus signals.json
+    expected = reduce_in * in_rate / 1_000_000 + 10_000 * out_rate / 1_000_000
+    assert reduce_default == pytest.approx(expected)
+
+
+def test_sonnet_intro_window_pricing_survives_the_default_change() -> None:
+    assert model_rates("claude-sonnet-5", date(2026, 8, 15)) == (2.00, 10.00)
+    assert model_rates("claude-sonnet-5", date(2026, 9, 1)) == (3.00, 15.00)
 
 
 def test_this_attempt_excludes_carried_spend(cache: Cache) -> None:

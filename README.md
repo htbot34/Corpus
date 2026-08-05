@@ -43,7 +43,7 @@ cp .env.example .env    # then fill in the two keys
 | `X_PROVIDER` | no | Provider selector. Defaults to `twitterapi_io`. |
 | `X_BASE_URL` | no | Override the provider base URL (proxy, testing). |
 | `X_MIN_REQUEST_INTERVAL` | no | Seconds between provider requests. Defaults to 5 — the free tier's measured QPS limit is one request per 5 seconds. Lower it on a paid tier; `0` disables the throttle. |
-| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-opus-5`) passes, and for Phase 2 search via the server-side `web_search` tool. One key, no second vendor. |
+| `ANTHROPIC_API_KEY` | yes | Used for the map (`claude-haiku-4-5-20251001`) and reduce (`claude-sonnet-5`) passes, and for Phase 2 search via the server-side `web_search` tool. One key, no second vendor. |
 | `SEARCH_PROVIDER` | no | Search provider selector. Defaults to `anthropic_search`. `exa` and `brave` are stubs naming what to add. |
 | `GITHUB_TOKEN` | no | Raises the GitHub API rate limit from 60/hr to 5,000/hr. Discovery reads at most two public endpoints per target, which fits in the anonymous allowance. |
 | `CORPUS_CACHE_DB` | no | SQLite cache path. Defaults to `~/.corpus/cache.db`. |
@@ -435,8 +435,8 @@ Two independent meters: X data and Anthropic tokens. Both are tracked per call i
 | Minimum charge per request | $0.00015 |
 | Web search (Anthropic server-side tool) | $10 / 1,000 searches, plus the tokens the results consume |
 | `claude-haiku-4-5-20251001` (map) | $1 / $5 per MTok |
-| `claude-opus-5` (reduce) | $5 / $25 per MTok |
-| `claude-sonnet-5` | $2 / $10 per MTok (introductory, through 2026-08-31; $3 / $15 after) |
+| `claude-sonnet-5` (reduce) | $2 / $10 per MTok (introductory, through 2026-08-31; $3 / $15 after) |
+| `claude-opus-5` (`--reduce-model claude-opus-5`) | $5 / $25 per MTok |
 | Prompt cache write / read | 1.25× / 0.10× the input rate |
 
 Sonnet 5 introductory pricing is date-aware in code, so the printed spend matches the
@@ -447,20 +447,24 @@ invoice instead of being conveniently vague.
 Assumes ~50% of posts are replies or quotes needing one extra read to hydrate the
 parent, ~120 tokens per document, ~30k-token map chunks, and one reduce call whose
 output allowance covers thinking (the reduce model thinks by default, and thinking bills
-as output). These are the numbers `--dry-run` prints, computed from the price table above.
+as output). These are the numbers `--dry-run` prints, computed from the price table above
+at Sonnet 5's standard rate — through 2026-08-31 the introductory rate makes the
+Anthropic column a little lower, and the code always charges the rate for the day.
 
 | Posts | Tweet reads | X data | Map chunks | Anthropic | **Total** |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 500 | 750 | $0.11 | 2 | $0.36 | **~$0.47** |
-| 1,000 | 1,500 | $0.23 | 4 | $0.45 | **~$0.67** |
-| 3,000 | 4,500 | $0.68 | 12 | $0.81 | **~$1.48** |
-| 10,000 | 15,000 | $2.25 | 40 | $2.07 | **~$4.32** |
+| 500 | 750 | $0.11 | 2 | $0.24 | **~$0.35** |
+| 1,000 | 1,500 | $0.23 | 4 | $0.33 | **~$0.56** |
+| 3,000 | 4,500 | $0.68 | 12 | $0.66 | **~$1.34** |
+| 10,000 | 15,000 | $2.25 | 40 | $1.84 | **~$4.09** |
 
 This estimate is not the reservation. `--dry-run` answers "what will this run cost";
 `Budget.reserve` answers "can this specific call be covered right now" and charges the
 full `max_tokens` because a reservation that guesses low is not a ceiling. The reduce
-call therefore reserves ~$0.80 regardless of what it ends up using, which is why budgets
-under about a dollar refuse synthesis in strict mode.
+call therefore reserves its worst case regardless of what it ends up using — around
+$0.50 with the default `claude-sonnet-5` reduce (about $0.35 during the introductory
+window), around $0.80 with `--reduce-model claude-opus-5` — which is why very small
+budgets refuse synthesis in strict mode.
 
 Three things move these numbers most: hydration ratio (a reply-heavy account costs more
 because every reply needs its parent), `--reduce-effort` (the reduce call is a small
@@ -479,12 +483,13 @@ phase surprised you. At 1,000 posts:
     discovery (plain HTTP):   $0.000  (4 request(s))
     fetch — X data:          ~$0.225
     map:                     ~$0.150
-    reduce:                  ~$0.295
-    total:                   ~$0.670 of $10.00 budget
+    reduce:                  ~$0.177
+    total:                   ~$0.552 of $10.00 budget
 ```
 
-Reduce is the larger half at that size and barely moves with corpus size, while
-map scales linearly — which is exactly why the split is worth printing.
+Map and reduce are roughly even at that size, but reduce barely moves with
+corpus size while map scales linearly — which is exactly why the split is
+worth printing.
 
 **Discovery is $0.000 and that is not rounding.** Phase 1 is plain HTTP against
 public pages, cached, with one exception: the pinned-post read goes through the
@@ -521,10 +526,12 @@ are held for the duration of a call, so the four concurrent map slices cannot co
 overshoot.
 
 One consequence worth knowing: the reduce call reserves its **worst case**, which is
-`claude-opus-5` emitting all 32,000 output tokens — about **$0.80**. In `strict` mode a
-budget below roughly a dollar will therefore refuse synthesis outright, even though the
-call would probably have cost a fifth of that. That is the guarantee working: it cannot
-promise not to exceed $0.50 when the model *may* spend $0.80. Use `--budget-mode advisory`
+the reduce model emitting all 32,000 output tokens — about **$0.50** for the default
+`claude-sonnet-5` (about $0.35 during the introductory window), about **$0.80** with
+`--reduce-model claude-opus-5`. In `strict` mode a budget below roughly half a dollar
+will therefore refuse synthesis outright, even though the call would probably have cost
+a fraction of that. That is the guarantee working: it cannot promise not to exceed $0.25
+when the model *may* spend $0.50. Use `--budget-mode advisory`
 if you would rather overshoot than stop.
 
 Reservations are reconciled against actual usage afterwards, and any call where the real

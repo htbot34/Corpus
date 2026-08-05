@@ -510,7 +510,11 @@ def run(
         search_cost = estimate_search_phase(len(planned_queries)) if planned_queries else 0.0
         projected_docs = post_target + len(other)
         map_cost, reduce_cost = (
-            (0.0, 0.0) if skip_synthesis else estimate_anthropic_split(projected_docs)
+            (0.0, 0.0)
+            if skip_synthesis
+            # The models actually configured for this run, so the estimate
+            # moves with --reduce-model instead of assuming a default.
+            else estimate_anthropic_split(projected_docs, map_model, reduce_model)
         )
         estimated_total = x_cost + search_cost + map_cost + reduce_cost
         estimated_posts = post_target

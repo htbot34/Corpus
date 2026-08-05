@@ -2,9 +2,10 @@
 
 Map:    chronological ~30k-token chunks -> one cheap extraction call each,
         strict JSON out, concurrency capped at 4.
-Reduce: one claude-opus-5 call over all map outputs plus signals.json, with
+Reduce: one claude-sonnet-5 call over all map outputs plus signals.json, with
         prompt caching on the corpus block. Reduce is judgment and inference
-        with visible reasoning, which is what the expensive model is for.
+        with visible reasoning; `--reduce-model claude-opus-5` restores the
+        old default in one flag if a live run shows Sonnet losing depth.
 
 The hard rules live in the system prompts below and are *also* enforced in
 Python afterwards: every evidence id is checked against the real corpus, every
@@ -49,9 +50,10 @@ from .tiers import (
 # not need judgment, so it does not need an expensive model — and map is the
 # bulk of the tokens.
 MAP_MODEL = "claude-haiku-4-5-20251001"
-# Reduce builds the generating model and defends every inference. Do not
-# downgrade it.
-REDUCE_MODEL = "claude-opus-5"
+# Reduce builds the generating model and defends every inference — judgment
+# work, not extraction. Sonnet 5 is the default; if a live report loses depth,
+# `--reduce-model claude-opus-5` is the complete revert.
+REDUCE_MODEL = "claude-sonnet-5"
 
 MAP_MAX_TOKENS = 8_000
 REDUCE_MAX_TOKENS = 32_000

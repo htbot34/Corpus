@@ -7,10 +7,10 @@ written — paid data is never thrown away.
 Reservations (why `charge()` alone is not a hard stop)
 -----------------------------------------------------
 `charge()` records a cost and *then* raises. By the time it raises, the call has
-already completed and the money is already gone. On a large reduce call —
-`claude-opus-5`, `max_tokens=32_000`, roughly $3.50 on a 10,000-post corpus —
-that means a $10.00 budget sitting at $9.99 fires anyway and lands at $13.49.
-A 35% overshoot on a flag documented as a hard stop.
+already completed and the money is already gone. On a large reduce call — say
+`--reduce-model claude-opus-5`, `max_tokens=32_000`, roughly $3.50 on a
+10,000-post corpus — that means a $10.00 budget sitting at $9.99 fires anyway
+and lands at $13.49. A 35% overshoot on a flag documented as a hard stop.
 
 The map stage is structurally worse: `MAP_CONCURRENCY = 4` under
 `asyncio.gather`, each slice charging only after its call returns, so four calls
@@ -514,7 +514,7 @@ def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:
 def estimate_anthropic_split(
     post_count: int,
     map_model: str = "claude-haiku-4-5-20251001",
-    reduce_model: str = "claude-opus-5",
+    reduce_model: str = "claude-sonnet-5",
 ) -> tuple[float, float]:
     """(map, reduce) separately, for the per-phase breakdown a run prints.
 
@@ -535,7 +535,7 @@ def estimate_anthropic_split(
 def estimate_anthropic_cost(
     post_count: int,
     map_model: str = "claude-haiku-4-5-20251001",
-    reduce_model: str = "claude-opus-5",
+    reduce_model: str = "claude-sonnet-5",
 ) -> float:
     """Rough pre-flight estimate for map+reduce over `post_count` documents.
 

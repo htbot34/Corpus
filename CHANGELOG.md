@@ -1783,3 +1783,46 @@ run's report.
 ### Housekeeping
 
 - Test suite 901 → 902.
+
+## 2026-08-05 — Sonnet 5 takes the reduce
+
+The reduce default moves from `claude-opus-5` to `claude-sonnet-5`
+everywhere the default is set: `REDUCE_MODEL` in `synthesize.py` (which
+`corpus run` and `corpus resynth` both inherit through their
+`--reduce-model` options) and the `reduce_model` defaults on
+`estimate_anthropic_split` and `estimate_anthropic_cost` in `budget.py`.
+`--reduce-model claude-opus-5` is the complete one-flag revert — nothing
+else changed shape.
+
+The dry-run estimator now passes the run's configured `--map-model` and
+`--reduce-model` into `estimate_anthropic_split` instead of pricing an
+assumed default, so the printed estimate moves with the flag. Pricing
+itself is untouched: Sonnet 5's introductory $2/$10 through 2026-08-31
+reverting to $3/$15 was already date-aware in `model_rates`, and the
+reservation layer always priced whatever model it was handed.
+
+Two risks were checked rather than assumed away:
+
+- **The schema ceiling.** The 3,400-byte `REDUCE_SCHEMA` budget was
+  bisected against Opus (3,522 accepted, 3,809 rejected); the current
+  schema is 3,251 bytes and Sonnet has already run against it live. The
+  ceiling is unchanged and `test_schema_size.py` still enforces it — if
+  Sonnet's grammar limit turns out lower, the schema-rejection fallback
+  in `run_reduce` already handles it at runtime.
+- **Opus-class assumptions.** The only model-name comparisons in the
+  package are `model_rates`'s intro-window check (pricing) and
+  `supports_effort`'s prefix list — `claude-sonnet-5` is in
+  `EFFORT_CAPABLE_PREFIXES`, so `--reduce-effort high` still reaches the
+  API. `REDUCE_MAX_TOKENS = 32_000` is within Sonnet 5's output ceiling,
+  the two-billed-attempts retry loop and the schema fallback are
+  model-agnostic, and the reservation math takes the model as a
+  parameter. Nothing else keys on the reduce model's name.
+
+### Housekeeping
+
+- Test suite 902 → 907: the default is Sonnet on both `run` and
+  `resynth`; `--reduce-model claude-opus-5` reaches the API verbatim; the
+  split estimate moves with the reduce model and matches `model_rates`;
+  the intro window survives the default change.
+- README worked examples recomputed at Sonnet's standard rate; the
+  reservation prose now quotes both models' worst cases.

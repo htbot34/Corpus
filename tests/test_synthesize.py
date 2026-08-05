@@ -124,7 +124,28 @@ def test_single_small_corpus_is_one_chunk():
 def test_map_is_cheap_and_reduce_is_not():
     """Map is extraction, reduce is judgment. Do not let them drift together."""
     assert MAP_MODEL == "claude-haiku-4-5-20251001"
-    assert REDUCE_MODEL == "claude-opus-5"
+    assert REDUCE_MODEL == "claude-sonnet-5"
+
+
+def test_reduce_model_flag_is_a_complete_revert(client, cache):
+    """--reduce-model claude-opus-5 must restore the old default in one flag."""
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    fake = FakeAnthropic()
+    run_synth(
+        fake,
+        docs,
+        compute_signals(docs),
+        Budget(limit=10.0, cache=cache),
+        reduce_model="claude-opus-5",
+    )
+    assert fake.calls[-1]["model"] == "claude-opus-5"
+
+
+def test_reduce_runs_on_the_default_model_when_no_flag_is_given(client, cache):
+    docs, _ = hydrate(client, load("tweets.json"), "testsubject", log=lambda _: None)
+    fake = FakeAnthropic()
+    run_synth(fake, docs, compute_signals(docs), Budget(limit=10.0, cache=cache))
+    assert fake.calls[-1]["model"] == REDUCE_MODEL == "claude-sonnet-5"
 
 
 def test_effort_is_only_sent_to_models_that_implement_it():
