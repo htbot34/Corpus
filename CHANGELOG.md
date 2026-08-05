@@ -1826,3 +1826,48 @@ Two risks were checked rather than assumed away:
   the intro window survives the default change.
 - README worked examples recomputed at Sonnet's standard rate; the
   reservation prose now quotes both models' worst cases.
+
+## 2026-08-05 — A name is a precondition, not a signal
+
+A live run on Aravind Rao ingested three documents as the target's own
+writing: two interview pages about Aravind Srinivas and one about Arvind
+Narayanan. The stated reason was "OpenAI is named on the page; the role
+matches (Member of Technical Staff)". Reduced to its essence: the page
+text "The company OpenAI hires many a Member of Technical Staff each
+year" — a sentence about nobody — scored employer (moderate, 1.0) plus
+role (moderate, 1.0), reached the 2.0 threshold, and was corroborated.
+Two generic facts outweighed the identity they were supposed to
+corroborate.
+
+### Changed
+
+- `score_candidate` now enforces an **identity precondition**: no
+  candidate reaches `corroborated` unless the page attaches the target's
+  identity — the full name, their specific handle, or a page that
+  identifies itself as theirs (their anchored host, or an anchor link in
+  the page's own author furniture). Employer, role and location
+  corroborate an identity that is already established; they cannot
+  establish one. Where no identity is attached, the ceiling is `held`,
+  whatever the points total. The 2.0 threshold itself is untouched — the
+  bug was what counted toward it, not the number.
+- `CandidateScore` carries `identity_established`, written to
+  `discovery.json`, and `unconfirmed.md`'s "did not match" column now
+  says "the page never attaches their name or handle to the writing" so
+  the human sees why 2.0 points did not promote.
+- A page that attaches the matching facts to a *different* name is
+  already the `different_employer` / `different_field` territory when the
+  target's name is present; when it is not, the precondition alone holds
+  the page.
+- `scripts/verify_fix.py` now proves both holes with one command: the
+  two footer-blogroll pages (dustinw) and three generic-facts pages
+  (arao) — the no-name reproduction, the Lex Fridman transcript, and the
+  Interconnects interview — all held, never ingested.
+
+### Housekeeping
+
+- Test suite 907 → 913: the reproduction page (2.0 points, nobody named)
+  is held; a different person with matching facts is never ingested; the
+  target named with matching facts still corroborates; the lexfridman
+  and interconnects cases by name; the held page explains itself.
+  `test_search_can_never_promote_to_linked` and the footer-blogroll
+  regressions pass unchanged.

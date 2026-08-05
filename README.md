@@ -189,7 +189,7 @@ and holds the axes. Targets are personal notes about real people; a `pip install
 | --- | --- | :-: |
 | `anchor` | A URL or handle you supplied. Certain. | yes |
 | `linked` | Reached by following a link from an anchor. | yes |
-| `corroborated` | Found by search, with 2.0 points of identity evidence: one strong self-declaration, or agreeing moderate signals. | yes |
+| `corroborated` | Found by search, naming them (or their handle), with 2.0 points of agreeing evidence: one strong self-declaration, or agreeing moderate signals. | yes |
 | `name_match` | The name matched and nothing else. | **no** |
 
 `name_match` candidates are recorded in `discovery.json` with what matched and
@@ -319,6 +319,14 @@ ingested. One strong self-declaration is enough; so are two moderate
 agreements; anything less → `name_match`, and held. (A count of two was
 backwards — it promoted two moderate agreements while holding a page whose own
 byline links their GitHub.)
+
+Points promote only past the **identity precondition**: the page must attach
+the target's identity — their full name, their specific handle, or a page that
+identifies itself as theirs (their anchored host, or an anchor link in the
+page's own author furniture). Employer, role and location corroborate an
+identity that is already established; they cannot establish one. "OpenAI" in a
+sentence about someone else is not evidence about this person, so a page
+naming nobody is capped at held whatever its points total.
 **`linked` is unreachable from search by construction**: it means "reached from
 a declared field on an anchor", and no quantity of search evidence turns into a
 self-declaration.

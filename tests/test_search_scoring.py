@@ -704,6 +704,121 @@ def test_corroborated_confidence_is_capped_inside_its_tier() -> None:
     assert score.confidence < ATTRIBUTION_CONFIDENCE["linked"]
 
 
+# -- the identity precondition ----------------------------------------------
+#
+# The arao run: three documents ingested as the target's own writing, two of
+# them interviews with Aravind Srinivas and one with Arvind Narayanan — the
+# target was Aravind Rao. Employer (moderate, 1.0) plus role (moderate, 1.0)
+# reached the 2.0 threshold with no name match required, so two generic facts
+# outweighed the identity they were supposed to corroborate. A name match is a
+# precondition for corroboration, not one signal among several.
+
+
+def arao_card() -> IdentityCard:
+    return build_card(
+        name="Aravind Rao",
+        key="arao",
+        x="aravrao",
+        employer="OpenAI",
+        role="Member of Technical Staff",
+    )
+
+
+def test_a_page_naming_nobody_cannot_be_corroborated_by_generic_facts() -> None:
+    """The live reproduction, verbatim: a sentence about nobody at all reached
+    `corroborated` at 2.0 points on employer plus role."""
+    facts = extract_facts(
+        page(body="The company OpenAI hires many a Member of Technical Staff each year."),
+        "https://jobs.example/openai-hiring",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert not score.name_present
+    assert score.points >= CORROBORATION_THRESHOLD, (
+        "the generic facts must still reach the threshold, or the precondition "
+        "is not what explains the held outcome"
+    )
+    assert not score.identity_established
+    assert score.outcome == "held"
+    assert not score.ingestible
+
+
+def test_a_page_about_a_different_person_with_matching_facts_is_never_ingested() -> None:
+    facts = extract_facts(
+        page(body="Aravind Srinivas is a Member of Technical Staff at OpenAI."),
+        "https://blog.example/profile",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert score.outcome in ("held", "rejected", "context")
+    assert not score.ingestible
+
+
+def test_a_page_naming_the_target_with_matching_facts_still_corroborates() -> None:
+    """The precondition must not eat the legitimate case: name plus employer
+    plus role is exactly what corroboration is."""
+    facts = extract_facts(
+        page(body="Aravind Rao is a Member of Technical Staff at OpenAI."),
+        "https://thinking.example/post",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert score.name_present
+    assert score.identity_established
+    assert score.outcome == "corroborated"
+    assert score.ingestible
+
+
+def test_the_lexfridman_transcript_is_not_the_targets_writing() -> None:
+    """The first live misattribution: an interview transcript with Aravind
+    Srinivas, ingested as Aravind Rao's own writing because OpenAI and the
+    role were on the page."""
+    facts = extract_facts(
+        page(
+            title="Aravind Srinivas: Perplexity, and leaving OpenAI",
+            body=(
+                "Aravind Srinivas was a Member of Technical Staff at OpenAI before "
+                "founding Perplexity. The full transcript of our conversation follows."
+            ),
+        ),
+        "https://lexfridman.com/aravind-srinivas-transcript",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert score.outcome != "corroborated"
+    assert not score.ingestible
+
+
+def test_the_interconnects_interview_is_not_the_targets_writing() -> None:
+    """The second live misattribution — a different person entirely (Arvind
+    Narayanan), on a page whose only agreement with the card was generic."""
+    facts = extract_facts(
+        page(
+            title="Interviewing Arvind Narayanan",
+            body=(
+                "Arvind Narayanan on AI snake oil, agents, and evaluation. OpenAI's "
+                "Member of Technical Staff title comes up more than once."
+            ),
+        ),
+        "https://www.interconnects.ai/p/interviewing-arvind-narayanan",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert score.outcome != "corroborated"
+    assert not score.ingestible
+
+
+def test_the_held_page_says_the_identity_was_never_established() -> None:
+    """unconfirmed.md must tell the human why 2.0 points did not promote."""
+    facts = extract_facts(
+        page(body="The company OpenAI hires many a Member of Technical Staff each year."),
+        "https://jobs.example/openai-hiring",
+    )
+    score = score_candidate(facts, arao_card())
+
+    assert any("never attaches their name" in m for m in score.missing)
+
+
 # -- snippets are leads, never evidence -------------------------------------
 
 

@@ -26,6 +26,14 @@ The tiers
   deduplicated so two views of one fact count once. 2.0 points or more with
   no negatives → `corroborated`. Ingested. One strong self-declaration is
   enough; so are two moderate agreements; weak signals only ever assist.
+* Points promote only past the identity precondition: the page must attach
+  the target's identity — the full name, their specific handle, or a page
+  that identifies itself as theirs (their anchored host, or an anchor link
+  in the page's own author furniture). Employer, role and location
+  corroborate an identity that is already established; they cannot
+  establish one. "OpenAI" in a sentence about someone else is not evidence
+  about this person, so a page naming nobody is capped at `held` whatever
+  its points total.
 * Fewer points, or any unresolved negative → `name_match`. Held for a human.
 * A page *about* them rather than *by* them → recorded as context, never a
   corpus document. A profile piece, an interview write-up, and a conference
@@ -290,6 +298,13 @@ class CandidateScore:
     #: it is the baseline every candidate clears — but the common-name
     #: heuristic counts it.
     name_present: bool = False
+    #: Whether the page attaches the target's identity to itself: their name,
+    #: their specific handle, their anchored host, or an anchor link in the
+    #: page's own author furniture. The precondition for `corroborated` —
+    #: generic facts (employer, role, location) corroborate an identity, they
+    #: never establish one. Only meaningful on pages that reached scoring;
+    #: early rejections leave it False.
+    identity_established: bool = False
     fetched: bool = False
     query: str = ""
 
@@ -332,6 +347,11 @@ class CandidateScore:
         out = [n.detail for n in self.negatives]
         if not self.fetched:
             out.append("the page was not fetched, so only the snippet was scored")
+        if self.outcome == "held" and not self.identity_established:
+            out.append(
+                "the page never attaches their name or handle to the writing — "
+                "employer and role can corroborate an identity, not establish one"
+            )
         if self.points < CORROBORATION_THRESHOLD and not self.negatives:
             out.append(
                 f"only {self.points:g} corroboration point(s) — a strong signal is "
@@ -353,6 +373,7 @@ class CandidateScore:
             "attribution": self.attribution,
             "attribution_confidence": round(self.confidence, 3),
             "corroboration_points": self.points,
+            "identity_established": self.identity_established,
             "query": self.query,
             "fetched": self.fetched,
             "signals": [
@@ -826,11 +847,32 @@ def score_candidate(
     if location_matched:
         score.signals.append(Signal("location", WEAK, f"{card.location} is named on the page"))
 
+    # ---- the identity precondition ---------------------------------------
+    # A name match is a precondition for corroboration, not one signal among
+    # several. Employer, role and location corroborate an identity the page
+    # has already attached to the writing; they cannot establish one —
+    # "OpenAI" in a sentence about someone else is not evidence about this
+    # person. What establishes identity: the target's name, their specific
+    # handle, their own anchored host, or an anchor link the page carries in
+    # its own author furniture (the page identifying itself as theirs).
+    score.identity_established = (
+        score.name_present
+        or own_host
+        or bool(co_occurring)
+        or any(s.name == "links_to_anchor" and s.weight == STRONG for s in score.signals)
+    )
+
     # ---- the tier --------------------------------------------------------
     blocking = [n for n in score.negatives if n.effect != "reject"]
     if blocking:
         # A demotion, not merely a failure to promote: however many positives
         # agreed, an unresolved contradiction sends this to a human.
+        score.outcome = "held"
+    elif not score.identity_established:
+        # The ceiling, not a deduction: whatever the points total, a page
+        # that never attaches the target's identity cannot be corroborated
+        # as their writing. Two generic facts must not outweigh the identity
+        # they are supposed to corroborate.
         score.outcome = "held"
     elif corroboration_points(score.signals) >= CORROBORATION_THRESHOLD:
         score.outcome = "corroborated"
