@@ -109,6 +109,24 @@ def _is_schema_rejection(exc: Exception) -> bool:
     return any(marker in text for marker in SCHEMA_REJECTION_MARKERS)
 
 
+def _describe_failure(exc: Exception) -> str:
+    """Every clue the exception carries: type, HTTP status, message.
+
+    A live run died with "ERROR: synthesis failed: reduce call failed:" — the
+    exception stringified to nothing and the one fact that explained a paid
+    failure was discarded. This project's expensive bugs have all been silent
+    ones, so the error text names the exception type and status even when the
+    message is empty, rather than printing a bare colon.
+    """
+    kind = type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    prefix = f"{kind} (HTTP {status})" if status is not None else kind
+    text = str(exc).strip()
+    if not text:
+        return f"{prefix} with no message"
+    return f"{prefix}: {text}"
+
+
 CHUNK_TOKEN_TARGET = 30_000
 MAP_CONCURRENCY = 4
 # Chunking only needs to be approximately right; ~4 chars/token is close enough
@@ -846,7 +864,11 @@ async def run_reduce(
                     "JSON, still validated against the pydantic model"
                 )
                 continue
-            return None, "", f"reduce call failed: {exc}", structured
+            # Logged as well as returned: the run log must carry the failure
+            # even if the caller's error handling loses it.
+            described = _describe_failure(exc)
+            log(f"  [reduce] attempt {attempt} failed: {described}")
+            return None, "", f"reduce call failed: {described}", structured
 
         actual: float | None = None
         try:

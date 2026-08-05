@@ -1871,3 +1871,27 @@ corroborate.
   and interconnects cases by name; the held page explains itself.
   `test_search_can_never_promote_to_linked` and the footer-blogroll
   regressions pass unchanged.
+
+## 2026-08-05 — A failed reduce may not fail silently
+
+A live Sonnet reduce at ~114k input tokens died with
+`ERROR: synthesis failed: reduce call failed:` — nothing after the colon.
+The exception stringified to empty and `run_reduce` interpolated it
+straight into the error, discarding the type and status that would have
+said what actually happened.
+
+### Fixed
+
+- `run_reduce` now describes a failed call with `_describe_failure`:
+  exception type, `HTTP <status>` where the exception carries a
+  `status_code`, and the full message — or "with no message" when the
+  text is genuinely empty, rather than a bare colon. The description is
+  logged at the point of failure (so the run log carries it even if a
+  caller loses the returned error) and returned in the error string the
+  CLI prints.
+
+### Housekeeping
+
+- Test suite 913 → 915: a reduce failure surfaces type, status and text
+  in both the error and the run log; an exception with an empty message
+  is named by type.

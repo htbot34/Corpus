@@ -592,6 +592,70 @@ def test_reduce_falls_back_when_the_schema_is_refused(cache):
     assert synthesis is not None
 
 
+def _failing_client(exc: Exception) -> FakeAnthropic:
+    client = FakeAnthropic()
+
+    def stream(**kwargs):
+        raise exc
+
+    client.messages.stream = stream  # type: ignore[method-assign]
+    return client
+
+
+def test_a_reduce_failure_surfaces_the_underlying_error(cache):
+    """A live run died with "reduce call failed:" and nothing after the colon.
+    Whatever the exception carries — type, HTTP status where present, message
+    — must reach the returned error and the run log, because this project's
+    expensive bugs have all been silent ones."""
+
+    class Overloaded(Exception):
+        status_code = 529
+
+    lines: list[str] = []
+    synthesis, _raw, error, _structured = asyncio.run(
+        run_reduce(
+            _failing_client(Overloaded("upstream connect error")),
+            [{"topics": []}],
+            {},
+            [],
+            Budget(limit=100.0, cache=cache),
+            axes=AXES,
+            log=lines.append,
+        )
+    )
+    assert synthesis is None
+    assert "Overloaded" in error
+    assert "HTTP 529" in error
+    assert "upstream connect error" in error
+    assert any("upstream connect error" in line for line in lines), (
+        "the run log never saw the failure"
+    )
+
+
+def test_a_reduce_exception_with_no_message_is_named_by_type(cache):
+    """The live failure verbatim: str(exc) was empty and the CLI printed a
+    bare colon. The type name is the one clue that always exists."""
+
+    class Mute(Exception):
+        def __str__(self) -> str:
+            return ""
+
+    synthesis, _raw, error, _structured = asyncio.run(
+        run_reduce(
+            _failing_client(Mute()),
+            [{"topics": []}],
+            {},
+            [],
+            Budget(limit=100.0, cache=cache),
+            axes=AXES,
+            log=lambda _: None,
+        )
+    )
+    assert synthesis is None
+    assert "Mute" in error
+    assert not error.rstrip().endswith(":"), "a bare colon is the bug verbatim"
+
+
 def test_the_schema_fallback_does_not_consume_a_paid_attempt(cache):
     """The refusal is free — nothing is generated — so it must not cost a retry."""
     client = FakeAnthropic(reduce_response=lambda _kwargs: "{not json")
