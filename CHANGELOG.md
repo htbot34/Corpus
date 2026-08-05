@@ -1762,3 +1762,24 @@ better-known the subject, the more certain the misfire.
   counts; a real collision ingests nothing and names the conflict; the
   stop is logged, not only recorded; entry dates are the entry's own and
   undated Atom/RSS entries never inherit the feed's.
+
+## 2026-08-05 — Rationing the em dash
+
+The last live report used 86 em dashes across 6,984 words — roughly one
+every 80 words, which reads as a tic. The fix is instruction, not
+post-editing: rewriting the model's punctuation in `render.py` after the
+fact is a line not to cross, so both prompts that produce prose now carry
+the same guidance — use em dashes sparingly, at most once or twice in any
+section; prefer the punctuation that actually fits (a comma for an aside,
+a colon before an explanation, a period where two sentences are hiding
+inside one); vary sentence structure rather than chaining clauses with
+dashes.
+
+This is prompt guidance, not schema fields — `REDUCE_SCHEMA` is untouched
+and stays at 3,251 bytes, under the bisected 3,400-byte ceiling. A test
+pins the guidance into both prompts, but the real check is the next live
+run's report.
+
+### Housekeeping
+
+- Test suite 901 → 902.

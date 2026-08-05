@@ -171,6 +171,11 @@ counterexample", "cites own prior work", "reaches for a base rate").
 - highest_signal_document_ids: the 3 documents in this slice that best reveal how \
 this person thinks. Not the most popular — the most revealing.
 
+In every prose value, use em dashes sparingly, at most once or twice in any \
+section. Prefer the punctuation that actually fits — a comma for an aside, a \
+colon before an explanation, a period where two sentences are hiding inside one. \
+Vary sentence structure rather than chaining clauses with dashes.
+
 Every id you emit must be an id that appears in this slice. Emit no other prose."""
 
 MAP_AXES_SUFFIX = """
@@ -244,6 +249,13 @@ Use "strong" only when the corpus genuinely lets you locate them.
 {axes}
 
 {tier}
+
+## Prose style
+
+Use em dashes sparingly, at most once or twice in any section. Prefer the \
+punctuation that actually fits — a comma for an aside, a colon before an \
+explanation, a period where two sentences are hiding inside one. Vary sentence \
+structure rather than chaining clauses with dashes.
 
 ## Hard rules
 

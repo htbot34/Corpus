@@ -19,6 +19,7 @@ from corpus.synthesize import (
     REDUCE_MODEL,
     _is_schema_rejection,
     _strip_code_fences,
+    build_map_system,
     build_reduce_system,
     chunk_documents,
     enforce_signal_counts,
@@ -314,6 +315,17 @@ def test_reduce_prompt_names_the_selected_axes_and_the_none_rule():
     assert "defense_intel_natsec" in prompt
     assert "technology_and_ai" not in prompt, "unselected axes must not leak in"
     assert '`signal: "none"` is a required, valid, expected output' in prompt
+
+
+def test_both_prompts_ration_the_em_dash():
+    """86 em dashes in 6,984 words. The fix is instruction, not post-editing:
+    rewriting the model's punctuation in render.py is a line not to cross, so
+    the guidance has to reach both of the prompts that produce prose."""
+    for prompt in (build_map_system(AXES), build_reduce_system(AXES, classify_corpus(400))):
+        assert "use em dashes sparingly, at most once or twice in any section" in prompt.lower()
+        assert "a comma for an aside, a colon before an explanation" in prompt
+        assert "a period where two sentences are hiding inside one" in prompt
+        assert "Vary sentence structure rather than chaining clauses with dashes" in prompt
 
 
 # -- evidence cap -----------------------------------------------------------
