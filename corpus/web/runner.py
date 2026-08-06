@@ -214,6 +214,10 @@ class RunOutcome:
     spend: float = 0.0
     documents: int = 0
     tier: str = ""
+    #: The run completed cleanly and the corpus was empty — the CLI's
+    #: "finding, not a failure" outcome. Distinct from a failure and from a
+    #: synthesized run, and displayed as its own status.
+    empty_corpus: bool = False
     notes: list[str] = field(default_factory=list)
 
 
@@ -250,5 +254,6 @@ def _read_run_meta(outcome: RunOutcome) -> None:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         outcome.documents = int(meta.get("analyzed_documents") or 0)
         outcome.tier = str(meta.get("corpus_tier") or "")
+        outcome.empty_corpus = bool(meta.get("empty_corpus"))
     except (OSError, ValueError) as exc:
         outcome.notes.append(f"could not read {meta_path}: {exc}")

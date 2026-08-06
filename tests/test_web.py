@@ -12,6 +12,7 @@ and the wrapper's contract is argv in, streamed lines out.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from itertools import pairwise
@@ -145,6 +146,94 @@ def test_the_audit_row_is_written_even_when_the_run_fails(store: WebStore) -> No
     assert str(row["target_key"]) == "jane"
     assert str(row["reason"]) == "due diligence on a co-founder"
     assert str(row["who"]) == "local"
+
+
+def _queue_one(store: WebStore, key: str = "arao", reason: str = "reference check") -> int:
+    run_id, token = store.propose(
+        target_key=key,
+        name="Aravind Rao",
+        params=RunParams(key=key, name="Aravind Rao").as_dict(),
+        reason=reason,
+        dry_run_output="estimate",
+    )
+    assert store.confirm(run_id, token)
+    return run_id
+
+
+def test_a_clean_empty_run_records_its_own_status_and_an_audit_row(store: WebStore) -> None:
+    """ "The tool worked and the answer is no" must not wear the failure badge:
+    it gets its own terminal status, and the audit row is still written."""
+
+    def fake_execute(params: RunParams, sink) -> RunOutcome:
+        sink("An empty corpus is a finding, not a failure; writing the report.")
+        return RunOutcome(exit_code=0, out_dir="out/arao/2026-08-06", empty_corpus=True)
+
+    run_id = _queue_one(store)
+    worker = RunWorker(store, execute=fake_execute)
+    assert worker.process_next() is True
+
+    row = store.get_run(run_id)
+    assert row is not None
+    assert str(row["status"]) == "no_corpus"
+    assert not str(row["error"] or "")
+
+    audit = store.audit_rows()
+    assert len(audit) == 1
+    assert str(audit[0]["status"]) == "no_corpus"
+
+
+def test_a_nonzero_exit_is_still_failed_never_no_corpus(store: WebStore) -> None:
+    def fake_execute(params: RunParams, sink) -> RunOutcome:
+        return RunOutcome(exit_code=1)
+
+    run_id = _queue_one(store)
+    assert RunWorker(store, execute=fake_execute).process_next() is True
+
+    row = store.get_run(run_id)
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    audit = store.audit_rows()
+    assert len(audit) == 1
+    assert str(audit[0]["status"]) == "failed"
+
+
+def test_the_no_corpus_status_renders_neutral_not_as_an_error(store: WebStore) -> None:
+    from corpus.web import pages
+
+    def fake_execute(params: RunParams, sink) -> RunOutcome:
+        return RunOutcome(exit_code=0, out_dir="out/arao/2026-08-06", empty_corpus=True)
+
+    run_id = _queue_one(store)
+    assert RunWorker(store, execute=fake_execute).process_next() is True
+
+    row = store.get_run(run_id)
+    assert row is not None
+    html = pages.run_page(row, store.log_lines(run_id))
+    assert "status-no_corpus" in html
+    assert "no corpus" in html
+    assert "status-failed" not in html
+    assert "class='error'" not in html, "an empty result must not wear the error panel"
+    # The report is the deliverable of an empty run; it must stay reachable.
+    assert f"/runs/{run_id}/report" in html
+
+    history = pages.history_page(store.runs())
+    assert "status-no_corpus" in history
+    assert f"/runs/{run_id}/report" in history
+
+
+def test_the_no_corpus_flag_is_read_from_run_meta(tmp_path: Path) -> None:
+    """The CLI's `empty_corpus` marker in run_meta.json is how the worker
+    learns the run completed with an empty corpus."""
+    from corpus.web.runner import _read_run_meta
+
+    (tmp_path / "run_meta.json").write_text(
+        json.dumps({"empty_corpus": True, "analyzed_documents": 0, "corpus_tier": ""}),
+        encoding="utf-8",
+    )
+    outcome = RunOutcome(exit_code=0, out_dir=str(tmp_path))
+    _read_run_meta(outcome)
+    assert outcome.empty_corpus is True
+    assert outcome.notes == []
 
 
 def test_the_store_offers_no_way_to_delete_audit_rows() -> None:

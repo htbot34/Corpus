@@ -933,3 +933,82 @@ def render_report(
     out.append("```")
     out.append("")
     return "\n".join(out)
+
+
+def render_empty_report(
+    *,
+    subject: str,
+    sources: list[str],
+    results_seen: int,
+    held: int,
+    anchors: list[str],
+    budget_lines: list[str],
+) -> str:
+    """The report for a run that completed cleanly and found nothing.
+
+    An empty corpus is a finding, not a crash — and "we found nothing" is a
+    different finding from "we found things and could not confirm they were
+    theirs". This report exists so a reader can tell those apart without
+    opening a log, and so the run does not get re-run repeatedly at cost by
+    someone reading emptiness as breakage.
+    """
+    out = [
+        f"# {subject}",
+        "",
+        "**No public writing could be attributed to this person.** Every source",
+        "completed without error and returned nothing attributable, so the corpus",
+        "is empty. This is the run's finding, not a failure — re-running will not",
+        "change it unless the identity card changes.",
+        "",
+        "## What was tried",
+        "",
+    ]
+    for line in sources or ["- nothing: no source was configured"]:
+        out.append(f"- {line}")
+    out.append("")
+
+    if held:
+        out.append("## Found, but not confirmed")
+        out.append("")
+        out.append(
+            f"Search saw {results_seen} result(s) and held {held} candidate(s): "
+            "pages that matched the name but could not be confirmed as this "
+            'person\'s writing. "Nothing could be attributed" therefore means '
+            '*found, but unconfirmed* — not "no trace of this person exists".'
+        )
+        out.append("")
+        out.append(
+            "Review `unconfirmed.md` in this directory: tick the candidates that "
+            "really are theirs and re-run with `--accept-unconfirmed` to build "
+            "the corpus from a human decision."
+        )
+    else:
+        out.append("## Nothing was found")
+        out.append("")
+        out.append(
+            f"Search saw {results_seen} result(s) and held none of them, so there "
+            "is no candidate waiting on a human decision."
+        )
+    out.append("")
+
+    if len(anchors) <= 1:
+        carried = f"one anchor (`{anchors[0]}`)" if anchors else "no anchors"
+        out.append("## What would change the outcome")
+        out.append("")
+        out.append(
+            f"The identity card carried {carried}. Adding a GitHub username "
+            "(`--github`) or a personal site (`--site`) gives discovery a place "
+            "to start and search an identity to corroborate against — that, not "
+            "re-running, is what would change this outcome."
+        )
+        out.append("")
+
+    out.append("---")
+    out.append("")
+    out.append("## Spend")
+    out.append("")
+    out.append("```")
+    out.extend(budget_lines)
+    out.append("```")
+    out.append("")
+    return "\n".join(out)

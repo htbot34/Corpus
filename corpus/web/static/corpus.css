@@ -262,6 +262,8 @@ td.reason { max-width: 26rem; }
 .status { font-weight: 600; }
 .status-failed { color: var(--err); }
 .status-running, .status-queued { color: var(--accent); }
+/* The run worked and the answer was empty: neutral, never the error red. */
+.status-no_corpus { color: var(--muted); }
 
 /* ---- the run page ------------------------------------------------------ */
 

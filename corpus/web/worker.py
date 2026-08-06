@@ -80,7 +80,15 @@ class RunWorker:
         for note in outcome.notes:
             self.store.append_log(run_id, note)
 
-        status = "done" if not error else "failed"
+        # Three terminal states, not two: a run that completed cleanly with an
+        # empty corpus is "the tool worked and the answer is no", and painting
+        # it with the error treatment would get it re-run repeatedly at cost.
+        if error:
+            status = "failed"
+        elif outcome.empty_corpus:
+            status = "no_corpus"
+        else:
+            status = "done"
         self.store.finish(
             run_id,
             status=status,

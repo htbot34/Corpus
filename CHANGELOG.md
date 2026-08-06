@@ -1895,3 +1895,48 @@ said what actually happened.
 - Test suite 913 → 915: a reduce failure surfaces type, status and text
   in both the error and the run log; an exception with an empty message
   is named by type.
+
+## 2026-08-06 — An empty corpus is a finding, not a crash
+
+A live run on arao ended `ERROR: no posts ingested from X. corpus run
+exited with code 1` — but the run was correct: X cleanly returned nothing
+for the handle, all 21 search candidates were correctly held under the
+identity precondition, and no other source was configured. The corpus was
+genuinely empty. The CLI blamed X, and the web UI painted the run with the
+same red "Failed" badge as a real crash. "The tool broke" and "the tool
+worked and the answer is no" are different outcomes, and once several
+people use this, the second gets read as the first and re-run repeatedly
+at cost.
+
+### Changed
+
+- When every source completes without error and the corpus is empty, the
+  run **exits 0** and writes a `report.md` stating plainly that no public
+  writing could be attributed: which sources were tried and what each
+  returned, and the count of candidates found and held with a pointer to
+  `unconfirmed.md` — so a reader can tell "we found nothing" from "we
+  found 64 results and held 21 of them". Where the card carried only one
+  anchor, the report says that adding a GitHub username or personal site
+  is what would change the outcome. `run_meta.json` carries
+  `empty_corpus: true`, and `discovery.json` is still written.
+- The distinction is whether anything went wrong, not whether the corpus
+  is empty: a run still exits 1 when the X provider failed, when fetched
+  posts could not be ingested (timestamp errors), when a non-X source
+  raised (`_fetch_*` now records failures in `source_errors` instead of
+  only logging them), when the search verification pass could read no
+  page at all, or when the budget stopped the run — and it lists exactly
+  which of those happened.
+- The web layer gives the outcome its own terminal status, `no_corpus`
+  ("no corpus"), with neutral muted styling instead of the error red, in
+  history and on the run page; the report link stays reachable because
+  the report is the deliverable. The audit row is written for it, as for
+  every terminal state.
+
+### Housekeeping
+
+- Test suite 915 → 921: a cleanly-empty run exits 0, writes the report,
+  and records `no_corpus` plus its audit row; a run with a dead source
+  still exits 1 and records `failed` plus its audit row; a non-zero exit
+  can never become `no_corpus`; the status renders neutral, never with
+  the error panel; the `empty_corpus` flag round-trips through
+  run_meta.json.

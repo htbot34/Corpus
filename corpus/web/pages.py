@@ -34,6 +34,8 @@ STATUS_LABELS = {
     "queued": "queued",
     "running": "running",
     "done": "done",
+    # The run worked and the answer was empty: neutral, never the error red.
+    "no_corpus": "no corpus",
     "failed": "failed",
 }
 
@@ -230,7 +232,7 @@ def run_page(run: sqlite3.Row, lines: list[sqlite3.Row], theme: str = "light") -
     log_text = "\n".join(texts)
     last_seq = int(lines[-1]["seq"]) if lines else 0
     done, total, spend = _progress_from_lines(texts)
-    if status == "done" and float(run["spend"] or 0):
+    if status in ("done", "no_corpus") and float(run["spend"] or 0):
         spend = f"{float(run['spend']):.4f}"
 
     error_block = ""
@@ -248,6 +250,14 @@ def run_page(run: sqlite3.Row, lines: list[sqlite3.Row], theme: str = "light") -
             f"<a href='/runs/{run_id}/files/report.md'>report.md</a> · "
             f"<a href='/runs/{run_id}/files/synthesis.json'>synthesis.json</a> · "
             f"<a href='/runs/{run_id}/files/corpus.json'>corpus.json</a> · "
+            f"<a href='/runs/{run_id}/files/unconfirmed.md'>unconfirmed.md</a></p>"
+        )
+    elif status == "no_corpus" and run["out_dir"]:
+        # The report is the deliverable here: it says what was tried, what
+        # each source returned, and what is waiting in unconfirmed.md.
+        links = (
+            f"<p class='downloads'><a href='/runs/{run_id}/report'>Read the report</a> · "
+            f"<a href='/runs/{run_id}/files/report.md'>report.md</a> · "
             f"<a href='/runs/{run_id}/files/unconfirmed.md'>unconfirmed.md</a></p>"
         )
 
@@ -323,7 +333,7 @@ def _history_row(r: sqlite3.Row) -> str:
     tier = tier_meter(str(r["tier"]))
     report = (
         f"<a href='/runs/{run_id}/report'>report</a>"
-        if str(r["status"]) == "done" and r["out_dir"]
+        if str(r["status"]) in ("done", "no_corpus") and r["out_dir"]
         else ""
     )
     return (

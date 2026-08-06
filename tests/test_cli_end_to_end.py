@@ -496,3 +496,65 @@ def test_a_dead_x_provider_degrades_the_run_instead_of_killing_it(wired, monkeyp
 
     manifest = json.loads((directory / "run.json").read_text())
     assert manifest["ingest_complete"] is False, "a later run must resume the X walk"
+
+
+# ==========================================================================
+# An empty corpus is a finding, not a crash
+# ==========================================================================
+
+
+def test_a_cleanly_empty_run_exits_zero_and_writes_the_report(monkeypatch, wired) -> None:
+    """The arao run: X returned nothing, nothing else was configured, no
+    source errored. That is a completed run whose answer is empty — exit 0,
+    with a report that says so plainly."""
+    monkeypatch.setattr(cli_module, "get_provider", lambda **_: FakeProvider(subject=[]))
+
+    result = invoke(
+        [
+            "run",
+            "--x",
+            "testsubject",
+            "--budget",
+            "5",
+            "--out",
+            str(wired["out"]),
+            "--yes",
+            *REACH_FIXTURES,
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert "finding" in result.output.lower()
+
+    directory = outputs(wired["out"])
+    report = (directory / "report.md").read_text()
+    assert "No public writing could be attributed" in report
+    assert "X (@testsubject): 0 posts returned" in report
+    # The card carried one anchor; the report must say what would change the
+    # outcome rather than inviting a costly identical re-run.
+    assert "Adding a GitHub username" in report
+
+    meta = json.loads((directory / "run_meta.json").read_text())
+    assert meta["empty_corpus"] is True
+
+
+def test_an_empty_run_with_a_dead_source_is_still_a_failure(monkeypatch, wired) -> None:
+    """The distinction is whether anything went wrong, not whether the corpus
+    is empty: a dead provider and an empty corpus is a real failure."""
+    monkeypatch.setattr(cli_module, "get_provider", lambda **_: RateLimitedProvider())
+
+    result = invoke(
+        [
+            "run",
+            "--x",
+            "testsubject",
+            "--budget",
+            "5",
+            "--out",
+            str(wired["out"]),
+            "--yes",
+            *REACH_FIXTURES,
+        ]
+    )
+    assert result.exit_code == 1, result.output
+    assert "no documents from any source" in result.output.lower()
+    assert "the X source failed" in result.output

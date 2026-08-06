@@ -386,6 +386,19 @@ That asymmetry makes an *unedited* file dangerous, since it would reject every
 candidate forever. So the file says so at the top, and a run given a file with
 nothing ticked asks before acting on it.
 
+### An empty corpus is a finding, not a crash
+
+When every source completes without error and nothing could be attributed, the
+run **exits 0** and writes a `report.md` that says so plainly: which sources
+were tried, what each returned, and how many candidates search found and held
+(with a pointer to `unconfirmed.md` — "we found things and could not confirm
+they were theirs" is a different answer from "we found nothing"). Where the
+card carried only one anchor, the report says that adding a GitHub username or
+a personal site is what would change the outcome. The web interface shows this
+as its own neutral **no corpus** status, distinct from `done` and from
+`failed`. A non-zero exit still means something actually went wrong: a source
+errored, the budget stopped the run, or a call failed.
+
 ### What is deliberately not built
 
 - **No LinkedIn scraping.** Automated access is blocked and against their terms.

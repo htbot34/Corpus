@@ -58,7 +58,7 @@ from .identity import (
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
 from .models import Document, Synthesis
-from .render import render_report
+from .render import render_empty_report, render_report
 from .search.capture import SearchCapture
 from .search.client import SearchClient
 from .search.providers import SearchError, get_search_provider
@@ -493,9 +493,14 @@ def run(
     _ACTIVE_LOGGER.context.phase = "sources"
     author = handle or card.slug or card.key
     source_notes: list[str] = []
-    other = _fetch_discovered(discovery.candidates, author, cache, echo, source_notes)
-    other.extend(_fetch_secondary(author, rss, url, cache, echo, source_notes))
-    other.extend(_fetch_accepted(accepted_urls, author, cache, echo, source_notes))
+    # Non-fatal source failures, kept apart from notes: when the corpus comes
+    # back empty, these are what decide whether that is a finding or a failure.
+    source_errors: list[str] = []
+    other = _fetch_discovered(
+        discovery.candidates, author, cache, echo, source_notes, source_errors
+    )
+    other.extend(_fetch_secondary(author, rss, url, cache, echo, source_notes, source_errors))
+    other.extend(_fetch_accepted(accepted_urls, author, cache, echo, source_notes, source_errors))
     if other:
         echo(
             f"  {len(other)} document(s) from {len(discovery.candidates) + len(rss) + len(url)} "
@@ -606,6 +611,7 @@ def run(
             cache,
             echo,
             source_notes,
+            source_errors,
         )
         if found:
             other.extend(found)
@@ -740,13 +746,16 @@ def run(
         echo("")
 
         if not raw_tweets:
-            error("no posts ingested from X.")
-            # `other` holds the documents the non-X sources actually produced,
-            # which is the question here — candidates that produced nothing
-            # cannot carry a run.
-            if not other:
-                raise typer.Exit(code=1)
-            warn("continuing on the other sources alone")
+            # "The provider broke" and "the handle has no posts" are different
+            # statements, and only the first is an error. The single decision
+            # about what an empty corpus means is made below, once every
+            # source has had its chance.
+            if x_failure or int(ingest_meta.get("timestamp_errors") or 0):
+                error("no posts ingested from X.")
+            else:
+                echo("  X returned no posts for this handle.")
+            if other:
+                warn("continuing on the other sources alone")
 
         # ---- hydrate -----------------------------------------------------
         if raw_tweets:
@@ -792,8 +801,50 @@ def run(
         docs.sort(key=lambda d: d.published_at, reverse=True)
 
     if not docs:
-        error("no documents from any source. Nothing to synthesize.")
-        raise typer.Exit(code=1)
+        # ---- an empty corpus: finding or failure? ------------------------
+        # "The tool broke" and "the tool worked and the answer is no" are
+        # different outcomes and must not look the same. The distinction is
+        # whether anything went wrong, not whether the corpus is empty.
+        problems: list[str] = []
+        if x_failure:
+            problems.append(f"the X source failed: {x_failure}")
+        timestamp_errors = int(ingest_meta.get("timestamp_errors") or 0)
+        if timestamp_errors:
+            problems.append(
+                f"{timestamp_errors} X post(s) were fetched and none could be "
+                "ingested (unparseable timestamps)"
+            )
+        problems.extend(f"source failed: {failure}" for failure in source_errors)
+        if search_result.unread and search_result.reads_attempted:
+            problems.append(
+                "no search candidate page could be read "
+                f"({search_result.reads_attempted} attempted)"
+            )
+        if budget.stopped:
+            problems.append("the budget stopped the run before it finished")
+
+        if problems:
+            error("no documents from any source. Nothing to synthesize.")
+            for problem in problems:
+                echo(f"  - {problem}")
+            raise typer.Exit(code=1)
+
+        _finish_empty_run(
+            out_dir=out_dir,
+            card=card,
+            handle=handle,
+            rss=rss,
+            url=url,
+            accepted_urls=accepted_urls,
+            discovery=discovery,
+            search_result=search_result,
+            ingest_meta=ingest_meta,
+            hydration=hyd_stats.as_dict(),
+            source_notes=source_notes,
+            budget=budget,
+            cache=cache,
+        )
+        raise typer.Exit(code=0)
 
     # ---- signals ---------------------------------------------------------
     _ACTIVE_LOGGER.context.phase = "signals"
@@ -961,6 +1012,97 @@ def run(
     raise typer.Exit(code=exit_code)
 
 
+def _finish_empty_run(
+    *,
+    out_dir: Path,
+    card: IdentityCard,
+    handle: str,
+    rss: list[str],
+    url: list[str],
+    accepted_urls: list[str],
+    discovery: Any,
+    search_result: SearchPhaseResult,
+    ingest_meta: dict[str, Any],
+    hydration: dict[str, Any],
+    source_notes: list[str],
+    budget: Any,
+    cache: Cache,
+) -> None:
+    """Close out a run whose every source completed cleanly and returned nothing.
+
+    An empty corpus is a finding, not a crash: exit 0 belongs to the caller,
+    this writes the record — a report.md that says plainly what was tried and
+    what each source returned, discovery.json, and a run_meta.json whose
+    `empty_corpus` flag is how the web layer tells this apart from `done` and
+    from `failed`.
+    """
+    if _ACTIVE_LOGGER is not None:
+        _ACTIVE_LOGGER.context.phase = "render"
+    echo("No documents from any source, and no source failed.")
+    echo("An empty corpus is a finding, not a failure; writing the report.")
+    echo("")
+
+    tried: list[str] = []
+    if handle:
+        tried.append(f"X (@{handle}): 0 posts returned")
+    if discovery.candidates:
+        tried.append(f"{len(discovery.candidates)} discovered source(s): 0 documents")
+    for flag, values in (("--rss", rss), ("--url", url)):
+        for value in values:
+            tried.append(f"{flag} {value}: 0 documents")
+    if accepted_urls:
+        tried.append(f"{len(accepted_urls)} hand-confirmed source(s): 0 documents")
+    if search_result.searches_run:
+        tried.append(
+            f"search: {search_result.searches_run} search(es), "
+            f"{search_result.results_seen} result(s) seen, "
+            f"{search_result.verified_count} page(s) read, 0 corroborated, "
+            f"{len(search_result.held)} held for review"
+        )
+
+    report = render_empty_report(
+        subject=card.display,
+        sources=tried,
+        results_seen=search_result.results_seen,
+        held=len(search_result.held),
+        anchors=sorted(card.anchors),
+        budget_lines=budget.summary_lines(),
+    )
+    (out_dir / "report.md").write_text(report, encoding="utf-8")
+    _write_json(
+        out_dir / "discovery.json",
+        {"card": card.as_dict(), **discovery.as_dict(), "search": search_result.as_dict()},
+    )
+    _write_json(
+        out_dir / "run_meta.json",
+        {
+            "empty_corpus": True,
+            "ingest": ingest_meta,
+            "hydration": hydration,
+            "budget_stopped": budget.stopped,
+            "discovery": discovery.as_dict(),
+            "search": search_result.as_dict(),
+            "identity": card.as_dict(),
+            "source_notes": source_notes,
+            "synthesis_error": "",
+            "analyzed_documents": 0,
+            "corpus_tier": "",
+        },
+    )
+
+    if search_result.held:
+        echo(
+            f"Search held {len(search_result.held)} candidate(s) it could not "
+            "confirm; review unconfirmed.md and re-run with --accept-unconfirmed."
+        )
+    echo("Spend:")
+    for line in budget.summary_lines():
+        echo(f"  {line}")
+    echo("")
+    echo(f"Report: {out_dir / 'report.md'}")
+    cache.close()
+
+
 class _OfflineProvider:
     """Stands in for a provider when running from cache with no network."""
 
@@ -1105,12 +1247,19 @@ def _fetch_one(
 
 
 def _fetch_discovered(
-    candidates: list[Candidate], author: str, cache: Cache, log: Any, notes: list[str]
+    candidates: list[Candidate],
+    author: str,
+    cache: Cache,
+    log: Any,
+    notes: list[str],
+    errors: list[str],
 ) -> list[Document]:
     """Read every source discovery is confident enough to ingest.
 
     Non-fatal throughout, like every other source: a feed that 404s costs the
-    corpus some documents and costs the run nothing.
+    corpus some documents and costs the run nothing. It is still recorded in
+    `errors`, because "a source failed" and "a source had nothing" must stay
+    distinguishable when the whole corpus comes back empty.
     """
     docs: list[Document] = []
     if not candidates:
@@ -1126,6 +1275,7 @@ def _fetch_discovered(
             found = _fetch_one(candidate.kind, candidate.url, author, cache, log, notes)
         except SourceError as exc:
             log(f"  {candidate.url} failed (non-fatal): {exc}")
+            errors.append(f"{candidate.url}: {exc}")
             continue
         docs.extend(
             attribute(
@@ -1285,6 +1435,7 @@ def _fetch_accepted(
     cache: Cache,
     log: Any,
     notes: list[str],
+    errors: list[str],
 ) -> list[Document]:
     """Sources a human ticked in unconfirmed.md.
 
@@ -1304,6 +1455,7 @@ def _fetch_accepted(
             found = _fetch_one(kind_for(entry), entry, author, cache, log, notes)
         except SourceError as exc:
             log(f"  {entry} failed (non-fatal): {exc}")
+            errors.append(f"{entry}: {exc}")
             continue
         docs.extend(
             attribute(
@@ -1323,6 +1475,7 @@ def _fetch_secondary(
     cache: Cache,
     log: Any,
     notes: list[str],
+    errors: list[str],
 ) -> list[Document]:
     """`--rss` and `--url`: URLs the user typed, so anchor-attributed.
 
@@ -1342,6 +1495,7 @@ def _fetch_secondary(
                 found = _fetch_one(kind, entry, handle, cache, log, notes)
             except SourceError as exc:
                 log(f"  {kind} {entry} failed (non-fatal): {exc}")
+                errors.append(f"{kind} {entry}: {exc}")
                 continue
             docs.extend(
                 attribute(found, attribution="anchor", basis=f"--{kind} on the command line")
