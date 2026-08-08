@@ -41,7 +41,14 @@ from ..discovery import Fetcher, kind_for, normalize_url
 from ..identity import IdentityCard
 from .client import SearchClient
 from .pagefacts import extract_facts, facts_from_snippet
-from .queries import DEFAULT_MAX_SEARCHES, Query, generate_queries, missing_fields
+from .providers import SearchResult
+from .queries import (
+    DEFAULT_MAX_SEARCHES,
+    Query,
+    generate_queries,
+    missing_fields,
+    similar_seeds,
+)
 from .scoring import CandidateScore, score_candidate
 
 #: Results kept per query. Past the first page or so, relevance falls off a
@@ -289,15 +296,8 @@ def search_for_sources(
 
     # ---- pass 1: discover -------------------------------------------------
     candidates: dict[str, SearchCandidate] = {}
-    for query in result.queries:
-        try:
-            hits = client.search(query.text, RESULTS_PER_QUERY)
-        except BudgetExceeded as exc:
-            # The budget refusing a query stops the phase, but it must not
-            # throw away the queries already paid for. Verification below runs
-            # on what we have, and the report says the phase was cut short.
-            result.notes.append(f"search stopped early: {exc}")
-            break
+
+    def absorb(hits: list[SearchResult], query_text: str) -> None:
         for hit in hits:
             result.results_seen += 1
             url = normalize_url(hit.url)
@@ -313,10 +313,40 @@ def search_for_sources(
                 url=url,
                 title=hit.title,
                 snippet=hit.snippet,
-                query=query.text,
+                query=query_text,
                 published_at=hit.published_at,
                 kind=kind_for(url),
             )
+
+    stopped_early = False
+    for query in result.queries:
+        try:
+            hits = client.search(query.text, RESULTS_PER_QUERY)
+        except BudgetExceeded as exc:
+            # The budget refusing a query stops the phase, but it must not
+            # throw away the queries already paid for. Verification below runs
+            # on what we have, and the report says the phase was cut short.
+            result.notes.append(f"search stopped early: {exc}")
+            stopped_early = True
+            break
+        absorb(hits, query.text)
+
+    # "More pages like this one", seeded from the anchors that are already the
+    # target's own writing. Only for a provider that can (the capability flag —
+    # anthropic_search cannot, and asking it must not be an error), and only
+    # while the budget still answers: a phase the budget already stopped must
+    # not go on spending under a different name.
+    if client.finds_similar and not stopped_early:
+        for seed in similar_seeds(card):
+            why = "pages similar to a page the card already anchors"
+            try:
+                hits = client.find_similar(seed, RESULTS_PER_QUERY)
+            except BudgetExceeded as exc:
+                result.notes.append(f"search stopped early: {exc}")
+                break
+            result.queries.append(Query(text=f"more like {seed}", why=why))
+            absorb(hits, f"more like {seed}")
+
     result.searches_run = client.searches_run
     result.cached_searches = client.cached_searches
     result.errors.extend(client.errors)

@@ -1,14 +1,23 @@
 """Provider-agnostic web search.
 
 Mirrors `corpus/x/providers.py`, which has survived one provider change well:
-a Protocol naming the whole surface, one fully-implemented provider, and stubs
+a Protocol naming the whole surface, fully-implemented providers, and stubs
 that raise `NotImplementedError` naming exactly which env var and endpoint to
 add. Nothing above this file knows which provider is in use.
 
-`anthropic_search` is the implemented one, using the Messages API's server-side
+`anthropic_search` is the default, using the Messages API's server-side
 `web_search_20250305` tool with the `ANTHROPIC_API_KEY` the tool already needs
 for synthesis. That means no second vendor, no second key, and no second
 billing relationship for the common case.
+
+`exa` (SEARCH_PROVIDER=exa, key from EXA_API_KEY) exists because of the one
+thing anthropic_search cannot provide: a snippet. Its `web_search_result`
+carries no readable text, so snippets there are citation fragments that appear
+only when the model happened to quote something — for many queries, never —
+and Phase 2's fetch ranking runs nearly blind. Exa's `text` field is a real
+page extract, and its `findSimilar` endpoint maps "more of this person's
+writing" onto the anchor model in a way keyword search does not. See
+`ExaSearchProvider` for what is and is not verified about its wire shapes.
 
 Two properties of that tool shape this file:
 
@@ -37,6 +46,7 @@ ever flips.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -45,8 +55,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+from ..budget import EXA_COST_PER_QUERY, SEARCH_COST_PER_QUERY
 from ..redact import RedactingError
 from .capture import SearchCapture
+from .scoring import PEOPLE_SEARCH_HOSTS
 
 # The server-side tool. See the module docstring for why the basic variant.
 SEARCH_TOOL_TYPE = "web_search_20250305"
@@ -117,12 +129,24 @@ class SearchUsage:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     model: str = ""
+    #: The dollar figure the provider's own response stated for the call, when
+    #: the vendor reports one (Exa does). None means "bill the documented
+    #: rate" — the invoice's number always beats our copy of the price list.
+    cost_dollars: float | None = None
     errors: list[str] = field(default_factory=list)
 
 
 @runtime_checkable
 class SearchProvider(Protocol):
-    """The whole surface the rest of the tool depends on."""
+    """The whole surface the rest of the tool depends on.
+
+    Two optional extras live *outside* this Protocol, read with `getattr`
+    defaults so a provider written before they existed is not broken by their
+    absence: `cost_per_search` (the provider's worst-case per-search rate in
+    dollars; absent means Anthropic's) and the `find_similar` capability,
+    declared by `supports_find_similar = True` and typed by
+    `SimilarSearchProvider` below.
+    """
 
     name: str
     #: Usage from the most recent `search()`. Reset per call.
@@ -132,6 +156,24 @@ class SearchProvider(Protocol):
         """Run one query. At most `limit` results, best first."""
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class SimilarSearchProvider(SearchProvider, Protocol):
+    """The optional half of the surface: "find more pages like this one".
+
+    Deliberately not a member of `SearchProvider`: most search vendors cannot
+    do it, and a Protocol member they lack would make every one of them wrong
+    by omission. A provider that can advertises it with
+    `supports_find_similar = True`; `SearchClient.find_similar` checks the
+    flag and this Protocol before calling, and quietly does nothing for a
+    provider that lacks either.
+    """
+
+    supports_find_similar: bool
+
+    def find_similar(self, url: str, limit: int) -> list[SearchResult]:
+        """Pages like the one at `url`. At most `limit` results, best first."""
 
 
 # --------------------------------------------------------------------------
@@ -271,6 +313,10 @@ class AnthropicSearchProvider:
     """Anthropic's server-side web search tool. Key from ANTHROPIC_API_KEY."""
 
     name = "anthropic_search"
+    #: What one billable search worst-cases at, before tokens. The same number
+    #: `budget.SEARCH_COST_BY_PROVIDER` maps for this name; a test pins them
+    #: together.
+    cost_per_search = SEARCH_COST_PER_QUERY
 
     def __init__(
         self,
@@ -388,15 +434,216 @@ class _StubSearchProvider:
         return None
 
 
-class ExaSearchProvider(_StubSearchProvider):
+# --------------------------------------------------------------------------
+# Exa
+# --------------------------------------------------------------------------
+
+EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search"
+EXA_FIND_SIMILAR_ENDPOINT = "https://api.exa.ai/findSimilar"
+
+#: Ceiling on how much of Exa's `text` extract is carried into `snippet`. The
+#: extract is the whole reason this provider exists — a real page excerpt
+#: instead of a citation fragment — but it can run to tens of kilobytes, and
+#: two things downstream assume snippets are snippet-sized: `snippet_promise`
+#: ranks candidates partly on what their snippet carries, so one enormous
+#: extract would buy its page fetch priority by sheer surface area; and the
+#: search cache stores results permanently, so unbounded snippets would grow
+#: it without limit. A thousand characters is a few paragraphs — enough for
+#: `facts_from_snippet` to find a name, an employer, or a handle, which is all
+#: ranking uses it for. It is still never evidence: only a fetched page is.
+EXA_SNIPPET_MAX_CHARS = 1_000
+
+
+def results_from_exa_payload(payload: Any, limit: int) -> tuple[list[SearchResult], list[str]]:
+    """Map one Exa response body to SearchResults. Returns (results, errors).
+
+    UNVERIFIED AGAINST THE WIRE: written to Exa's documented response shape —
+    `results[]` carrying `url`, `title`, `publishedDate`, `author`, `text` —
+    and this repo's bug history is four separate documented-shape-versus-real-
+    shape failures (docs/wire-contract.md). So every read here is defensive: a
+    missing or misshapen field degrades to a thinner result, never to a raise,
+    and the whole hit is preserved in `raw` so a shape surprise is inspectable
+    after the fact.
+    """
+    errors: list[str] = []
+    hits = _get(payload, "results")
+    if not isinstance(hits, (list, tuple)):
+        errors.append("exa: the response carries no `results` list")
+        return [], errors
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    for hit in hits:
+        url = str(_get(hit, "url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        text = str(_get(hit, "text") or "")
+        results.append(
+            SearchResult(
+                url=url,
+                title=str(_get(hit, "title") or "").strip(),
+                snippet=text[:EXA_SNIPPET_MAX_CHARS].strip(),
+                # ISO 8601 in the docs; parse_page_age's fromisoformat fallback
+                # reads that, and a malformed date is left as None rather than
+                # guessed at — a wrong published_at silently reorders a corpus.
+                published_at=parse_page_age(_get(hit, "publishedDate")),
+                raw=dict(hit) if isinstance(hit, dict) else {"value": repr(hit)},
+            )
+        )
+    return results[:limit], errors
+
+
+def exa_cost_dollars(payload: Any) -> float | None:
+    """The dollar figure Exa's response states for the call, if it states one.
+
+    `costDollars.total` is documented but UNVERIFIED like the rest of the
+    shape, so it is read defensively: anything absent, non-numeric, negative,
+    or non-finite means None, and the caller bills the documented rate
+    instead. A wire value can correct our price list; it must not be able to
+    poison the ledger.
+    """
+    total = _get(_get(payload, "costDollars") or {}, "total")
+    if isinstance(total, bool) or not isinstance(total, (int, float, str)):
+        return None
+    try:
+        value = float(total)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+class ExaSearchProvider:
+    """Exa's search API. Key from EXA_API_KEY, selected by SEARCH_PROVIDER=exa.
+
+    What it buys over anthropic_search, both halves downstream of real text:
+
+    * `contents: {text: true}` puts an actual page extract in `snippet`, so
+      Phase 2's fetch *ranking* has something to rank on. It gates nothing and
+      promotes nothing — verify.py's two passes are unchanged, and only a
+      score against a fetched page can promote.
+    * `find_similar` ("more pages like this one") maps onto the anchor model
+      in a way keyword search does not: given a page already known to be the
+      target's, ask for more of their writing.
+
+    `excludeDomains` pushes the people-search and data-broker hosts out at the
+    API level. That is an optimisation, never the guarantee — a rejected
+    result still consumed a result slot, so excluding it recovers the slot —
+    and scoring.py's post-hoc rejection stays exactly as it was.
+
+    UNVERIFIED AGAINST THE WIRE: every request and response shape here is
+    written to Exa's documentation, not to a capture, and the first live run
+    is the test. See docs/wire-contract.md.
+    """
+
     name = "exa"
-    _env_var = "EXA_API_KEY"
-    _endpoint = (
-        "POST https://api.exa.ai/search with header 'x-api-key: $EXA_API_KEY' and body "
-        "{query, numResults, contents: {text: true}} — its `text` field is a real page "
-        "extract rather than a citation fragment, so the snippet is richer than "
-        "anthropic_search's"
-    )
+    #: Worst case one search() or find_similar() call can bill: the request
+    #: fee plus text contents for every result. The same number
+    #: `budget.SEARCH_COST_BY_PROVIDER` maps for this name; a test pins them
+    #: together, and budget.py records where the rate came from.
+    cost_per_search = EXA_COST_PER_QUERY
+    #: The capability flag SimilarSearchProvider documents.
+    supports_find_similar = True
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client: Any = None,
+        capture: SearchCapture | None = None,
+        log: Callable[[str], None] = lambda _msg: None,
+    ) -> None:
+        self.capture = capture
+        self.log = log
+        self.last_usage = SearchUsage()
+        #: The most recent response body, untouched — same purpose as the
+        #: Anthropic provider's `last_raw_message`: when the wire disagrees
+        #: with the documented shape, the evidence is inspectable in the same
+        #: run that hit it.
+        self.last_raw_payload: Any = None
+        self._client = client
+        self._owns_client = client is None
+        self._api_key = api_key or os.environ.get("EXA_API_KEY", "")
+        if client is None and not self._api_key:
+            raise SearchError(
+                "EXA_API_KEY is not set, so the exa search provider cannot run. Set "
+                "it, or unset SEARCH_PROVIDER to use anthropic_search, or run with "
+                "--no-search."
+            )
+
+    def _ensure_client(self) -> Any:
+        """Construct the HTTP client on first use, never at import or __init__.
+
+        The same seam AnthropicSearchProvider has, for the same two reasons: a
+        test that never searches cannot accidentally need a key, and the
+        conftest guard patches this method so nothing in the suite can reach
+        api.exa.ai.
+        """
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.Client(timeout=30.0, headers={"x-api-key": self._api_key})
+        return self._client
+
+    def _post(self, endpoint: str, body: dict[str, Any], label: str) -> Any:
+        client = self._ensure_client()
+        try:
+            resp = client.post(endpoint, json=body)
+        except Exception as exc:
+            raise SearchError(f"{label} failed: {exc}") from exc
+        if resp.status_code >= 400:
+            raise SearchError(f"{label} failed: exa returned HTTP {resp.status_code}")
+        try:
+            return resp.json()
+        except Exception as exc:
+            raise SearchError(f"{label} returned unreadable JSON: {exc}") from exc
+
+    def search(self, query: str, limit: int) -> list[SearchResult]:
+        body = {
+            "query": query,
+            "numResults": limit,
+            "contents": {"text": True},
+            "excludeDomains": list(PEOPLE_SEARCH_HOSTS),
+        }
+        payload = self._post(EXA_SEARCH_ENDPOINT, body, f"exa search for {query!r}")
+        return self._absorb(query, payload, limit)
+
+    def find_similar(self, url: str, limit: int) -> list[SearchResult]:
+        body = {
+            "url": url,
+            "numResults": limit,
+            "contents": {"text": True},
+            "excludeDomains": list(PEOPLE_SEARCH_HOSTS),
+        }
+        payload = self._post(EXA_FIND_SIMILAR_ENDPOINT, body, f"exa find_similar for {url}")
+        return self._absorb(f"more like {url}", payload, limit)
+
+    def _absorb(self, label: str, payload: Any, limit: int) -> list[SearchResult]:
+        """Parse one response and set `last_usage`, identically for both calls."""
+        self.last_raw_payload = payload
+        results, errors = results_from_exa_payload(payload, limit)
+        self.last_usage = SearchUsage(
+            searches=1, cost_dollars=exa_cost_dollars(payload), errors=errors
+        )
+        for code in errors:
+            self.log(f"  [search] {label}: {code}")
+        if self.capture is not None:
+            self.capture.record(
+                query=label,
+                provider=self.name,
+                model="",
+                message=payload,
+                results=[r.model_dump(mode="json") for r in results],
+                usage=self.last_usage,
+            )
+        return results
+
+    def close(self) -> None:
+        if self._owns_client and self._client is not None:
+            close = getattr(self._client, "close", None)
+            if close is not None:
+                close()
+            self._client = None
 
 
 class BraveSearchProvider(_StubSearchProvider):
@@ -416,8 +663,18 @@ PROVIDERS: dict[str, type] = {
 }
 
 
+def resolve_provider_name(name: str | None = None) -> str:
+    """The provider a run would use: explicit name, SEARCH_PROVIDER, default.
+
+    Split out of `get_search_provider` for the dry-run estimator, which needs
+    the configured provider's *rate* without constructing the provider —
+    construction requires the vendor's API key, and an estimate must not.
+    """
+    return (name or os.environ.get("SEARCH_PROVIDER") or "anthropic_search").strip()
+
+
 def get_search_provider(name: str | None = None, **kwargs: Any) -> SearchProvider:
-    name = (name or os.environ.get("SEARCH_PROVIDER") or "anthropic_search").strip()
+    name = resolve_provider_name(name)
     if name not in PROVIDERS:
         raise SearchError(
             f"Unknown SEARCH_PROVIDER {name!r}. Known: {', '.join(sorted(PROVIDERS))}"

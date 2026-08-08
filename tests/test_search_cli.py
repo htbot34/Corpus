@@ -364,3 +364,33 @@ def test_an_unedited_file_is_not_acted_on_without_confirmation(wired) -> None:
 
     assert "nothing is ticked" in result.output
     assert "Leaving the file alone" in result.output
+
+
+# -- the provider seam, from the CLI ------------------------------------------
+
+
+def test_an_unknown_search_provider_fails_before_anything_is_spent(wired, monkeypatch) -> None:
+    """The estimate quotes the configured provider's rate, so a provider that
+    does not exist must stop the run at flag-validation time — exit 2, like
+    every other bad flag — not after a confirmation prompt quoted nonsense."""
+    monkeypatch.setenv("SEARCH_PROVIDER", "nope")
+    seed(wired, BASE_SEED)
+    seed(wired, {"rss:https://janesmith.com/feed.xml": FEED}, source="rss")
+
+    result = run_with(wired)
+
+    assert result.exit_code == 2
+    assert "SEARCH_PROVIDER" in result.output
+    assert "anthropic_search" in result.output
+
+
+def test_no_search_ignores_a_broken_search_provider(wired, monkeypatch) -> None:
+    """--no-search must mean it: a run that will never search cannot be
+    stopped by the search provider's configuration."""
+    monkeypatch.setenv("SEARCH_PROVIDER", "nope")
+    seed(wired, BASE_SEED)
+    seed(wired, {"rss:https://janesmith.com/feed.xml": FEED}, source="rss")
+
+    result = run_with(wired, "--no-search")
+
+    assert result.exit_code == 0, result.output

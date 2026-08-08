@@ -61,8 +61,13 @@ from .models import Document, Synthesis
 from .render import render_empty_report, render_report
 from .search.capture import SearchCapture
 from .search.client import SearchClient
-from .search.providers import SearchError, get_search_provider
-from .search.queries import DEFAULT_MAX_SEARCHES, generate_queries
+from .search.providers import (
+    PROVIDERS,
+    SearchError,
+    get_search_provider,
+    resolve_provider_name,
+)
+from .search.queries import DEFAULT_MAX_SEARCHES, generate_queries, similar_seeds
 from .search.unconfirmed import read_unconfirmed, write_unconfirmed
 from .search.verify import (
     DEFAULT_MAX_VERIFY_FETCHES,
@@ -371,6 +376,18 @@ def run(
     if budget_mode not in BUDGET_MODES:
         echo(f"ERROR: --budget-mode must be one of {', '.join(BUDGET_MODES)}")
         raise typer.Exit(code=2)
+    # Validated here rather than when Phase 2 starts, for the same reason
+    # --budget-mode is: the estimate below quotes the configured provider's
+    # rate, and an unknown provider must fail before anything is spent, not
+    # after the confirmation prompt quoted a rate for a vendor that does not
+    # exist.
+    search_provider_name = resolve_provider_name()
+    if search and search_provider_name not in PROVIDERS:
+        echo(
+            f"ERROR: SEARCH_PROVIDER={search_provider_name!r} is not a known search "
+            f"provider. Known: {', '.join(sorted(PROVIDERS))}."
+        )
+        raise typer.Exit(code=2)
     budget = Budget(limit=budget_limit, cache=cache, mode=budget_mode)
 
     # The logger keys on the budget's run_id, so a line in the terminal and a
@@ -521,10 +538,26 @@ def run(
         echo("")
 
     planned_queries = generate_queries(card, max_searches) if search else []
+    # Billable find_similar calls the phase will add, when the configured
+    # provider has the capability. Estimated alongside the queries because
+    # each one is a search-priced call; gated on planned_queries because a
+    # card that can produce no query never reaches Phase 2 at all.
+    planned_similar = (
+        similar_seeds(card)
+        if planned_queries
+        and getattr(PROVIDERS.get(search_provider_name), "supports_find_similar", False)
+        else []
+    )
 
     if not offline:
         x_cost = estimate_x_cost(post_target) if handle else 0.0
-        search_cost = estimate_search_phase(len(planned_queries)) if planned_queries else 0.0
+        search_cost = (
+            estimate_search_phase(
+                len(planned_queries) + len(planned_similar), provider=search_provider_name
+            )
+            if planned_queries
+            else 0.0
+        )
         projected_docs = post_target + len(other)
         map_cost, reduce_cost = (
             (0.0, 0.0)
@@ -543,9 +576,11 @@ def run(
         )
         echo(f"    discovery (plain HTTP):   $0.000  ({discovery.fetches} request(s))")
         echo(f"    fetch — X data:          ~${x_cost:.3f}")
+        similar_note = f" + {len(planned_similar)} similar-page call(s)" if planned_similar else ""
         echo(
             f"    search (phase 2):        ~${search_cost:.3f}  "
-            f"({len(planned_queries)} quer{'y' if len(planned_queries) == 1 else 'ies'})"
+            f"({len(planned_queries)} quer{'y' if len(planned_queries) == 1 else 'ies'}"
+            f"{similar_note})"
         )
         echo(f"    map:                     ~${map_cost:.3f}")
         echo(f"    reduce:                  ~${reduce_cost:.3f}")
@@ -581,6 +616,8 @@ def run(
                 echo(f"  plan: {len(planned_queries)} search quer(y/ies), none of them run:")
                 for query in planned_queries:
                     echo(f"    search: {query.text}   ({query.why})")
+                for seed in planned_similar:
+                    echo(f"    similar: {seed}   (pages like one the card already anchors)")
             else:
                 echo("  plan: 0 searches" + ("" if search else " (--no-search)"))
             spent = f"${budget.total:.4f}" + (" (profile lookup)" if handle else "")

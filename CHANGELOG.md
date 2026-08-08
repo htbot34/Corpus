@@ -1996,3 +1996,61 @@ wrong attribution.
 ### Housekeeping
 
 - Test suite 915 → 975.
+
+---
+
+## 2026-08-08 — The Exa search provider: snippets that exist
+
+Three live runs through `anthropic_search` (simonw, dustinw, arao) found
+54–64 results each and ingested 0–2 documents. One of the two failures behind
+that: the Anthropic provider has no snippet field — its snippets are citation
+fragments that appear only when the model happened to quote something, which
+for many queries is never. Snippets never gate a fetch (that was tried once
+and silently destroyed coverage; verify.py's docstring records it), but they
+RANK which candidates get the 40-fetch verification budget, and with no
+snippets that ranking runs nearly blind.
+
+### Added
+
+- `ExaSearchProvider` (`SEARCH_PROVIDER=exa`, key from `EXA_API_KEY`),
+  replacing the stub. `POST api.exa.ai/search` with
+  `contents: {text: true}`; the `text` extract lands in `snippet`, clipped
+  at `EXA_SNIPPET_MAX_CHARS` so one enormous extract cannot buy its page
+  fetch priority by volume. The whole hit survives in `SearchResult.raw`.
+- `find_similar` — `POST api.exa.ai/findSimilar`, "more pages like this
+  one" — as an *optional* capability behind a flag
+  (`supports_find_similar` + the `SimilarSearchProvider` protocol), seeded
+  from the card's site/substack/rss anchors, capped at three seeds. A
+  provider lacking the capability is never asked and loses nothing;
+  anthropic_search behaves exactly as before.
+- `excludeDomains` carries `PEOPLE_SEARCH_HOSTS` on every Exa call. A
+  rejected result still consumed a result slot; excluding it at the API
+  recovers the slot. scoring.py's post-hoc rejection is untouched — the API
+  filter is an optimisation, never the guarantee.
+- Per-provider search pricing. `SEARCH_COST_PER_QUERY` stays Anthropic's
+  number; Exa's constants (`EXA_COST_PER_SEARCH_REQUEST`,
+  `EXA_COST_PER_PAGE_TEXT`, worst-cased into `EXA_COST_PER_QUERY`) are
+  documentation-derived, carry their provenance and an operator TODO to
+  verify against exa.ai/pricing before the first paid run — the pricing page
+  could not be re-read at implementation time (egress-blocked). When Exa's
+  response states `costDollars`, that figure beats the price list at billing
+  time. `Budget.reserve()` remains the pre-flight hard stop, and the dry-run
+  estimator quotes the configured provider's rate (`estimate_search_phase`
+  grew a `provider` argument; an unknown `SEARCH_PROVIDER` now fails the run
+  at flag validation, exit 2, before anything is spent).
+
+### Provenance, stated
+
+The Exa fixtures are SYNTHETIC, written to documented shapes; no live
+capture exists, and four separate entries in this repo's bug history are
+documented-shape-versus-real-shape failures. Every read is defensive, the
+provider keeps `last_raw_payload`, and docs/wire-contract.md states what
+would promote the shapes to CONFIRMED. The first live run is the test.
+
+### Held
+
+A richer snippet makes the old temptation stronger, so it is pinned twice
+more: a snippet packed with every signal the scorer knows still cannot
+corroborate (`test_a_rich_extract_snippet_still_cannot_corroborate`), and a
+find_similar hit — seeded from a page that IS the target's — is a lead like
+any other, not inherited trust (`test_a_similar_hit_is_a_lead_not_evidence`).

@@ -194,3 +194,33 @@ def test_this_attempt_excludes_carried_spend(cache: Cache) -> None:
     budget.charge("x", "search", 1, 0.25)
     assert budget.this_attempt == pytest.approx(0.25)
     assert budget.total == pytest.approx(5.25)
+
+
+# -- per-provider search rates ----------------------------------------------
+
+
+def test_the_search_estimate_uses_the_configured_providers_rate() -> None:
+    """An estimator quoting Anthropic's rate for an Exa search is the
+    estimator lying. Exa's rate has no token half — the provider runs no
+    model — but it prices in the page contents every search carries back."""
+    from corpus.budget import (
+        EXA_COST_PER_QUERY,
+        SEARCH_COST_PER_QUERY,
+        estimate_search_phase,
+    )
+
+    exa = estimate_search_phase(3, provider="exa")
+    anthropic = estimate_search_phase(3)
+
+    assert exa == pytest.approx(3 * EXA_COST_PER_QUERY)
+    assert anthropic > 3 * SEARCH_COST_PER_QUERY  # fee plus haiku tokens
+    assert exa != pytest.approx(anthropic)
+
+
+def test_an_unknown_provider_cannot_be_estimated() -> None:
+    """Billing against a rate nobody wrote down is refused, same as
+    model_rates refuses a model with no price on file."""
+    from corpus.budget import estimate_search_phase
+
+    with pytest.raises(KeyError):
+        estimate_search_phase(3, provider="nope")

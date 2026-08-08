@@ -1,0 +1,59 @@
+{
+  "_provenance": "SYNTHETIC — written to Exa's documented /search response shape (docs/wire-contract.md). Never captured from the wire; the first live run is the test.",
+  "requestId": "synthetic-request-0001",
+  "resolvedSearchType": "neural",
+  "results": [
+    {
+      "id": "https://janesmith.com/essays/measurement",
+      "url": "https://janesmith.com/essays/measurement",
+      "title": "What we talk about when we talk about measurement",
+      "publishedDate": "2025-11-03T00:00:00.000Z",
+      "author": "Jane Smith",
+      "score": 0.31,
+      "text": "By Jane Smith. I lead engineering at Acme Corp, and this essay is about the difference between measuring a thing and knowing it. Find me at github.com/jsmith."
+    },
+    {
+      "id": "https://conf.example/talks/jane-smith",
+      "url": "https://conf.example/talks/jane-smith",
+      "title": "Talk: measurement in practice",
+      "publishedDate": "2025-06-14T09:30:00.000Z",
+      "author": null,
+      "score": 0.22,
+      "text": ""
+    },
+    {
+      "id": "https://untitled.example/post/44",
+      "url": "https://untitled.example/post/44",
+      "title": null,
+      "publishedDate": "2024-02-29T12:00:00.000Z",
+      "score": 0.19,
+      "text": "A page whose title Exa could not extract, which the docs say arrives as null."
+    },
+    {
+      "id": "https://badly-dated.example/note",
+      "url": "https://badly-dated.example/note",
+      "title": "A note with an unreadable date",
+      "publishedDate": "sometime last spring",
+      "score": 0.15,
+      "text": "The date on this one is prose, not a timestamp."
+    },
+    {
+      "id": "https://janesmith.com/essays/measurement",
+      "url": "https://janesmith.com/essays/measurement",
+      "title": "Duplicate of the first hit, same URL",
+      "score": 0.12,
+      "text": "Same URL as the first result; one of the two must be dropped."
+    },
+    {
+      "id": "no-url-on-this-hit",
+      "title": "A hit that arrived without a url field",
+      "score": 0.05,
+      "text": "Defensive reads drop this rather than raising."
+    }
+  ],
+  "costDollars": {
+    "total": 0.011,
+    "search": { "neural": 0.005 },
+    "contents": { "text": 0.006 }
+  }
+}

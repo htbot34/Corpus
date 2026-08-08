@@ -48,7 +48,7 @@ def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
     A test that wants search behaviour supplies its own fake provider, which
     never touches this method.
     """
-    from corpus.search.providers import AnthropicSearchProvider
+    from corpus.search.providers import AnthropicSearchProvider, ExaSearchProvider
 
     def forbidden(self: AnthropicSearchProvider) -> object:
         # A provider handed an explicit `client=` is a test driving a stub, and
@@ -61,7 +61,19 @@ def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         return self._client
 
+    def forbidden_exa(self: ExaSearchProvider) -> object:
+        # Same rule, second vendor: the Exa provider builds its own
+        # httpx.Client in this method, which the http_client guards elsewhere
+        # cannot see.
+        if self._client is None:
+            raise AssertionError(
+                "a test built a live HTTP client for exa search — pass client= "
+                "or patch cli.get_search_provider with a fake instead"
+            )
+        return self._client
+
     monkeypatch.setattr(AnthropicSearchProvider, "_ensure_client", forbidden)
+    monkeypatch.setattr(ExaSearchProvider, "_ensure_client", forbidden_exa)
 
 
 @pytest.fixture()

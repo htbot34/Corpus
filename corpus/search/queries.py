@@ -130,6 +130,35 @@ def generate_queries(
     return queries[: max(0, max_searches)]
 
 
+# Seeds handed to a provider's find_similar, capped for the same reason
+# max_searches exists: each one is a billable call. Three is every seed a card
+# can currently produce anyway (site, substack, rss), so today the cap
+# documents the ceiling rather than binding.
+FIND_SIMILAR_SEEDS = 3
+
+
+def similar_seeds(card: IdentityCard) -> list[str]:
+    """Anchor URLs worth handing to a provider's find_similar.
+
+    "More pages like this one" is only as good as the page it starts from, so
+    the seeds are the anchors that *are* the target's own writing — their
+    site, their Substack, their feed. Profile anchors (GitHub, Bluesky, HN,
+    Reddit, Mastodon, X) are identities rather than prose; pages similar to a
+    profile page are other people's profile pages.
+    """
+    seeds: list[str] = []
+    site = card.anchors.get("site", "")
+    if site:
+        seeds.append(site)
+    substack = card.anchors.get("substack", "")
+    if substack:
+        seeds.append(f"https://{substack}")
+    rss = card.anchors.get("rss", "")
+    if rss:
+        seeds.append(rss)
+    return seeds[:FIND_SIMILAR_SEEDS]
+
+
 def missing_fields(card: IdentityCard) -> list[str]:
     """Card fields that would buy more queries, most useful first.
 

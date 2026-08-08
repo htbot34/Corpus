@@ -13,6 +13,33 @@ Three providers, same machinery:
 | Checked online | `scripts/verify_contract.py` (~$0.01) | — (see below) | `scripts/verify_search_contract.py` (~$0.13) |
 | Fixture provenance | **synthetic**, except `user_info.json` | **captured live**, then scrubbed | **captured live**, then scrubbed |
 
+## Exa search — SYNTHETIC fixtures, defensive reader
+
+`ExaSearchProvider` has **no live captures**: the offline rule means
+`tests/fixtures/exa_search_response.json` and
+`tests/fixtures/exa_find_similar_response.json` are written to the documented
+API shapes and are SYNTHETIC, in the same sense as
+`web_search_response_with_citations.json`. These shapes are UNVERIFIED against
+the wire, and the first live run is the test.
+
+| Provider | Endpoints called | Key |
+| --- | --- | --- |
+| `search/providers.py` (`ExaSearchProvider`) | `POST api.exa.ai/search`, `POST api.exa.ai/findSimilar` — body `{query\|url, numResults, contents: {text: true}, excludeDomains}` | `EXA_API_KEY` |
+
+What this means in practice: the field names the provider reads (`results[]`,
+`url`, `title`, `publishedDate`, `text`, `costDollars.total`) are
+documentation-derived, and a rename would degrade to fewer or thinner results
+with errors recorded rather than to wrong attribution — every read is
+defensive, the whole hit is preserved in `SearchResult.raw`, and the provider
+keeps `last_raw_payload` so a shape surprise is inspectable in the run that
+hit it. The pricing constants in `budget.py` (`EXA_COST_PER_SEARCH_REQUEST`,
+`EXA_COST_PER_PAGE_TEXT`) are documentation-derived too, could not be re-read
+at implementation time (the environment's egress proxy blocks exa.ai), and
+carry an operator TODO to verify before the first paid run. `costDollars`,
+when the wire supplies a sane value, beats both constants at billing time.
+The honest way to promote this from SYNTHETIC to CONFIRMED is a live capture
+via `--capture-search` scrubbed the way `_scrub_search.py` records.
+
 ## Bluesky, Hacker News, Reddit, Mastodon — SYNTHETIC fixtures, defensive readers
 
 The four conversation sources added later have **no live captures**: the

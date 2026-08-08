@@ -65,6 +65,61 @@ X_MIN_CHARGE_PER_REQUEST = 0.00015
 # why results are cached by query string.
 SEARCH_COST_PER_QUERY = 10.00 / 1000
 
+# Exa search. Priced on two meters, unlike Anthropic's one: a fee per search
+# request, plus a fee per page of contents when the request asks for text —
+# and this tool always asks for text, because the extract-as-snippet is the
+# entire reason the provider exists here.
+#
+# WHERE THESE NUMBERS CAME FROM: Exa's published API pricing
+# (https://docs.exa.ai/reference/pricing) as recorded in the implementing
+# model's documentation knowledge, cutoff January 2026 — $5 per 1,000 search
+# requests, $1 per 1,000 pages of text contents. They could NOT be re-read on
+# 2026-08-08: this environment's egress proxy blocks exa.ai, so the date the
+# rates were actually last read is the knowledge cutoff, not today.
+#
+# TODO(operator): verify both rates against https://exa.ai/pricing BEFORE the
+# first paid Exa run, and correct them here if they moved. An estimator
+# quoting a stale rate is the estimator lying, and this project's dry-run
+# estimates have already measured +829%/-42%/-80% wrong on live runs.
+EXA_COST_PER_SEARCH_REQUEST = 5.00 / 1000
+EXA_COST_PER_PAGE_TEXT = 1.00 / 1000
+
+# Pages of text one search is assumed to bill for: the worst case is every
+# result carrying contents. Must stay >= verify.RESULTS_PER_QUERY (8), which is
+# the `numResults` Phase 2 actually asks for — budget.py cannot import verify
+# without a cycle, so a test pins the two together instead.
+EXA_ASSUMED_PAGES_PER_SEARCH = 8
+
+# Worst case for one Exa query with contents: $0.005 + 8 x $0.001 = $0.013.
+EXA_COST_PER_QUERY = EXA_COST_PER_SEARCH_REQUEST + (
+    EXA_ASSUMED_PAGES_PER_SEARCH * EXA_COST_PER_PAGE_TEXT
+)
+
+# Per-provider search rates, for the callers that know a provider *name* but
+# hold no provider instance (the dry-run estimator). Provider classes carry
+# the same numbers as `cost_per_search`; this table and those attributes must
+# agree, and a test pins that too.
+SEARCH_COST_BY_PROVIDER: dict[str, float] = {
+    "anthropic_search": SEARCH_COST_PER_QUERY,
+    "exa": EXA_COST_PER_QUERY,
+}
+
+
+def search_cost_per_query(provider: str) -> float:
+    """The worst-case per-search rate for a named provider.
+
+    Raises on an unknown name for the same reason `model_rates` does: a run
+    billing against a rate nobody wrote down is a spend report about nothing.
+    """
+    if provider not in SEARCH_COST_BY_PROVIDER:
+        raise KeyError(
+            f"No search rate on file for provider {provider!r}. Add it to "
+            "SEARCH_COST_BY_PROVIDER rather than letting a run bill against an "
+            "unknown rate."
+        )
+    return SEARCH_COST_BY_PROVIDER[provider]
+
+
 # Anthropic list prices, $ per million tokens.
 # Claude Sonnet 5 carries introductory pricing ($2/$10) through 2026-08-31,
 # after which it reverts to $3/$15. We charge the correct rate for today so the
@@ -281,7 +336,9 @@ class Budget:
             minimum=X_MIN_CHARGE_PER_REQUEST,
         )
 
-    def charge_searches(self, endpoint: str, count: int, note: str = "") -> Charge:
+    def charge_searches(
+        self, endpoint: str, count: int, note: str = "", unit_cost: float | None = None
+    ) -> Charge:
         """Record web searches actually performed.
 
         `count` comes from `usage.server_tool_use.web_search_requests`, not from
@@ -289,8 +346,14 @@ class Budget:
         a search that errors is not billed. Charging what we requested rather
         than what happened would make the spend report a statement about our
         intentions.
+
+        `unit_cost` is the caller's provider rate — vendors price a search
+        differently, and Exa's response even states what the call really cost.
+        None keeps the Anthropic rate, which is what every caller meant before
+        a second vendor existed.
         """
-        return self.charge("search", endpoint, count, SEARCH_COST_PER_QUERY, note=note)
+        rate = SEARCH_COST_PER_QUERY if unit_cost is None else unit_cost
+        return self.charge("search", endpoint, count, rate, note=note)
 
     def charge_anthropic(
         self,
@@ -478,27 +541,41 @@ def estimate_search_call(
     input_tokens: int,
     max_output_tokens: int,
     searches: int = 1,
+    cost_per_search: float | None = None,
 ) -> float:
     """Worst-case cost of one search call: the search fee plus the model call.
 
     The search fee dominates — $0.01 against a fraction of a cent of Haiku
     tokens — but both are reserved, because a reservation that covers only the
     larger half is not a ceiling.
+
+    `cost_per_search` is the provider's rate (None keeps Anthropic's). An
+    empty `model` means the provider runs no model at all — Exa is a plain
+    HTTP API — so there are no tokens to reserve for, not zero-priced ones.
     """
-    return searches * SEARCH_COST_PER_QUERY + estimate_anthropic_call(
-        model, input_tokens, max_output_tokens
-    )
+    fee = SEARCH_COST_PER_QUERY if cost_per_search is None else cost_per_search
+    token_cost = estimate_anthropic_call(model, input_tokens, max_output_tokens) if model else 0.0
+    return searches * fee + token_cost
 
 
-def estimate_search_phase(max_searches: int, model: str = "claude-haiku-4-5-20251001") -> float:
+def estimate_search_phase(
+    max_searches: int,
+    model: str = "claude-haiku-4-5-20251001",
+    provider: str = "anthropic_search",
+) -> float:
     """Pre-flight estimate for the whole discovery-by-search phase.
 
     Assumes every query runs (the cache makes a re-run cheaper, never dearer)
     and that each carries ~4k tokens of results back — search results are
     counted as input tokens, and they are the bulk of what a search call costs
-    beyond the fee itself.
+    beyond the fee itself. Providers other than `anthropic_search` run no
+    model, so their estimate is the search fee alone — which for Exa already
+    prices in the page contents each search carries back.
     """
-    return max_searches * estimate_search_call(model, 4_000, 1_000)
+    token_model = model if provider == "anthropic_search" else ""
+    return max_searches * estimate_search_call(
+        token_model, 4_000, 1_000, cost_per_search=search_cost_per_query(provider)
+    )
 
 
 def estimate_x_cost(post_count: int, hydration_ratio: float = 0.5) -> float:

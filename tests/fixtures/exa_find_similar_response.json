@@ -1,0 +1,23 @@
+{
+  "_provenance": "SYNTHETIC — written to Exa's documented /findSimilar response shape (docs/wire-contract.md). Never captured from the wire; the first live run is the test. Deliberately carries no costDollars, so the billing fallback to the documented rate is exercised.",
+  "requestId": "synthetic-request-0002",
+  "results": [
+    {
+      "id": "https://blog.example/notes-on-rubrics",
+      "url": "https://blog.example/notes-on-rubrics",
+      "title": "Notes on rubrics",
+      "publishedDate": "2024-06-01T00:00:00.000Z",
+      "author": "Jane Smith",
+      "score": 0.28,
+      "text": "By Jane Smith. More writing in the same vein as the seed page, at Acme Corp."
+    },
+    {
+      "id": "https://another.example/essay",
+      "url": "https://another.example/essay",
+      "title": "An essay by somebody else entirely",
+      "publishedDate": null,
+      "score": 0.11,
+      "text": "Similar-page search returns neighbours, not necessarily the same author."
+    }
+  ]
+}

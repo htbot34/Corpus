@@ -247,7 +247,7 @@ def test_a_missing_key_says_what_to_do_about_it() -> None:
 # -- the vendor seam --------------------------------------------------------
 
 
-@pytest.mark.parametrize(("name", "env"), [("exa", "EXA_API_KEY"), ("brave", "BRAVE_API_KEY")])
+@pytest.mark.parametrize(("name", "env"), [("brave", "BRAVE_API_KEY")])
 def test_an_unimplemented_provider_names_exactly_what_to_add(name: str, env: str) -> None:
     """The same courtesy corpus/x/providers.py extends: a stub that tells you
     the env var and the endpoint beats one that says NotImplementedError."""
@@ -267,9 +267,14 @@ def test_an_unknown_provider_lists_the_known_ones() -> None:
 
 
 def test_the_provider_is_selected_by_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEARCH_PROVIDER=exa reaches the real Exa provider, which refuses to
+    construct without its key — proof both that selection worked and that the
+    refusal happens at construction, before anything could be spent."""
     monkeypatch.setenv("SEARCH_PROVIDER", "exa")
-    with pytest.raises(NotImplementedError):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    with pytest.raises(SearchError) as caught:
         get_search_provider()
+    assert "EXA_API_KEY" in str(caught.value)
 
 
 def test_no_client_is_built_until_a_search_actually_runs(monkeypatch: pytest.MonkeyPatch) -> None:

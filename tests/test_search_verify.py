@@ -643,3 +643,112 @@ def test_the_result_serializes_everything_a_reader_would_need(cache: Cache) -> N
     assert payload["candidates"][0]["attribution"] == "corroborated"
     assert "signals" in payload["candidates"][0]
     json.dumps(payload)  # it lands in discovery.json, so it has to serialize
+
+
+# -- find_similar ------------------------------------------------------------
+
+
+class SimilarProvider(FakeSearchProvider):
+    """A vendor with the optional capability, never leaving the process."""
+
+    supports_find_similar = True
+
+    def __init__(
+        self,
+        results: dict[str, list[SearchResult]] | None = None,
+        similar: dict[str, list[SearchResult]] | None = None,
+    ) -> None:
+        super().__init__(results)
+        self.similar = similar or {}
+        self.similar_calls: list[str] = []
+
+    def find_similar(self, url: str, limit: int) -> list[SearchResult]:
+        self.similar_calls.append(url)
+        self.last_usage = SearchUsage(searches=1, input_tokens=0, output_tokens=0)
+        return list(self.similar.get(url, []))[:limit]
+
+
+def test_find_similar_results_join_the_candidate_pool(cache: Cache) -> None:
+    """Seeded from the anchors that are the target's own writing, recorded as
+    queries with a why, and verified exactly like every keyword hit."""
+    provider = SimilarProvider(
+        similar={"https://janesmith.com": [hit("https://thinking.example/rubrics")]}
+    )
+    seed(cache, "https://thinking.example/rubrics", GOOD_PAGE)
+
+    result = search_for_sources(
+        card(anchors={"github": "jsmith", "site": "https://janesmith.com"}),
+        cache,
+        client_for(provider, cache),
+        log=lambda _m: None,
+    )
+
+    assert provider.similar_calls == ["https://janesmith.com"]
+    assert [c.url for c in result.candidates] == ["https://thinking.example/rubrics"]
+    assert result.candidates[0].verified
+    assert result.candidates[0].query == "more like https://janesmith.com"
+    similar_queries = [q for q in result.queries if q.text.startswith("more like ")]
+    assert len(similar_queries) == 1 and similar_queries[0].why
+
+
+def test_a_provider_without_the_capability_is_never_asked_for_similar(cache: Cache) -> None:
+    """anthropic_search has no find_similar, and its absence must cost nothing:
+    no call, no charge, no error, no phantom query in the record."""
+    provider = EverythingProvider([hit("https://thinking.example/rubrics")])
+    seed(cache, "https://thinking.example/rubrics", GOOD_PAGE)
+
+    result = search_for_sources(
+        card(anchors={"github": "jsmith", "site": "https://janesmith.com"}),
+        cache,
+        client_for(provider, cache),
+        log=lambda _m: None,
+    )
+
+    assert not any(q.text.startswith("more like ") for q in result.queries)
+    assert result.errors == []
+    assert [c.url for c in result.candidates] == ["https://thinking.example/rubrics"]
+
+
+def test_a_similar_hit_is_a_lead_not_evidence(cache: Cache) -> None:
+    """find_similar starts from a page that IS the target's, which is exactly
+    why its results must not inherit that trust: neighbours of their writing
+    are other people's writing until a fetched page says otherwise."""
+    provider = SimilarProvider(
+        similar={"https://janesmith.com": [hit("https://stranger.example/post")]}
+    )
+    # The page fetches fine but attaches nobody's identity to itself.
+    seed(cache, "https://stranger.example/post", "<html><body><p>An essay.</p></body></html>")
+
+    result = search_for_sources(
+        card(anchors={"github": "jsmith", "site": "https://janesmith.com"}),
+        cache,
+        client_for(provider, cache),
+        log=lambda _m: None,
+    )
+
+    assert result.candidates == []
+    assert [c.url for c in result.held] == ["https://stranger.example/post"]
+
+
+def test_a_rich_extract_snippet_still_cannot_corroborate(cache: Cache) -> None:
+    """The Exa temptation, pinned. An Exa snippet is a real page extract and
+    can carry every signal the scorer knows — name, employer, role, handles —
+    and it is still 1,000 characters of unread page. Snippets RANK the fetch
+    order; only a score against a FETCHED page can promote. If this test
+    breaks, someone has built the gate that silently destroyed coverage once
+    already (see verify.py's module docstring)."""
+    rich = (
+        "By Jane Smith. Jane Smith is VP Engineering at Acme Corp, based in "
+        "Seattle. Follow @jsmith on GitHub (github.com/jsmith). "
+    ) * 8  # Exa-extract sized, not citation-fragment sized
+    provider = EverythingProvider([hit("https://unfetchable.example/essay", snippet=rich)])
+    # Nothing seeded and the HTTP client raises, so the page is never read.
+
+    result = search_for_sources(card(), cache, client_for(provider, cache), log=lambda _m: None)
+
+    assert result.candidates == [], "a snippet promoted a candidate no one fetched"
+    assert [c.url for c in result.held] == ["https://unfetchable.example/essay"]
+    held = result.held[0]
+    assert not held.verified
+    assert held.score is not None and not held.score.fetched
+    assert "snippet" in held.skipped
