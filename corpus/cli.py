@@ -58,6 +58,7 @@ from .identity import (
 from .logging_setup import LOG_FORMATS, TEXT, RunLogger
 from .manifest import RunManifest
 from .models import Document, Synthesis
+from .reader import ReaderError, get_reader, reader_fallback_enabled
 from .render import render_empty_report, render_report
 from .search.capture import SearchCapture
 from .search.client import SearchClient
@@ -232,6 +233,17 @@ def run(
         DEFAULT_MAX_VERIFY_FETCHES,
         "--max-verify-fetches",
         help="Ceiling on pages fetched to verify search candidates. Free, plain HTTP.",
+    ),
+    reader_fallback: bool = typer.Option(
+        False,
+        "--reader-fallback",
+        help=(
+            "For verification pages that 403 a direct fetch, allow ONE fallback "
+            "through a text-extraction reader service (r.jina.ai). Off by default: "
+            "enabling it sends every fallback URL to a third party, and recovered "
+            "pages carry weaker authorship signals (extracted text, not original "
+            "HTML) — the report marks them. Also CORPUS_READER_FALLBACK=1."
+        ),
     ),
     accept_unconfirmed: Path | None = typer.Option(
         None,
@@ -644,6 +656,7 @@ def run(
             max_fetches=max_verify_fetches,
             known_urls={c.url for c in discovery.candidates} | {c.url for c in discovery.held},
             capture=capture_search,
+            use_reader=reader_fallback,
         )
         _report_search(search_result, card)
         found = _fetch_discovered(
@@ -652,7 +665,10 @@ def run(
                     url=c.url,
                     kind=c.kind,
                     attribution="corroborated",
-                    basis=c.score.basis if c.score else "found by search",
+                    # ingest_basis, not score.basis: a page recovered through
+                    # the reader service must say so all the way into the
+                    # document's attribution_basis and the report.
+                    basis=c.ingest_basis,
                     confidence=c.score.confidence if c.score else 0.6,
                     signals=c.score.matched if c.score else [],
                 )
@@ -1236,6 +1252,13 @@ def _anchor_line(card: IdentityCard) -> str:
     return " · ".join(f"{kind}:{value}" for kind, value in sorted(card.anchors.items()))
 
 
+def _failure_breakdown(failures: dict[str, int]) -> str:
+    """`http_403 x 9, timeout x 2` — biggest loss first, so the reader sees
+    what to fix before they see what to shrug at."""
+    ordered = sorted(failures.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ", ".join(f"{label} x {count}" for label, count in ordered)
+
+
 def _report_discovery(result: DiscoveryResult, card: IdentityCard, *, following: bool) -> None:
     """What discovery found, at a glance, before anything is paid for."""
     if not following:
@@ -1246,6 +1269,9 @@ def _report_discovery(result: DiscoveryResult, card: IdentityCard, *, following:
         f"Discovery (phase 1, link-following): {len(result.candidates)} source(s) "
         f"from {result.fetches} fetch(es) and {result.cached_fetches} cache hit(s)"
     )
+    if result.fetch_failures:
+        lost = sum(result.fetch_failures.values())
+        echo(f"  {lost} read(s) lost: {_failure_breakdown(result.fetch_failures)}")
     if mix:
         echo("  " + ", ".join(f"{count} {label}" for label, count in sorted(mix.items())))
     for candidate in result.candidates:
@@ -1373,13 +1399,15 @@ def _run_search(
     max_fetches: int,
     known_urls: set[str],
     capture: Path | None,
+    use_reader: bool = False,
 ) -> SearchPhaseResult:
     """Phase 2, wrapped so it can never be the reason a run dies.
 
     Search is billable and optional. A missing key, an unimplemented provider,
     or a budget that will not cover a query all degrade to "the phase did not
     run" with the reason attached — the corpus is thinner and the report says
-    why.
+    why. The reader fallback follows the same rule: a reader that cannot be
+    built is a warning and a run without the fallback, never a dead run.
     """
     try:
         provider = get_search_provider(
@@ -1389,6 +1417,17 @@ def _run_search(
     except (SearchError, NotImplementedError) as exc:
         warn(f"search did not run: {exc}")
         return SearchPhaseResult(notes=[f"search did not run: {exc}"])
+
+    reader = None
+    if reader_fallback_enabled(use_reader):
+        try:
+            reader = get_reader(log=echo)
+            echo(
+                f"  [reader] fallback enabled ({reader.name}): pages that 403 a direct "
+                "fetch are sent to a third-party reader service"
+            )
+        except ReaderError as exc:
+            warn(f"reader fallback not available: {exc}")
 
     if capture is not None:
         echo(f"  [capture] raw search responses -> {capture}")
@@ -1401,6 +1440,7 @@ def _run_search(
             max_searches=max_searches,
             max_fetches=max_fetches,
             known_urls=known_urls,
+            reader=reader,
             log=echo,
         )
     except BudgetExceeded as exc:
@@ -1408,6 +1448,8 @@ def _run_search(
         return SearchPhaseResult(notes=[f"search stopped: {exc}"])
     finally:
         client.close()
+        if reader is not None:
+            reader.close()
 
 
 def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
@@ -1417,6 +1459,14 @@ def _report_search(result: SearchPhaseResult, card: IdentityCard) -> None:
         f"({result.cached_searches} cached), {result.results_seen} result(s), "
         f"{result.verified_count} verified"
     )
+    if result.fetch_failures:
+        lost = sum(result.fetch_failures.values())
+        echo(f"  {lost} candidate read(s) lost: {_failure_breakdown(result.fetch_failures)}")
+    if result.reader_attempts:
+        echo(
+            f"  reader fallback: {result.reader_recoveries} of {result.reader_attempts} "
+            "blocked page(s) recovered as extracted text (weaker authorship signals)"
+        )
     if result.unread:
         # Same class of misleading output the live checker now refuses to
         # print: every candidate was scored on a search result alone, so the

@@ -32,11 +32,16 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
+import ssl
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urljoin, urlparse, urlunparse
+
+import httpx
 
 from .cache import Cache
 from .identity import IdentityCard
@@ -47,6 +52,139 @@ from .sources.base import SourceError, html_to_text, http_client
 # exists so a site with a hostile link graph cannot turn a free phase into a
 # thousand requests against someone else's server.
 DEFAULT_MAX_FETCHES = 25
+
+# ---- fetch failure accounting ---------------------------------------------
+# The categories every lost read is filed under. A reference run lost 56% of
+# its candidate pages and nobody could say to what: `errors` is prose, and
+# prose cannot be counted. The breakdown is the deliverable — the fix for a
+# wall of 403s (identify the client, fall back to a reader) is not the fix
+# for a wall of timeouts (wait longer) or of 429s (slow down), and sizing any
+# of those against "56%, probably" is guessing.
+FETCH_FAILURE_CATEGORIES = (
+    "http_403",
+    "http_404",
+    "http_429",
+    "http_5xx",
+    "dns",
+    "timeout",
+    "tls",
+    "redirect_loop",
+    "too_large",
+    "other",
+)
+
+# Retries after the first attempt, for 429 and 5xx only. Those are the two
+# answers that mean "not right now" rather than "no": there were previously
+# ZERO retries, so one transient 503 permanently lost a page. 403 and 404 are
+# answers, not weather — they are not retried (except the one Accept-header
+# probe below).
+FETCH_RETRIES = 2
+
+# Exponential backoff base. Attempt n waits BACKOFF_BASE * 2^n plus up to one
+# base of jitter, so a burst of failures does not retry in lockstep.
+BACKOFF_BASE_SECONDS = 1.0
+
+# A Retry-After above this is the host saying "come back much later", and a
+# discovery pass that sleeps minutes for one page is a run that looks hung.
+# Honoured up to the cap; past it, the page is recorded as lost.
+RETRY_AFTER_CAP_SECONDS = 30.0
+
+# Minimum spacing between two requests to the same host. A burst of
+# candidates on one domain must not manufacture the 429s the retries above
+# then spend their patience on.
+PER_HOST_INTERVAL_SECONDS = 1.0
+
+# Bodies past this are not prose anyone wrote — they are tarballs, datasets,
+# and videos wearing a text URL — and one of them held in memory is most of a
+# small machine.
+MAX_FETCH_BODY_BYTES = 5_000_000
+
+# What a plain browser sends. Some hosts 403 on the Accept header rather than
+# on identity, so a 403 earns exactly one retry with this — same User-Agent,
+# because changing identity to slip past a block is what this tool does not
+# do. A host that refuses an identified, rate-limited, honest client has
+# refused, and the run reports a thinner corpus.
+BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+# Markers httpx.ConnectError messages carry when the failure was name
+# resolution rather than the connection itself.
+_DNS_MARKERS = (
+    "getaddrinfo",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "name resolution",
+)
+
+
+def categorize_fetch_exception(exc: Exception) -> str:
+    """File one transport failure under the category a reader can act on."""
+    for err in _exception_chain(exc):
+        if isinstance(err, ssl.SSLError):
+            return "tls"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.TooManyRedirects):
+        return "redirect_loop"
+    if isinstance(exc, httpx.ConnectError):
+        message = str(exc).lower()
+        if any(marker in message for marker in _DNS_MARKERS):
+            return "dns"
+    return "other"
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def categorize_fetch_status(status: int) -> str:
+    if status == 403:
+        return "http_403"
+    if status == 404:
+        return "http_404"
+    if status == 429:
+        return "http_429"
+    if status >= 500:
+        return "http_5xx"
+    return "other"
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Seconds from a Retry-After header, or None when it cannot be read.
+
+    Only the delta-seconds form; the HTTP-date form is rare on rate limiters
+    and a misparsed date that slept until a wrong wall-clock moment would be
+    worse than falling back to backoff.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+class ReaderService(Protocol):
+    """The slice of `corpus.reader` the fetch layer uses.
+
+    Structural on purpose: `corpus.reader` imports `search.scoring`, which
+    imports this module, so naming the class here would be a cycle. Anything
+    with a name and a `read` that returns extracted text or None fits.
+    """
+
+    name: str
+
+    def read(self, url: str) -> str | None: ...
+
 
 # Probed in this order, and only when the site advertised no feed of its own.
 # Straight from the shapes people's blogs actually take; a site that declares
@@ -273,6 +411,11 @@ class DiscoveryResult:
     identity_signals: list[str] = field(default_factory=list)
     fetches: int = 0
     cached_fetches: int = 0
+    #: Lost reads by category (FETCH_FAILURE_CATEGORIES). The countable form
+    #: of `errors`, so the report can say WHERE reads were lost.
+    fetch_failures: dict[str, int] = field(default_factory=dict)
+    reader_attempts: int = 0
+    reader_recoveries: int = 0
     notes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -289,6 +432,9 @@ class DiscoveryResult:
             "identity_signals": list(self.identity_signals),
             "fetches": self.fetches,
             "cached_fetches": self.cached_fetches,
+            "fetch_failures": dict(self.fetch_failures),
+            "reader_attempts": self.reader_attempts,
+            "reader_recoveries": self.reader_recoveries,
             "by_attribution": self.by_attribution(),
             "notes": list(self.notes),
             "errors": list(self.errors),
@@ -314,22 +460,73 @@ class Fetcher:
     Discovery runs before anything has been paid for and must never be the
     reason a run dies: a site that is down, slow, or hostile degrades the
     corpus, it does not end the run.
+
+    Every lost read is counted in `failures` under a category from
+    FETCH_FAILURE_CATEGORIES as well as described in `errors`, because prose
+    cannot be counted and the breakdown is what sizes any fix. 429s and 5xxs
+    are retried with backoff (honouring Retry-After); requests to one host
+    are spaced PER_HOST_INTERVAL_SECONDS apart; a 403 earns one retry with a
+    plain-browser Accept header and the same honest User-Agent. What this
+    deliberately does not do: run a browser, execute JavaScript, or rotate
+    identities. A host that refuses an identified, rate-limited client has
+    refused, and the corpus is thinner for it — that refusal is a feature.
+
+    `reader` (default None, and OFF unless the operator switched it on) is
+    the one fallback past a refusal this tool allows: a text-extraction
+    reader service consulted only for a final 403, never for a URL
+    `reader_blocked` refuses, with every consultation counted so its real
+    recovery rate is measurable. URLs it recovered are listed in
+    `via_reader`, cached under a separate key so a reader-off run never
+    mistakes extracted text for a fetched page, and the caller must carry
+    the fact into attribution — reader output is extracted text, so
+    authorship signals are weaker than on the original HTML.
     """
 
-    def __init__(self, cache: Cache, max_fetches: int, log: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        cache: Cache,
+        max_fetches: int,
+        log: Callable[[str], None],
+        *,
+        reader: ReaderService | None = None,
+        reader_blocked: Callable[[str], bool] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.cache = cache
         self.max_fetches = max_fetches
         self.log = log
+        self.reader = reader
+        self.reader_blocked = reader_blocked
+        self.sleep = sleep
+        self.clock = clock
         self.fetches = 0
         self.cached = 0
         self.errors: list[str] = []
+        #: Lost reads by category. Never counts a page that was eventually
+        #: read on a retry — a retry that worked is a fetch, not a failure.
+        self.failures: dict[str, int] = {}
+        self.reader_attempts = 0
+        self.reader_recoveries = 0
+        #: URLs whose body came from the reader service, this call or cached.
+        self.via_reader: set[str] = set()
         self._client: Any = None
+        self._last_request: dict[str, float] = {}
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> str | None:
         cached = self.cache.get("discovery", f"get:{url}")
         if cached is not None:
             self.cached += 1
             return str(cached)
+        if self.reader is not None:
+            # Reader output is cached under its own key, so a run without the
+            # flag never reads extracted text believing it fetched a page —
+            # and a run with it still knows which documents to mark.
+            reader_cached = self.cache.get("discovery", f"get:reader:{url}")
+            if reader_cached is not None:
+                self.cached += 1
+                self.via_reader.add(url)
+                return str(reader_cached)
         if self.cache.offline:
             self.errors.append(f"--offline: {url} is not cached")
             return None
@@ -340,24 +537,146 @@ class Fetcher:
             )
             return None
         self.fetches += 1
-        try:
-            if self._client is None:
-                self._client = http_client()
-            resp = self._client.get(url, headers=headers or {})
-            if resp.status_code >= 400:
-                self.errors.append(f"{resp.status_code} fetching {url}")
-                return None
-            body = str(resp.text)
-        except Exception as exc:  # network, TLS, redirect loops — all non-fatal
-            self.errors.append(str(SourceError(f"fetching {url}: {exc}")))
+        body, category = self._request(url, headers or {})
+        if body is None and category == "http_403":
+            body = self._read_via_reader(url)
+            if body is not None:
+                self.cache.put("discovery", f"get:reader:{url}", body)
+                return body
+        if body is None:
             return None
         self.cache.put("discovery", f"get:{url}", body)
         return body
+
+    # -- the request loop --------------------------------------------------
+
+    def _request(self, url: str, headers: dict[str, str]) -> tuple[str | None, str]:
+        """One page, through the retry ladder. Returns (body, "") or
+        (None, category) with the loss already recorded."""
+        try:
+            if self._client is None:
+                self._client = http_client()
+            client = self._client
+        except Exception as exc:  # a client that cannot be built reads as transport
+            return None, self._fail(
+                categorize_fetch_exception(exc),
+                str(SourceError(f"fetching {url}: {exc}")),
+            )
+
+        host = _host(url)
+        retries = 0
+        accept_probed = False
+        request_headers = dict(headers)
+        while True:
+            self._throttle(host)
+            try:
+                resp = client.get(url, headers=request_headers)
+            except Exception as exc:  # network, TLS, redirect loops — all non-fatal
+                return None, self._fail(
+                    categorize_fetch_exception(exc),
+                    str(SourceError(f"fetching {url}: {exc}")),
+                )
+
+            status = int(resp.status_code)
+            if status < 400:
+                body = str(resp.text)
+                if len(body.encode("utf-8", errors="ignore")) > MAX_FETCH_BODY_BYTES:
+                    return None, self._fail(
+                        "too_large",
+                        f"{url} is over {MAX_FETCH_BODY_BYTES // 1_000_000}MB — "
+                        "not prose, not read",
+                    )
+                return body, ""
+
+            if status == 403 and not accept_probed:
+                # Some hosts reject on Accept rather than on identity. One
+                # probe with a browser's Accept — never a browser's identity.
+                accept_probed = True
+                request_headers = {**headers, "Accept": BROWSER_ACCEPT}
+                continue
+
+            if (status == 429 or status >= 500) and retries < FETCH_RETRIES:
+                delay = self._retry_delay(resp, retries)
+                if delay is not None:
+                    retries += 1
+                    self.sleep(delay)
+                    continue
+                # Fall through: Retry-After past the cap is the host saying no.
+
+            return None, self._fail(categorize_fetch_status(status), f"{status} fetching {url}")
+
+    def _retry_delay(self, resp: Any, retries: int) -> float | None:
+        """How long to wait before the next try, or None for "do not"."""
+        retry_after = parse_retry_after(_header(resp, "Retry-After"))
+        if retry_after is not None:
+            # The host named a number; honour it up to the cap. Past the cap
+            # it said "much later", and sleeping minutes for one page is a
+            # run that looks hung.
+            return retry_after if retry_after <= RETRY_AFTER_CAP_SECONDS else None
+        doubled: float = BACKOFF_BASE_SECONDS * float(1 << retries)
+        return doubled + random.uniform(0, BACKOFF_BASE_SECONDS)
+
+    def _throttle(self, host: str) -> None:
+        """Space requests to one host, so we never manufacture our own 429s."""
+        if not host:
+            return
+        last = self._last_request.get(host)
+        now = self.clock()
+        if last is not None:
+            wait = PER_HOST_INTERVAL_SECONDS - (now - last)
+            if wait > 0:
+                self.sleep(wait)
+        self._last_request[host] = self.clock()
+
+    def _fail(self, category: str, message: str) -> str:
+        self.failures[category] = self.failures.get(category, 0) + 1
+        self.errors.append(message)
+        return category
+
+    # -- the reader fallback -----------------------------------------------
+
+    def _read_via_reader(self, url: str) -> str | None:
+        """One consultation of the reader service, for a final 403 only.
+
+        Never for a host scoring.py rejects on sight and never for a URL the
+        card excludes — `reader_blocked` carries that predicate, and the
+        reader itself refuses people-search hosts again. A fallback that
+        routes around a refusal would not be a fetch improvement.
+        """
+        if self.reader is None:
+            return None
+        if self.reader_blocked is not None and self.reader_blocked(url):
+            self.errors.append(f"reader fallback refused for {url}: the card excludes it")
+            return None
+        self.reader_attempts += 1
+        try:
+            text = self.reader.read(url)
+        except Exception as exc:  # the reader is best-effort by definition
+            self.errors.append(str(SourceError(f"reader fallback for {url}: {exc}")))
+            return None
+        if not text:
+            self.errors.append(f"reader fallback for {url} returned nothing")
+            return None
+        self.reader_recoveries += 1
+        self.via_reader.add(url)
+        self.log(f"  [reader] {url}: 403 direct; recovered as extracted text")
+        return text
 
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
             self._client = None
+
+
+def _header(resp: Any, name: str) -> str | None:
+    headers = getattr(resp, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except Exception:
+        return None
+    return str(value) if value is not None else None
 
 
 def _github_headers() -> dict[str, str]:
@@ -874,6 +1193,9 @@ def discover_from_anchors(
     result.held.sort(key=lambda c: c.url)
     result.fetches = fetcher.fetches
     result.cached_fetches = fetcher.cached
+    result.fetch_failures = dict(fetcher.failures)
+    result.reader_attempts = fetcher.reader_attempts
+    result.reader_recoveries = fetcher.reader_recoveries
     # Deduped: one dead host is reached from several directions, and repeating
     # the same failure five times buries the four other things that went wrong.
     result.errors.extend(e for e in dict.fromkeys(fetcher.errors) if e not in result.errors)

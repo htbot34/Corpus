@@ -21,7 +21,13 @@ from ..cache import Cache
 from ..models import ATTRIBUTION_CONFIDENCE, DATE_UNKNOWN, Attribution, Document, Thread
 from ..redact import RedactingError
 
-USER_AGENT = "corpus/0.1 (personal research tool; +https://github.com/)"
+# Descriptive and honest: the tool's name, what it is, and a URL a site
+# operator can visit or block. Some hosts block generic clients and allow
+# identified ones — and identifying ourselves is the right thing to do
+# whether or not it buys a single fetch. Never rotated, never disguised.
+USER_AGENT = (
+    "corpus/0.1 (personal research tool, reads public writing; +https://github.com/htbot34/Corpus)"
+)
 
 
 class SourceError(RedactingError):

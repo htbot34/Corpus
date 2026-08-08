@@ -119,7 +119,8 @@ exposure. Keys never reach the browser.
 | `--max-fetches` | 25 | Ceiling on discovery's plain-HTTP requests. Not a money guard — there is no money here — but a guard against a hostile link graph. |
 | `--search` / `--no-search` | on | Phase 2: find sources the anchors do not reach. Costs ~$0.01 per query. Never ingests what it cannot verify. |
 | `--max-searches` | 12 | Billable queries per run, reported in the estimate and the report. Cached queries are free and do not count. |
-| `--max-verify-fetches` | 40 | Pages fetched to verify search candidates. Free, plain HTTP. |
+| `--max-verify-fetches` | 40 | Pages fetched to verify search candidates. Free, plain HTTP. Retries 429/5xx with backoff, spaces requests per host, and identifies itself honestly; roughly half of candidate pages still refuse, and the report now counts *where* reads were lost (403 vs timeout vs DNS, per phase). |
+| `--reader-fallback` | **off** | For verification pages that 403 a direct fetch, allow ONE fallback through a text-extraction reader service (r.jina.ai; `READER_API_KEY` raises its rate limit). **Enabling this sends every fallback URL to a third party.** Recovered pages are extracted text, not original HTML — authorship signals are weaker, and both the document's attribution basis and the report's coverage block say so. Never used for people-search hosts or excluded URLs. Also `CORPUS_READER_FALLBACK=1`. |
 | `--accept-unconfirmed PATH` | unset | Read back an edited `unconfirmed.md`: ticked entries are ingested as `corroborated`, unticked ones go into the card's `exclude` list. |
 | `--rss URL` / `--url URL` | unset | Repeatable, read directly, not crawled. Anchor-attributed. |
 | `--max-posts` | 3000 | Ingestion stop condition. |

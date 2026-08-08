@@ -394,3 +394,27 @@ def test_no_search_ignores_a_broken_search_provider(wired, monkeypatch) -> None:
     result = run_with(wired, "--no-search")
 
     assert result.exit_code == 0, result.output
+
+
+def test_a_broken_reader_config_degrades_the_run_rather_than_ending_it(wired, monkeypatch) -> None:
+    monkeypatch.setenv("READER_PROVIDER", "nope")
+    seed(wired, BASE_SEED)
+    seed(wired, {"rss:https://janesmith.com/feed.xml": FEED}, source="rss")
+
+    result = run_with(wired, "--reader-fallback")
+
+    assert result.exit_code == 0, result.output
+    assert "reader fallback not available" in result.output
+
+
+def test_enabling_the_reader_fallback_says_so_out_loud(wired, monkeypatch) -> None:
+    """Enabling it sends fallback URLs to a third party; a switch with that
+    consequence must not flip silently."""
+    monkeypatch.delenv("READER_PROVIDER", raising=False)
+    seed(wired, BASE_SEED)
+    seed(wired, {"rss:https://janesmith.com/feed.xml": FEED}, source="rss")
+
+    result = run_with(wired, "--reader-fallback")
+
+    assert result.exit_code == 0, result.output
+    assert "third-party reader service" in result.output

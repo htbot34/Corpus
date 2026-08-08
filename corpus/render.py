@@ -196,6 +196,42 @@ def _search_lines(search: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _fetch_loss_lines(run_meta: dict[str, Any]) -> list[str]:
+    """Where reads were lost, per phase, in countable form.
+
+    "56% of pages could not be fetched" was known from one reference run and
+    the breakdown behind it had never been recorded anywhere a reader could
+    see. A wall of 403s, a wall of timeouts and a wall of 429s are three
+    different problems with three different fixes, and a coverage block that
+    only says how many reads were lost leaves the reader to guess which one
+    they have.
+    """
+    lines: list[str] = []
+    for label, block in (
+        ("link-following (phase 1)", run_meta.get("discovery") or {}),
+        ("search verification (phase 2)", run_meta.get("search") or {}),
+    ):
+        failures = block.get("fetch_failures") or {}
+        if failures:
+            lost = sum(failures.values())
+            ordered = sorted(failures.items(), key=lambda kv: (-kv[1], kv[0]))
+            breakdown = ", ".join(f"{name} × {count}" for name, count in ordered)
+            lines.append(
+                f"- {lost} page read(s) were lost during {label}: {breakdown}. "
+                "Each lost read is a page judged on less evidence or not at all."
+            )
+        attempts = int(block.get("reader_attempts") or 0)
+        if attempts:
+            recovered = int(block.get("reader_recoveries") or 0)
+            lines.append(
+                f"- The reader-service fallback recovered {recovered} of {attempts} "
+                "blocked page(s). Recovered pages are extracted text, not original "
+                "HTML — authorship signals are weaker there, and each such document "
+                "says so in its attribution basis."
+            )
+    return lines
+
+
 def _concentration_line(docs: list[Document]) -> str:
     """Say when the corpus is really one source wearing several hats.
 
@@ -463,6 +499,7 @@ def render_report(
             "**not** ingested. They are listed in discovery.json."
         )
     caveats.extend(_search_lines(run_meta.get("search") or {}))
+    caveats.extend(_fetch_loss_lines(run_meta))
     concentration = _concentration_line(docs)
     if concentration:
         caveats.append(concentration)

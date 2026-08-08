@@ -72,8 +72,20 @@ def no_live_search_client(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         return self._client
 
+    from corpus.reader import JinaReaderProvider
+
+    def forbidden_reader(self: JinaReaderProvider) -> object:
+        # And the reader-service fallback, which also builds its own client.
+        if self._client is None:
+            raise AssertionError(
+                "a test built a live HTTP client for the reader fallback — pass "
+                "client= or a fake reader instead"
+            )
+        return self._client
+
     monkeypatch.setattr(AnthropicSearchProvider, "_ensure_client", forbidden)
     monkeypatch.setattr(ExaSearchProvider, "_ensure_client", forbidden_exa)
+    monkeypatch.setattr(JinaReaderProvider, "_ensure_client", forbidden_reader)
 
 
 @pytest.fixture()

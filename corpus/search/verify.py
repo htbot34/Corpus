@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 from ..budget import BudgetExceeded
 from ..cache import Cache
-from ..discovery import Fetcher, kind_for, normalize_url
+from ..discovery import Fetcher, ReaderService, kind_for, normalize_url
 from ..identity import IdentityCard
 from .client import SearchClient
 from .pagefacts import extract_facts, facts_from_snippet
@@ -91,6 +91,11 @@ class SearchCandidate:
     verified: bool = False
     #: Why it was never fetched, when it was not.
     skipped: str = ""
+    #: True when the page body came from a reader service rather than a
+    #: direct fetch. Extracted text carries weaker authorship signals than
+    #: original HTML — no meta tags, no link markup — and everything
+    #: downstream that states a basis must say so.
+    fetched_via_reader: bool = False
 
     @property
     def outcome(self) -> str:
@@ -111,6 +116,24 @@ class SearchCandidate:
             in ("rss", "substack", "web", "github", "bluesky", "hn", "reddit", "mastodon")
         )
 
+    @property
+    def ingest_basis(self) -> str:
+        """The attribution basis an ingested document carries.
+
+        The score's basis, plus the one fact the score cannot know: whether
+        the page it judged was the original HTML or a reader service's
+        extraction. That fact must reach the report — pagefacts' signals are
+        weaker on extracted text, and a basis that hid the difference would
+        be the report pretending otherwise.
+        """
+        base = self.score.basis if self.score is not None else "found by search"
+        if self.fetched_via_reader:
+            base += (
+                "; fetched through a reader service — extracted text, so authorship "
+                "signals are weaker than on the original HTML"
+            )
+        return base
+
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "url": self.url,
@@ -122,6 +145,8 @@ class SearchCandidate:
         }
         if self.skipped:
             payload["skipped"] = self.skipped
+        if self.fetched_via_reader:
+            payload["fetched_via_reader"] = True
         if self.score is not None:
             payload.update(self.score.as_dict())
         return payload
@@ -147,6 +172,15 @@ class SearchPhaseResult:
     results_seen: int = 0
     fetches: int = 0
     cached_fetches: int = 0
+    #: Lost reads by category (discovery.FETCH_FAILURE_CATEGORIES). The
+    #: countable form of `errors`, so the report can say WHERE reads were
+    #: lost instead of only how many.
+    fetch_failures: dict[str, int] = field(default_factory=dict)
+    #: Reader-service fallback consultations and how many actually recovered
+    #: a page. Counted apart from everything else so the fallback's real
+    #: recovery rate is measurable rather than assumed.
+    reader_attempts: int = 0
+    reader_recoveries: int = 0
     #: Candidates the verification pass tried to read a page for. Rejections on
     #: the URL alone never reach it, so this is the denominator that says
     #: whether verification ran at all — `fetches` cannot, because a cache hit
@@ -190,6 +224,9 @@ class SearchPhaseResult:
             "cached_searches": self.cached_searches,
             "results_seen": self.results_seen,
             "fetches": self.fetches,
+            "fetch_failures": dict(self.fetch_failures),
+            "reader_attempts": self.reader_attempts,
+            "reader_recoveries": self.reader_recoveries,
             "reads_attempted": self.reads_attempted,
             "max_fetches": self.max_fetches,
             "verified": self.verified_count,
@@ -279,9 +316,17 @@ def search_for_sources(
     max_searches: int = DEFAULT_MAX_SEARCHES,
     max_fetches: int = DEFAULT_MAX_VERIFY_FETCHES,
     known_urls: set[str] | None = None,
+    reader: ReaderService | None = None,
     log: Callable[[str], None] = print,
 ) -> SearchPhaseResult:
-    """Run Phase 2 end to end. Never raises; degrades and reports."""
+    """Run Phase 2 end to end. Never raises; degrades and reports.
+
+    `reader` (default None — the fallback is off unless the operator switched
+    it on) lets the verification fetcher consult a text-extraction reader
+    service for pages that 403 a direct, identified fetch. The card's
+    exclusions are passed down as the blocked-URL predicate, and every
+    document recovered this way is marked, here and in its attribution basis.
+    """
     result = SearchPhaseResult(queries=generate_queries(card, max_searches))
     result.max_fetches = max_fetches
     known = {normalize_url(u) for u in (known_urls or set())}
@@ -368,7 +413,7 @@ def search_for_sources(
         ),
     )
 
-    fetcher = Fetcher(cache, max_fetches, log)
+    fetcher = Fetcher(cache, max_fetches, log, reader=reader, reader_blocked=card.is_excluded)
     try:
         for candidate in ranked:
             score = candidate.score
@@ -388,6 +433,7 @@ def search_for_sources(
                 _file(result, candidate)
                 continue
 
+            candidate.fetched_via_reader = candidate.url in fetcher.via_reader
             page = extract_facts(body, candidate.url)
             candidate.score = score_candidate(page, card, query=candidate.query)
             candidate.verified = True
@@ -397,6 +443,9 @@ def search_for_sources(
 
     result.fetches = fetcher.fetches
     result.cached_fetches = fetcher.cached
+    result.fetch_failures = dict(fetcher.failures)
+    result.reader_attempts = fetcher.reader_attempts
+    result.reader_recoveries = fetcher.reader_recoveries
     result.errors.extend(e for e in dict.fromkeys(fetcher.errors) if e not in result.errors)
 
     # ---- the stop-and-ask path -------------------------------------------

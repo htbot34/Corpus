@@ -2054,3 +2054,72 @@ more: a snippet packed with every signal the scorer knows still cannot
 corroborate (`test_a_rich_extract_snippet_still_cannot_corroborate`), and a
 find_similar hit — seeded from a page that IS the target's — is a lead like
 any other, not inherited trust (`test_a_similar_hit_is_a_lead_not_evidence`).
+
+---
+
+## 2026-08-08 — The fetch ceiling: count the losses, then stop losing the cheap ones
+
+The other half of the three-run failure (simonw 25 pages read of 54 found,
+dustinw 12 of 50, arao 16 of 64): roughly 56% of candidate pages could not be
+fetched at all on a reference run — publishers and aggregators 403
+aggressively, plus DNS failures, timeouts, 404s and 429s — and the breakdown
+behind that number had never been recorded anywhere. `Fetcher.errors` is
+prose, and prose cannot be counted.
+
+### Measured first
+
+Structured failure accounting is the deliverable: every lost read is filed
+under one of `http_403 / http_404 / http_429 / http_5xx / dns / timeout /
+tls / redirect_loop / too_large / other`, alongside the prose. The counts
+travel `Fetcher.failures` → `DiscoveryResult` / `SearchPhaseResult` →
+discovery.json and run_meta → the terminal report and the report's coverage
+block, per phase, biggest loss first. A wall of 403s, a wall of timeouts and
+a wall of 429s are three different problems with three different fixes, and
+now a reader can see which one a run had.
+
+### The cheap wins
+
+- 429 and 5xx are retried (there were previously ZERO retries, so one
+  transient 503 permanently lost a page): exponential backoff with jitter,
+  Retry-After honoured up to a 30s cap — past it the host said "much later"
+  and the page is recorded as lost rather than the run hanging.
+- Requests to one host are spaced 1s apart, so a burst of candidates on one
+  domain cannot manufacture the 429s the retries then spend their patience
+  on.
+- The User-Agent now names the tool, what it does, and a contact URL. Some
+  hosts block generic clients and allow identified ones, and it is the
+  honest thing to do either way.
+- A 403 earns exactly one retry with a plain-browser Accept header — some
+  hosts reject on Accept, not identity — with the same honest User-Agent.
+- Bodies over 5MB are `too_large`, not prose.
+
+What was deliberately NOT built: no headless browser, no JavaScript, no
+User-Agent or IP rotation. A host that refuses an identified, rate-limited,
+honest client has refused, and the run reports a thinner corpus. That
+refusal survives this commit on purpose.
+
+### The reader fallback — OFF by default
+
+`--reader-fallback` (or CORPUS_READER_FALLBACK=1) allows ONE fallback for
+verification pages whose direct fetch ended in 403: r.jina.ai returns the
+page as extracted markdown (keyless at low volume; READER_API_KEY raises the
+limit). `corpus/reader.py` is a seam mirroring the search-provider registry,
+so a second reader is a class and a registry line.
+
+**Enabling it sends every fallback URL to a third party.** That is why it is
+off, why enabling it is announced at run time, and why it is a decision the
+operator makes rather than a default. Recovered pages are extracted text —
+no meta tags, no link markup — so pagefacts' authorship signals are weaker
+on them, and that fact is carried, not hidden: `fetched_via_reader` on the
+candidate and in discovery.json, a disclosure appended to the document's
+`attribution_basis`, a line in the coverage block, and separate
+attempted/recovered counters so the fallback's real recovery rate is
+measured rather than assumed. Never consulted for people-search hosts
+(refused twice: pre-fetch rejection and the reader's own check) or for URLs
+the card excludes. Reader output is cached under its own key, so a
+reader-off run can never mistake extracted text for a fetched page.
+
+### Housekeeping
+
+- Test suite 1016 → 1061.
+- `make check` green; `scripts/verify_fix.py` passes all five regressions.
