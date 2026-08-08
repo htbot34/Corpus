@@ -408,27 +408,37 @@ def engagement_baselines(docs: list[Document]) -> dict[str, Any]:
 
 
 def register_split(docs: list[Document]) -> dict[str, Any]:
-    """Mean word count and mean sentence length, by kind.
+    """Mean word count and mean sentence length, by kind and by source.
 
-    People perform in top-level posts and argue in replies; the numbers show it.
+    People perform in top-level posts and argue in replies; the numbers show
+    it. The same split by source shows the cross-platform version of the same
+    tell: how a person writes in an HN argument is not how they write on
+    Bluesky, and the difference is itself a finding.
     """
-    out: dict[str, Any] = {}
-    by_kind: dict[str, list[Document]] = defaultdict(list)
-    for doc in docs:
-        by_kind[doc.kind].append(doc)
 
-    for kind, group in by_kind.items():
+    def _metrics(group: list[Document]) -> dict[str, Any]:
         word_counts = [d.word_count for d in group]
         sentence_lengths: list[float] = []
         for doc in group:
             sentences = [s for s in _SENTENCE_SPLIT.split(doc.body) if s.strip()]
             if sentences:
                 sentence_lengths.append(statistics.fmean(len(s.split()) for s in sentences))
-        out[kind] = {
+        return {
             "n": len(group),
             "mean_word_count": _mean(word_counts),
             "mean_sentence_length": _mean(sentence_lengths),
         }
+
+    out: dict[str, Any] = {}
+    by_kind: dict[str, list[Document]] = defaultdict(list)
+    by_source: dict[str, list[Document]] = defaultdict(list)
+    for doc in docs:
+        by_kind[doc.kind].append(doc)
+        by_source[doc.source].append(doc)
+
+    for kind, group in by_kind.items():
+        out[kind] = _metrics(group)
+    out["by_source"] = {source: _metrics(group) for source, group in sorted(by_source.items())}
     return out
 
 

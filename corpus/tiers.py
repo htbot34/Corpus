@@ -137,8 +137,9 @@ def classify_corpus(document_count: int) -> TierRules:
 THIN_REMEDY = (
     "Raise `--max-posts`, drop `--since`, or widen "
     "`--empty-window-tolerance` to reach further back; and merge in their "
-    "long-form writing with `--substack DOMAIN`, `--rss URL`, or `--url URL`, "
-    "which cost nothing and land in the same corpus."
+    "other public writing — `--bluesky`, `--hn`, `--reddit`, `--mastodon`, "
+    "`--substack`, `--rss`, `--url` — which costs nothing and lands in the "
+    "same corpus."
 )
 
 _PROMPT_BLOCKS: dict[CorpusTier, str] = {
@@ -228,6 +229,22 @@ _SOURCE_REACH: dict[str, str] = {
     "substack": "sustained long-form argument, and little about how they react in the moment",
     "rss": "sustained long-form argument, and little about how they react in the moment",
     "web": "whatever those specific pages cover, which may be narrower than it looks",
+    "bluesky": (
+        "fast reaction and how they argue in public with an audience watching. "
+        "Sustained long-form argument is under-represented by construction"
+    ),
+    "mastodon": (
+        "fast reaction and how they argue in public with an audience watching. "
+        "Sustained long-form argument is under-represented by construction"
+    ),
+    "hn": (
+        "technical and startup argumentation over years — how they reason under "
+        "disagreement in public. It says little about their life outside that room"
+    ),
+    "reddit": (
+        "how they argue inside topic communities, often over years. The "
+        "communities themselves select which parts of a person show up"
+    ),
 }
 
 

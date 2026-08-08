@@ -13,6 +13,29 @@ Three providers, same machinery:
 | Checked online | `scripts/verify_contract.py` (~$0.01) | — (see below) | `scripts/verify_search_contract.py` (~$0.13) |
 | Fixture provenance | **synthetic**, except `user_info.json` | **captured live**, then scrubbed | **captured live**, then scrubbed |
 
+## Bluesky, Hacker News, Reddit, Mastodon — SYNTHETIC fixtures, defensive readers
+
+The four conversation sources added later have **no live captures**: the
+offline rule means `tests/fixtures/bluesky_*.json`, `hn_*.json`,
+`reddit_*.json`, and `mastodon_*.json` are written to the documented API
+shapes and are SYNTHETIC, in the same sense as
+`web_search_response_with_citations.json`.
+
+| Adapter | Endpoints read | Keyless? |
+| --- | --- | --- |
+| `sources/bluesky.py` | `GET public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed` | yes |
+| `sources/hackernews.py` | `GET hn.algolia.com/api/v1/search_by_date`, `GET hn.algolia.com/api/v1/items/{id}` | yes |
+| `sources/reddit.py` | `GET reddit.com/user/{u}/comments.json`, `…/submitted.json` | yes |
+| `sources/mastodon.py` | `GET {host}/api/v1/accounts/lookup`, `…/accounts/{id}/statuses`, `…/statuses/{id}` | yes |
+
+What this means in practice: the field names these adapters read
+(`record.text`, `comment_text`, `link_title`, `in_reply_to_id`, …) are
+documentation-derived, and a provider rename would degrade to fewer documents
+with notes rather than to wrong attribution — every read is behind
+`isinstance` checks and author verification, the lesson the GitHub capture
+taught. The honest way to promote any of these from SYNTHETIC to CONFIRMED is
+a live capture scrubbed the way `_scrub_github.py` records.
+
 ## GitHub, in one screen
 
 Captured from the live API with an authenticated token on **2026-08-03**, then

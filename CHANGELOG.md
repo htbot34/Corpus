@@ -1940,3 +1940,59 @@ at cost.
   can never become `no_corpus`; the status renders neutral, never with
   the error panel; the `empty_corpus` flag round-trips through
   run_meta.json.
+## 2026-08-07 — Four conversation sources: Bluesky, HN, Reddit, Mastodon
+
+X being unreliable left a hole shaped like a timeline: fast public reaction
+and argument, with reply context. This change closes it with the four
+platforms whose public writing is reachable over keyless, unauthenticated
+APIs — no keys, no sessions, no scraping, and no change to the scope the
+tool has always enforced.
+
+### Added
+
+- `corpus/sources/bluesky.py` — full post/reply history from the public
+  AppView (`app.bsky.feed.getAuthorFeed`). Reply context arrives inline in
+  the feed, which is the hydration the X pipeline pays a metered API for,
+  free; a blocked or deleted parent becomes `[unavailable]` and the document
+  is kept. Reposts are skipped and counted — the `post` on a repost item is
+  someone else's writing.
+- `corpus/sources/hackernews.py` — stories and comments from the Algolia API,
+  reaching back years. A comment on another comment hydrates its parent from
+  the `items` endpoint (capped at 25, cached permanently — old HN items never
+  change); a comment on the story itself keeps the title as context.
+- `corpus/sources/reddit.py` — public comments and submissions from the
+  keyless JSON listings. Comment context is the submission title, inline;
+  parent comment text is deliberately not hydrated (rate limits), and the
+  gap is stated in the stats rather than hidden.
+- `corpus/sources/mastodon.py` — public and unlisted statuses from the
+  account's instance. `private`/`direct` statuses are skipped and counted per
+  document, never worked around; parents hydrate under the same 25-lookup
+  cap; boosts are excluded at the API.
+- `sources/base.py` grows the two shared pieces the four adapters use:
+  `JsonReader` (cached JSON GETs that degrade to notes, never exceptions)
+  and `collapse_self_threads` (consecutive self-replies stitch into one
+  thread `Document`, the X pipeline's insight applied to platforms whose
+  parentage arrives inline).
+- New anchor kinds `bluesky`, `hn`, `reddit`, `mastodon` end to end:
+  `identity.py` validation, `--bluesky/--hn/--reddit/--mastodon` on `run` and
+  `profile`, discovery seed candidates, `kind_for` recognition of profile
+  URLs so a Bluesky or HN profile linked from a bio becomes a `linked`
+  candidate instead of a corroboration note, the web form, and the source
+  reach table in `tiers.py`.
+- `register_split` gains a `by_source` view — mean words and sentence length
+  per platform, the cross-register tell — injected into the reduce prompt
+  with the rest of signals.json and rendered in the report's computed-signals
+  appendix when two or more sources are present.
+
+### Provenance, stated
+
+Every fixture for the four adapters is SYNTHETIC, written to documented API
+shapes; no live capture exists (the offline rule). `docs/wire-contract.md`
+says so and names the scrub path that would promote them. The adapters read
+defensively throughout — `isinstance` checks, author verification on every
+item — so provider drift degrades to fewer documents with notes, never to
+wrong attribution.
+
+### Housekeeping
+
+- Test suite 915 → 975.

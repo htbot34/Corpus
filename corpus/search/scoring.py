@@ -464,11 +464,28 @@ def _anchor_urls(card: IdentityCard) -> set[str]:
     github = card.anchors.get("github", "")
     if github:
         urls.add(f"github.com/{github.lower()}")
+    bluesky = card.anchors.get("bluesky", "")
+    if bluesky:
+        urls.add(f"bsky.app/profile/{bluesky.lower()}")
+    hn = card.anchors.get("hn", "")
+    if hn:
+        urls.add(f"news.ycombinator.com/user?id={hn.lower()}")
+    reddit = card.anchors.get("reddit", "")
+    if reddit:
+        urls.add(f"reddit.com/user/{reddit.lower()}")
+    mastodon = card.anchors.get("mastodon", "")
+    if mastodon.startswith("@") and "@" in mastodon[1:]:
+        user, _, host = mastodon[1:].partition("@")
+        urls.add(f"{host.lower()}/@{user}")
     return urls
 
 
 def _anchor_handles(card: IdentityCard) -> set[str]:
-    return {v.lower() for k, v in card.anchors.items() if k in ("x", "github") and v}
+    return {
+        v.lower()
+        for k, v in card.anchors.items()
+        if k in ("x", "github", "bluesky", "hn", "reddit") and v
+    }
 
 
 def links_to_anchor(facts: PageFacts, card: IdentityCard) -> list[str]:

@@ -101,6 +101,9 @@ def generate_queries(
         add(f'"@{handle}"', "their X handle, as other people write it", "x")
     if github:
         add(f"{github} github", "their GitHub username", "github")
+    bluesky = sanitize(card.anchors.get("bluesky", ""))
+    if bluesky:
+        add(f'"{bluesky}"', "their Bluesky handle, as other people cite it", "bluesky")
     if name and role:
         add(f"{name} {role}", "name and role together", "name", "role")
     if name:

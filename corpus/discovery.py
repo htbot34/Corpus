@@ -192,9 +192,18 @@ def _looks_like_feed(body: str) -> bool:
 def kind_for(url: str) -> str:
     """Which adapter should read this URL."""
     host = _host(url)
-    path = urlparse(url).path.lower()
+    parsed = urlparse(url)
+    path = parsed.path.lower()
     if host.endswith(".substack.com") or suffix_match(host, ("substack.com",)):
         return "substack"
+    if host == "bsky.app" and path.startswith("/profile/"):
+        return "bluesky"
+    if host == "news.ycombinator.com" and path == "/user" and "id=" in parsed.query:
+        return "hn"
+    if suffix_match(host, ("reddit.com",)) and (
+        path.startswith("/user/") or path.startswith("/u/")
+    ):
+        return "reddit"
     if path.endswith((".xml", ".rss", ".atom")) or path.rstrip("/").endswith(
         ("/feed", "/rss", "/atom")
     ):
@@ -210,7 +219,7 @@ class Candidate:
     """One place the subject's writing might live, and why we think so."""
 
     url: str
-    kind: str  # "rss" | "substack" | "web" | "github" | "x"
+    kind: str  # "rss" | "substack" | "web" | "github" | "x" | "bluesky" | "hn" | "reddit" | "mastodon"
     attribution: Attribution
     basis: str
     confidence: float = 0.0
@@ -229,7 +238,16 @@ class Candidate:
         lands in discovery.json either way, and the run says what it could not
         read instead of quietly reading less.
         """
-        return self.kind in ("rss", "substack", "web", "github")
+        return self.kind in (
+            "rss",
+            "substack",
+            "web",
+            "github",
+            "bluesky",
+            "hn",
+            "reddit",
+            "mastodon",
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -528,7 +546,10 @@ def score_link(
         return None, f"{clean}: not read — {REFUSED_HOSTS[refused]}"
 
     is_platform = bool(suffix_match(host, BLOG_PLATFORMS))
-    if not is_platform and suffix_match(host, PROFILE_HOSTS):
+    # A profile page on a host with no adapter is corroboration, not a source.
+    # A profile page an adapter *can* read (Bluesky, HN) falls through to the
+    # normal classification, where the declared/page split decides its tier.
+    if not is_platform and suffix_match(host, PROFILE_HOSTS) and kind_for(clean) == "web":
         # A profile page, not writing. It still corroborates the card when it
         # carries a handle we already trust.
         match = _path_carries(clean, card.name_keys())
@@ -598,6 +619,14 @@ def plan_from_anchors(card: IdentityCard) -> list[str]:
             plan.append(f"GET https://{value}/about")
         elif kind == "rss":
             plan.append(f"read {value} directly (anchor)")
+        elif kind == "bluesky":
+            plan.append(f"GET public.api.bsky.app author feed for {value}")
+        elif kind == "hn":
+            plan.append(f"search hn.algolia.com for author:{value}")
+        elif kind == "reddit":
+            plan.append(f"read reddit.com/user/{value} listings")
+        elif kind == "mastodon":
+            plan.append(f"look up {value} on its instance and read public statuses")
     return plan
 
 
@@ -609,7 +638,17 @@ _SEED_SHAPES: dict[str, tuple[str, str]] = {
     "site": ("{}", "web"),
     "substack": ("https://{}", "substack"),
     "rss": ("{}", "rss"),
+    "bluesky": ("https://bsky.app/profile/{}", "bluesky"),
+    "hn": ("https://news.ycombinator.com/user?id={}", "hn"),
+    "reddit": ("https://www.reddit.com/user/{}", "reddit"),
 }
+
+
+def _mastodon_profile_url(value: str) -> str:
+    """`@user@host` -> `https://host/@user`. The one anchor whose URL needs
+    both halves of its value, so it does not fit _SEED_SHAPES' one-slot form."""
+    user, _, host = value.lstrip("@").partition("@")
+    return f"https://{host}/@{user}"
 
 
 def _seed_candidates(card: IdentityCard) -> list[Candidate]:
@@ -618,10 +657,15 @@ def _seed_candidates(card: IdentityCard) -> list[Candidate]:
     for kind, value in card.anchors.items():
         if kind == "x":
             continue  # ingested by the X pipeline, not as a discovered source
-        template, adapter = _SEED_SHAPES[kind]
+        if kind == "mastodon":
+            url = _mastodon_profile_url(value)
+            adapter = "mastodon"
+        else:
+            template, adapter = _SEED_SHAPES[kind]
+            url = template.format(value)
         seeds.append(
             Candidate(
-                url=normalize_url(template.format(value)),
+                url=normalize_url(url),
                 kind=adapter,
                 attribution="anchor",
                 basis=f"{kind} anchor, supplied by the user",

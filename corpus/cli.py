@@ -193,6 +193,14 @@ def run(
     location: str = typer.Option("", "--location", help="Disambiguates a common name."),
     github: str = typer.Option("", "--github", help="GitHub username. An anchor."),
     site: str = typer.Option("", "--site", help="Their own site. An anchor, and crawled."),
+    bluesky: str = typer.Option(
+        "", "--bluesky", help="Bluesky handle, e.g. janesmith.bsky.social. An anchor."
+    ),
+    hn: str = typer.Option("", "--hn", help="Hacker News username. An anchor."),
+    reddit: str = typer.Option("", "--reddit", help="Reddit username. An anchor."),
+    mastodon: str = typer.Option(
+        "", "--mastodon", help="Mastodon address, e.g. @user@instance. An anchor."
+    ),
     profiles: Path | None = typer.Option(None, "--profiles", metavar="PATH"),
     discover: bool = typer.Option(
         True,
@@ -333,6 +341,10 @@ def run(
             github=github,
             site=site,
             substack=substack or "",
+            bluesky=bluesky,
+            hn=hn,
+            reddit=reddit,
+            mastodon=mastodon,
         )
     except IdentityError as exc:
         error(str(exc))
@@ -480,8 +492,8 @@ def run(
     if not handle and not (rss or url) and not discovery.candidates:
         error(
             "no sources. There is no X anchor, discovery found nothing, and no "
-            "--rss/--url was given. Add an anchor (--github, --site, --substack) "
-            "or name a saved target with --target."
+            "--rss/--url was given. Add an anchor (--github, --site, --substack, "
+            "--bluesky, --hn, --reddit, --mastodon) or name a saved target with --target."
         )
         raise typer.Exit(code=2)
 
@@ -550,6 +562,9 @@ def run(
             echo("  Other sources merge into the same corpus and cost nothing —")
             echo("  they are plain HTTP, not a metered API:")
             echo("    --github USER --site URL     # anchors, and then crawled for more")
+            echo("    --bluesky HANDLE             # posts, replies, stitched threads")
+            echo("    --hn USER --reddit USER      # years of public arguments")
+            echo("    --mastodon @user@instance")
             echo("    --substack DOMAIN")
             echo("    --rss URL                    # repeatable")
             echo("    --url URL                    # repeatable")
@@ -1136,6 +1151,10 @@ def _resolve_card(
     github: str = "",
     site: str = "",
     substack: str = "",
+    bluesky: str = "",
+    hn: str = "",
+    reddit: str = "",
+    mastodon: str = "",
 ) -> IdentityCard:
     """Who this run is about: a saved target, flags, or both.
 
@@ -1151,6 +1170,10 @@ def _resolve_card(
         "github": github,
         "site": site,
         "substack": substack,
+        "bluesky": bluesky,
+        "hn": hn,
+        "reddit": reddit,
+        "mastodon": mastodon,
     }
     if target:
         return merge_flags(load_target(target, profiles), **flags)
@@ -1163,6 +1186,10 @@ def _resolve_card(
         github=github,
         site=site,
         substack=substack,
+        bluesky=bluesky,
+        hn=hn,
+        reddit=reddit,
+        mastodon=mastodon,
     )
 
 
@@ -1202,9 +1229,9 @@ def _report_discovery(result: DiscoveryResult, card: IdentityCard, *, following:
         warn(f"discovery: {problem}")
 
 
-# Which adapter reads which kind of find. `github` is deliberately absent:
-# discovery can name a GitHub profile before `sources/github.py` exists, and
-# saying "found it, cannot read it yet" beats dropping the find.
+# Which adapter reads which kind of find. A kind with no adapter is still
+# reported as "found it, cannot read it yet" rather than dropped — see
+# Candidate.ingestible.
 def _fetch_one(
     kind: str, url: str, author: str, cache: Cache, log: Any, notes: list[str]
 ) -> list[Document]:
@@ -1217,7 +1244,11 @@ def _fetch_one(
     which is the rule every source in this tool follows.
     """
     from .sources.base import SourceError
+    from .sources.bluesky import BlueskySource
     from .sources.github import GitHubSource
+    from .sources.hackernews import HackerNewsSource
+    from .sources.mastodon import MastodonSource
+    from .sources.reddit import RedditSource
     from .sources.rss import RSSSource
     from .sources.substack import SubstackSource
     from .sources.web import WebSource
@@ -1239,6 +1270,14 @@ def _fetch_one(
             )
             notes.extend(f"GitHub: {note}" for note in stats.notes)
             return docs
+        if kind == "bluesky":
+            return BlueskySource().fetch(url, author_handle=author, cache=cache, log=log)
+        if kind == "hn":
+            return HackerNewsSource().fetch(url, author_handle=author, cache=cache, log=log)
+        if kind == "reddit":
+            return RedditSource().fetch(url, author_handle=author, cache=cache, log=log)
+        if kind == "mastodon":
+            return MastodonSource().fetch(url, author_handle=author, cache=cache, log=log)
         return WebSource().fetch(url, author_handle=author, cache=cache, log=log)
     except SourceError:
         raise
@@ -1709,6 +1748,10 @@ def profile(
     site: str = typer.Option("", "--site", help="Their own site. An anchor."),
     substack: str = typer.Option("", "--substack", help="Substack domain. An anchor."),
     rss: str = typer.Option("", "--rss", help="Feed URL. An anchor."),
+    bluesky: str = typer.Option("", "--bluesky", help="Bluesky handle. An anchor."),
+    hn: str = typer.Option("", "--hn", help="Hacker News username. An anchor."),
+    reddit: str = typer.Option("", "--reddit", help="Reddit username. An anchor."),
+    mastodon: str = typer.Option("", "--mastodon", help="@user@instance. An anchor."),
     exclude: list[str] = typer.Option(
         [], "--exclude", help="A known false positive. Repeatable, and never ingested."
     ),
@@ -1731,6 +1774,10 @@ def profile(
         "site": site,
         "substack": substack,
         "rss": rss,
+        "bluesky": bluesky,
+        "hn": hn,
+        "reddit": reddit,
+        "mastodon": mastodon,
     }
     writing = any(flags.values()) or bool(exclude)
 
@@ -1764,6 +1811,10 @@ def profile(
                 site=site,
                 substack=substack,
                 rss=rss,
+                bluesky=bluesky,
+                hn=hn,
+                reddit=reddit,
+                mastodon=mastodon,
                 exclude=list(exclude),
             )
     except IdentityError as exc:
@@ -1777,7 +1828,7 @@ def profile(
         warn(
             "this card has no anchors, so discovery has nothing to follow and "
             "nothing to score a name match against. Add --x, --github, --site, "
-            "--substack, or --rss."
+            "--substack, --bluesky, --hn, --reddit, --mastodon, or --rss."
         )
 
 

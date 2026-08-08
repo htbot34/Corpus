@@ -1,0 +1,40 @@
+{
+  "kind": "Listing",
+  "data": {
+    "after": null,
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "s1",
+          "name": "t3_s1",
+          "author": "testsubject",
+          "title": "A gate that keeps its threshold in fixed point",
+          "selftext": "I wrote up the design, with the measurements. The short version: floating point in the interrupt path costs more than the precision is worth.",
+          "url": "https://www.reddit.com/r/dsp/comments/s1/a_gate_that_keeps/",
+          "permalink": "/r/dsp/comments/s1/a_gate_that_keeps/",
+          "created_utc": 1705000000.0,
+          "subreddit": "dsp",
+          "score": 88,
+          "is_self": true
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "s2",
+          "name": "t3_s2",
+          "author": "testsubject",
+          "title": "My writeup of the gate threshold design",
+          "selftext": "",
+          "url": "https://example.com/gate-design",
+          "permalink": "/r/dsp/comments/s2/my_writeup/",
+          "created_utc": 1704000000.0,
+          "subreddit": "dsp",
+          "score": 12,
+          "is_self": false
+        }
+      }
+    ]
+  }
+}

@@ -491,6 +491,70 @@ def test_a_github_anchor_produces_documents_and_states_its_limits(wired) -> None
     assert "carried no commit messages" in report
 
 
+def bluesky_feed(count: int = 6) -> str:
+    posts = [
+        {
+            "post": {
+                "uri": f"at://did:plc:subj/app.bsky.feed.post/p{i}",
+                "cid": f"cid-p{i}",
+                "author": {"did": "did:plc:subj", "handle": "testsubject.bsky.social"},
+                "record": {
+                    "$type": "app.bsky.feed.post",
+                    "text": f"Rubrics beat interviews, argued in public. Post {i}.",
+                    "createdAt": f"2024-03-{i + 1:02d}T10:00:00.000Z",
+                },
+                "replyCount": 0,
+                "repostCount": 0,
+                "likeCount": i,
+                "indexedAt": f"2024-03-{i + 1:02d}T10:00:01.000Z",
+            }
+        }
+        for i in range(count)
+    ]
+    return json.dumps({"feed": posts})
+
+
+def test_a_run_with_a_bluesky_anchor_works_end_to_end(wired, monkeypatch) -> None:
+    """The X-replacement path through the actual CLI: a keyless public API,
+    anchor-attributed, synthesized like everything else."""
+    from corpus.sources import base as base_module
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the bluesky adapter reached for the network")
+
+    monkeypatch.setattr(base_module, "http_client", forbidden)
+    cache = Cache(path=wired["cache"])
+    cache.put(
+        "bluesky",
+        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+        "?actor=testsubject.bsky.social&limit=100&filter=posts_with_replies",
+        json.loads(bluesky_feed(6)),
+    )
+    cache.close()
+
+    result = invoke(
+        [
+            "run",
+            "--name",
+            "Test Subject",
+            "--bluesky",
+            "testsubject.bsky.social",
+            "--out",
+            str(wired["out"]),
+            "--yes",
+            "--skip-synthesis",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    directory = outputs(wired["out"], "testsubject")
+    corpus = json.loads((directory / "corpus.json").read_text())
+    assert len(corpus) == 6
+    assert {d["source"] for d in corpus} == {"bluesky"}
+    assert {d["attribution"] for d in corpus} == {"anchor"}
+    assert (directory / "report.md").exists()
+
+
 def test_the_x_only_path_is_unchanged(wired) -> None:
     """The regression that matters for everyone already using this: an X handle
     with no card still runs, and its documents are still anchor-attributed."""

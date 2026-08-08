@@ -136,6 +136,27 @@ def test_register_split_separates_originals_from_replies():
     assert reg["reply"]["mean_word_count"] == 1
 
 
+def test_register_split_also_breaks_out_sources():
+    """The cross-platform tell: same person, two registers, visible in arithmetic."""
+    docs = [
+        doc("1", BASE, "one two three four five six seven eight nine ten."),
+        Document(
+            source="hn",
+            source_id="hn-1",
+            url="https://news.ycombinator.com/item?id=1",
+            author_handle="a",
+            published_at=BASE,
+            kind="reply",
+            body=" ".join(["word"] * 90) + ".",
+        ),
+    ]
+    reg = register_split(docs)
+    assert reg["by_source"]["x"]["mean_word_count"] == 10
+    assert reg["by_source"]["hn"]["mean_word_count"] == 90
+    # The by-kind view is unchanged by the addition.
+    assert reg["original"]["mean_word_count"] == 10
+
+
 def test_vocabulary_drift_surfaces_time_localized_terms():
     early = [
         doc(f"e{i}", BASE, "hiring rubric interview candidate hiring rubric process")
