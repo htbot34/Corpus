@@ -478,6 +478,15 @@ def results_from_exa_payload(payload: Any, limit: int) -> tuple[list[SearchResul
             continue
         seen.add(url)
         text = str(_get(hit, "text") or "")
+        raw = dict(hit) if isinstance(hit, dict) else {"value": repr(hit)}
+        if len(text) > EXA_SNIPPET_MAX_CHARS:
+            # The one field clipped inside `raw`, marked so nobody mistakes
+            # the clip for the wire. Same reasoning as the Anthropic
+            # provider dropping `encrypted_content`: results are cached
+            # permanently, and a 50KB extract per hit would grow the cache
+            # without limit for a field whose useful prefix already lives in
+            # `snippet`. The verbatim body survives in --capture-search.
+            raw = {**raw, "text": text[:EXA_SNIPPET_MAX_CHARS], "_text_clipped": True}
         results.append(
             SearchResult(
                 url=url,
@@ -487,10 +496,18 @@ def results_from_exa_payload(payload: Any, limit: int) -> tuple[list[SearchResul
                 # reads that, and a malformed date is left as None rather than
                 # guessed at — a wrong published_at silently reorders a corpus.
                 published_at=parse_page_age(_get(hit, "publishedDate")),
-                raw=dict(hit) if isinstance(hit, dict) else {"value": repr(hit)},
+                raw=raw,
             )
         )
     return results[:limit], errors
+
+
+#: Stated per-call costs above this multiple of the documented worst case are
+#: treated as a wire mistake, not a price. The obvious way an UNVERIFIED cost
+#: field goes wrong is a unit surprise — cents where dollars belong — and one
+#: such value must not be able to bill 1,000x the price list, exhaust the
+#: budget, and write fictitious spend into the persistent ledger.
+EXA_COST_SANITY_MULTIPLE = 10.0
 
 
 def exa_cost_dollars(payload: Any) -> float | None:
@@ -498,9 +515,10 @@ def exa_cost_dollars(payload: Any) -> float | None:
 
     `costDollars.total` is documented but UNVERIFIED like the rest of the
     shape, so it is read defensively: anything absent, non-numeric, negative,
-    or non-finite means None, and the caller bills the documented rate
-    instead. A wire value can correct our price list; it must not be able to
-    poison the ledger.
+    non-finite, or implausibly far above the documented worst case
+    (EXA_COST_SANITY_MULTIPLE x EXA_COST_PER_QUERY) means None, and the
+    caller bills the documented rate instead. A wire value can correct our
+    price list; it must not be able to replace it by orders of magnitude.
     """
     total = _get(_get(payload, "costDollars") or {}, "total")
     if isinstance(total, bool) or not isinstance(total, (int, float, str)):
@@ -510,6 +528,8 @@ def exa_cost_dollars(payload: Any) -> float | None:
     except ValueError:
         return None
     if not math.isfinite(value) or value < 0:
+        return None
+    if value > EXA_COST_PER_QUERY * EXA_COST_SANITY_MULTIPLE:
         return None
     return value
 

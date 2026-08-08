@@ -160,6 +160,19 @@ def test_the_snippet_is_clipped_at_the_documented_ceiling() -> None:
     # ...and the untruncated extract is not smuggled in through raw parsing
     # errors: the clip is a clip, not a failure.
     assert provider.last_usage.errors == []
+    # The cap also holds inside `raw`, which lands in the permanent cache —
+    # marked, so nobody mistakes the clip for what the wire sent. Everything
+    # else in the hit survives verbatim.
+    assert len(first.raw["text"]) <= EXA_SNIPPET_MAX_CHARS
+    assert first.raw["_text_clipped"] is True
+    assert first.raw["score"] == 0.31
+
+
+def test_an_unclipped_hit_carries_no_clip_marker() -> None:
+    provider, _ = provider_for(search_payload())
+    first = provider.search("q", 8)[0]
+    assert "_text_clipped" not in first.raw
+    assert first.raw["text"] == first.snippet
 
 
 def test_the_limit_caps_what_comes_back() -> None:
@@ -304,6 +317,48 @@ def test_a_garbage_costdollars_falls_back_to_the_documented_rate() -> None:
     assert exa_cost_dollars({"costDollars": {"total": True}}) is None
     assert exa_cost_dollars({}) is None
     assert exa_cost_dollars({"costDollars": {"total": 0.011}}) == pytest.approx(0.011)
+
+
+def test_an_absurd_costdollars_cannot_replace_the_price_list() -> None:
+    """The obvious unit surprise from an UNVERIFIED wire shape: cents where
+    dollars belong. One such value must not bill 1,000x the documented rate,
+    exhaust the budget, and write fictitious spend into the ledger."""
+    from corpus.search.providers import EXA_COST_SANITY_MULTIPLE
+
+    ceiling = EXA_COST_PER_QUERY * EXA_COST_SANITY_MULTIPLE
+    assert exa_cost_dollars({"costDollars": {"total": 13}}) is None
+    assert exa_cost_dollars({"costDollars": {"total": ceiling * 1.01}}) is None
+    assert exa_cost_dollars({"costDollars": {"total": ceiling}}) == pytest.approx(ceiling)
+
+
+def test_an_errored_empty_search_is_never_cached_as_a_finding(cache: Cache) -> None:
+    """A 200 whose body the parser cannot read must not become "this person
+    has no web presence" on every future run: the first live run is the test
+    of these UNVERIFIED shapes, and a shape surprise there would otherwise
+    permanently poison the cache for every query it executed."""
+    provider, stub = provider_for({"requestId": "synthetic", "unexpected": True}, search_payload())
+    budget = Budget(limit=10.0)
+    client = SearchClient(provider, cache, budget, log=lambda _m: None)
+
+    assert client.search("q", 8) == []
+    # Billed — the search happened and Exa will invoice it — but not cached.
+    assert budget.total_for("search") > 0
+
+    # The provider answers properly on the next run; the query is retried
+    # rather than served an empty lie from the cache.
+    results = client.search("q", 8)
+    assert len(results) == 4
+    assert len(stub.calls) == 2
+
+
+def test_an_empty_search_with_no_errors_is_a_finding_and_is_cached(cache: Cache) -> None:
+    provider, stub = provider_for({"requestId": "synthetic", "results": []})
+    client = SearchClient(provider, cache, Budget(limit=10.0), log=lambda _m: None)
+
+    assert client.search("q", 8) == []
+    assert client.search("q", 8) == []
+    assert len(stub.calls) == 1  # the second answer came from the cache
+    assert client.cached_searches == 1
 
 
 def test_the_reservation_refuses_before_the_call_is_made(cache: Cache) -> None:

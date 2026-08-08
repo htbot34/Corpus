@@ -263,6 +263,23 @@ def test_a_host_visited_long_ago_is_not_throttled(monkeypatch, cache) -> None:
     assert sleeps == []
 
 
+def test_a_url_that_already_failed_is_not_retried_or_recounted(monkeypatch, cache) -> None:
+    """One dead URL is reached from several directions in a real run — the
+    homepage as a link surface, then again as a probe root. The loss is
+    counted once (the deduped `errors` and the countable `failures` must
+    agree), the retry ladder's sleeps run once, and asking again costs zero
+    requests and zero fetch-cap slots. Per-run only: nothing is persisted, so
+    a transient failure cannot outlive the run that saw it."""
+    fetcher, client, _, _ = make_fetcher(monkeypatch, cache, [FakeResponse(403), FakeResponse(403)])
+    assert fetcher.get("https://a.example/page") is None
+    assert fetcher.get("https://a.example/page") is None
+
+    assert fetcher.failures == {"http_403": 1}
+    assert len(client.requests) == 2  # the original and the Accept probe, once
+    assert fetcher.fetches == 1
+    assert len(fetcher.errors) == 1
+
+
 # -- identity ------------------------------------------------------------------
 
 

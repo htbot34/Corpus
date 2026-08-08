@@ -512,6 +512,14 @@ class Fetcher:
         self.via_reader: set[str] = set()
         self._client: Any = None
         self._last_request: dict[str, float] = {}
+        #: URLs this run already lost, by category. One dead URL is reached
+        #: from several directions (the homepage as a link surface, then again
+        #: as a probe root), and asking again would repeat the retry ladder's
+        #: sleeps and double-count the loss the accounting exists to count
+        #: once — `errors` is deduped for exactly this reason, and the counts
+        #: must agree with it. Per-run only, never persisted: a transient
+        #: failure must not outlive the run that saw it.
+        self._failed: dict[str, str] = {}
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> str | None:
         cached = self.cache.get("discovery", f"get:{url}")
@@ -527,6 +535,10 @@ class Fetcher:
                 self.cached += 1
                 self.via_reader.add(url)
                 return str(reader_cached)
+        if url in self._failed:
+            # Already lost this run, already counted, already described in
+            # `errors`. The answer has not changed in the last few seconds.
+            return None
         if self.cache.offline:
             self.errors.append(f"--offline: {url} is not cached")
             return None
@@ -544,6 +556,7 @@ class Fetcher:
                 self.cache.put("discovery", f"get:reader:{url}", body)
                 return body
         if body is None:
+            self._failed[url] = category
             return None
         self.cache.put("discovery", f"get:{url}", body)
         return body

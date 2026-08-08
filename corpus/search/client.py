@@ -152,14 +152,25 @@ class SearchClient:
 
         self.searches_run += 1
         self.errors.extend(f"{label!r}: provider error {code}" for code in usage.errors)
-        # Permanent: a query's results are worth re-reading for free forever,
-        # and the alternative is paying $0.01 to learn the same thing again.
-        self.cache.put(
-            "search",
-            cache_key,
-            [r.model_dump(mode="json") for r in results],
-            permanent=True,
-        )
+        if results or not usage.errors:
+            # Permanent: a query's results are worth re-reading for free
+            # forever, and the alternative is paying $0.01 to learn the same
+            # thing again. An empty list with no errors is cached too — a
+            # search that matched nothing is a finding.
+            self.cache.put(
+                "search",
+                cache_key,
+                [r.model_dump(mode="json") for r in results],
+                permanent=True,
+            )
+        else:
+            # Empty AND errored is not a finding — it is a provider answering
+            # 200 with a shape the parser could not read, or an in-band error
+            # where the results belong. Caching that permanently would turn
+            # one bad response into "this person has no web presence" on
+            # every future run, silently. The query is billed (it happened)
+            # and will run again next time.
+            self.log(f"  [search] {label!r}: errored with no results — not cached")
         return results
 
     def _charge(self, query: str, usage: SearchUsage) -> float:
