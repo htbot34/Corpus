@@ -15,6 +15,12 @@ endpoint and query shape — `last_tweets`, `advanced_search` with and without t
 bounds, `filter:replies`. The provider has no coverage for low-follower accounts.
 The same person's blog, GitHub, and talks were all readable.
 
+The conversation sources are the ones that close the gap X left: Bluesky reads
+a full post-and-reply history over a keyless public API, Hacker News reaches
+years of public argument, and Reddit and Mastodon do the same on their own
+ground. All four merge into the same corpus, with the same attribution tiers
+and the same reply-context rule the X pipeline is built around.
+
 So you identify a person, the tool finds what they have published, and the same
 synthesis pipeline runs over the combined corpus. `--x` is optional and a run with
 no X anchor works end to end.
@@ -62,6 +68,7 @@ corpus profile                             # list them all
 corpus run --target janesmith
 corpus run --x paulg                                  # X only, as before
 corpus run --github jsmith --site https://janesmith.com   # no X at all
+corpus run --bluesky janesmith.bsky.social --hn jsmith    # public conversation, no X
 corpus run --target janesmith --dry-run               # the plan and the queries, free
 corpus run --target janesmith --no-search             # anchors and link-following only
 corpus run --target janesmith --max-searches 20       # look harder, ~$0.01 a query
@@ -106,6 +113,7 @@ exposure. Keys never reach the browser.
 | --- | --- | --- |
 | `--target KEY` | unset | A saved identity card from `profiles.yaml`. Flags override it and never write back. |
 | `--x` / `--github` / `--site` / `--substack` | unset | Anchors: things confirmed to be theirs. At least one identifier is required. |
+| `--bluesky` / `--hn` / `--reddit` / `--mastodon` | unset | More anchors: public conversation on Bluesky, Hacker News, Reddit, and Mastodon (`@user@instance`). Keyless public APIs, plain HTTP, free. |
 | `--name` / `--employer` / `--role` / `--location` | unset | Scored against what discovery finds. `--location` disambiguates a common name. |
 | `--discover` / `--no-discover` | on | Follow links out from the anchors. Free, never fatal. Anchors are read either way. |
 | `--max-fetches` | 25 | Ceiling on discovery's plain-HTTP requests. Not a money guard — there is no money here — but a guard against a hostile link graph. |
@@ -168,6 +176,10 @@ targets:
       github: jsmith
       site: https://janesmith.com
       substack: janesmith.substack.com
+      bluesky: janesmith.bsky.social
+      hn: jsmith
+      reddit: janesmith
+      mastodon: "@janesmith@mastodon.social"
     exclude:                   # known false positives
       - https://linkedin.com/in/jane-smith-attorney
 ```
@@ -855,6 +867,27 @@ mentions fails too.
 
 One file each in `corpus/sources/`, merging into the same corpus.
 
+- `--bluesky HANDLE` — an anchor. Full post and reply history from the public
+  AppView API (`public.api.bsky.app`), keyless. Reply context arrives inline
+  in the feed — the hydration the X pipeline pays for, free — and a deleted
+  or blocked parent becomes `[unavailable]`, never a dropped document.
+  Reposts are skipped and counted; consecutive self-replies are stitched into
+  threads, same as X.
+- `--hn USER` — an anchor. Stories and comments from the Algolia HN API,
+  keyless, reaching back years. A comment on another comment gets its parent
+  hydrated from the `items` endpoint — capped at 25 lookups, cached
+  permanently because old HN items never change — and a comment on the story
+  itself keeps the story title as its context.
+- `--reddit USER` — an anchor. Public comments and submissions from the
+  keyless JSON listings. A comment's context is its submission title, inline
+  at no extra cost; parent comment text is not hydrated (each would be a live
+  request against a site that rate-limits anonymous readers), and the gap is
+  stated rather than hidden.
+- `--mastodon @user@instance` — an anchor. Public and unlisted statuses from
+  the instance's keyless API; anything more private is skipped and counted,
+  per document, never worked around. Replies hydrate their parents under the
+  same 25-lookup cap, boosts are excluded at the API, and self-reply threads
+  are stitched.
 - `--substack DOMAIN` — an anchor. Paginates `/api/v1/archive`, fetches bodies via
   `/api/v1/posts/{slug}`, falls back to `/feed`. Paywalled posts keep title and
   subtitle only. Its about page is crawled like any other anchor.
@@ -862,10 +895,21 @@ One file each in `corpus/sources/`, merging into the same corpus.
   read directly, not crawled.
 - `--url URL` — a single page, readability-style extraction. Repeatable, not crawled.
 
-All are free (plain HTTP, no metered API) and non-fatal: any failure — including a
-transport error, which is not a `SourceError` — is converted, logged, and skipped.
-Adding a platform should mean one new file in `sources/`. If it requires editing
-`synthesize.py`, the abstraction is wrong.
+All are free (plain HTTP, no metered API) and non-fatal: any failure —
+including a transport error, which is not a `SourceError` — is converted,
+logged, and skipped. Adding a platform should mean one new file in
+`sources/`. If it requires editing `synthesize.py`, the abstraction is wrong.
+
+### What the shared plumbing guarantees
+
+Every adapter is built on the same pieces in `sources/base.py`, so the rules
+hold everywhere rather than being re-argued per platform: cached JSON GETs
+that degrade to notes instead of exceptions (`JsonReader`), one HTML-to-text
+extractor, dates that are real or `date_unknown` and never the clock, and
+`collapse_self_threads` for stitching self-reply chains into one document.
+Attribution is stamped by the caller, not the adapter — the same Bluesky
+fetch is `anchor` when you typed the handle and `linked` when discovery found
+it in a GitHub bio.
 
 ---
 
@@ -887,7 +931,7 @@ make check       # lint, format, types, secrets, tests — the gate
 make coverage    # per-module floors on the money and history paths
 ```
 
-808 tests, all offline. The suite covers both provider regressions (via
+975 tests, all offline. The suite covers both provider regressions (via
 `tests/fake_provider.py`, which can inject repeating cursors, lying empty windows, and
 malformed timestamps), thread stitching, context hydration, every signal function, and
 the full map-reduce path against a stubbed model client (`tests/fake_anthropic.py`) so

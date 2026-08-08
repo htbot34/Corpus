@@ -909,6 +909,18 @@ def render_report(
             "- Most-replied handles: "
             + ", ".join(f"@{g['handle']} ({g['exchange_count']})" for g in graph)
         )
+    register = signals.get("register_split", {})
+    reg_sources = register.get("by_source") or {}
+    if len(reg_sources) > 1:
+        # The cross-platform tell: 12-word Bluesky posts and 90-word HN
+        # arguments are the same person in two registers, and the difference
+        # is itself a finding. Only rendered with 2+ sources — one number is
+        # not a comparison.
+        parts = [
+            f"{source}: ~{reg_sources[source].get('mean_word_count', 0):.0f} words/document"
+            for source in sorted(reg_sources)
+        ]
+        out.append("- Register, per source — " + "; ".join(parts))
     domains = signals.get("outbound_domains", [])[:6]
     if domains:
         out.append(

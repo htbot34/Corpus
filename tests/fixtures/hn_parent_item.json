@@ -1,0 +1,10 @@
+{
+  "id": 4002,
+  "created_at": "2024-03-10T12:00:00.000Z",
+  "type": "comment",
+  "author": "someoneelse",
+  "text": "<p>Floating point is simpler, just use that. Nobody measures this stuff anyway.</p>",
+  "parent": 4000,
+  "story_id": 4000,
+  "children": []
+}

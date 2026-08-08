@@ -38,7 +38,7 @@ from .x.validate import InvalidHandle, validate_handle
 # The anchor kinds the tool knows how to follow. An unknown key is an error
 # naming these, for the same reason an unknown axis name is: a typo that
 # silently drops an anchor produces a report that looks complete and is not.
-KNOWN_ANCHORS = ("x", "github", "site", "substack", "rss")
+KNOWN_ANCHORS = ("x", "github", "site", "substack", "rss", "bluesky", "hn", "reddit", "mastodon")
 
 # Platforms we will not read, with the reason. Naming them here means the
 # refusal happens when the anchor is written down rather than three phases
@@ -59,6 +59,22 @@ REFUSED_ANCHORS = {
 # hyphen, 39 characters maximum. A whitelist, like the X handle rule, so a
 # value that reaches a URL cannot carry path or query syntax.
 _GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+
+# A Bluesky handle is a domain: `name.bsky.social` or a custom one. Requiring
+# the dot keeps a bare word from becoming a URL host downstream.
+_BLUESKY_HANDLE = re.compile(r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$")
+
+# Reddit's own rule: 3-20 of letters, digits, underscore, hyphen.
+_REDDIT_NAME = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
+
+# HN is permissive about usernames; the constraints that matter here are the
+# ones that keep the value safe to interpolate into a query string.
+_HN_NAME = re.compile(r"^[^\s/&?#]{2,30}$")
+
+# `@user@instance`, the way Mastodon addresses are written everywhere.
+_MASTODON_ACCT = re.compile(
+    r"^@?(?P<user>[A-Za-z0-9_]{1,30})@(?P<host>[A-Za-z0-9.-]+\.[A-Za-z]{2,})$"
+)
 
 PROFILES_ENV = "CORPUS_PROFILES"
 PROFILES_FILENAME = "profiles.yaml"
@@ -122,6 +138,58 @@ def normalize_anchor(kind: str, value: str) -> str:
                 f"substack anchor {value!r} should be a domain, e.g. `janesmith.substack.com`"
             )
         return domain.lower()
+
+    if kind == "bluesky":
+        handle = raw
+        for prefix in ("https://bsky.app/profile/", "http://bsky.app/profile/"):
+            if handle.startswith(prefix):
+                handle = handle[len(prefix) :]
+        handle = handle.strip("/").lstrip("@").lower()
+        if not _BLUESKY_HANDLE.match(handle):
+            raise IdentityError(
+                f"bluesky anchor {value!r} is not a Bluesky handle. Expected a "
+                "domain-style handle, e.g. `janesmith.bsky.social`."
+            )
+        return handle
+
+    if kind == "hn":
+        user = raw.rstrip("/")
+        if "user?id=" in user:
+            user = user.split("user?id=", 1)[-1].split("&", 1)[0]
+        if not _HN_NAME.match(user):
+            raise IdentityError(
+                f"hn anchor {value!r} is not a Hacker News username. Expected the "
+                "bare name, e.g. `jsmith`."
+            )
+        return user
+
+    if kind == "reddit":
+        user = raw.rstrip("/")
+        for marker in ("/user/", "/u/"):
+            if marker in user:
+                user = user.split(marker, 1)[-1]
+        user = user.removeprefix("u/").split("/", 1)[0]
+        if not _REDDIT_NAME.match(user):
+            raise IdentityError(
+                f"reddit anchor {value!r} is not a Reddit username. Expected 3-20 "
+                "letters, digits, underscores or hyphens, e.g. `janesmith`."
+            )
+        return user
+
+    if kind == "mastodon":
+        acct = raw.rstrip("/")
+        if "://" in acct:
+            rest = acct.split("://", 1)[-1]
+            host, _, path = rest.partition("/")
+            user = path.removeprefix("@").removeprefix("users/").split("/", 1)[0]
+            acct = f"{user}@{host}"
+        match = _MASTODON_ACCT.match(acct)
+        if not match:
+            raise IdentityError(
+                f"mastodon anchor {value!r} is not a Mastodon address. Expected "
+                "@user@instance, e.g. `@janesmith@mastodon.social`."
+            )
+        return f"@{match.group('user')}@{match.group('host').lower()}"
 
     # site, rss
     url = raw if "//" in raw else f"https://{raw}"
@@ -188,7 +256,12 @@ class IdentityCard:
         if len(parts) > 1:
             keys.add(parts[-1])
             keys.add(f"{parts[0][:1]}{parts[-1]}")  # jsmith
-        keys.update(v for k, v in self.anchors.items() if k in ("x", "github"))
+        keys.update(
+            v for k, v in self.anchors.items() if k in ("x", "github", "bluesky", "hn", "reddit")
+        )
+        mastodon = self.anchors.get("mastodon", "")
+        if mastodon.startswith("@") and "@" in mastodon[1:]:
+            keys.add(mastodon[1:].split("@", 1)[0])
         return {k for k in keys if len(k) >= 4}
 
     def is_excluded(self, url: str) -> bool:
@@ -343,15 +416,30 @@ def build_card(
     site: str = "",
     substack: str = "",
     rss: str = "",
+    bluesky: str = "",
+    hn: str = "",
+    reddit: str = "",
+    mastodon: str = "",
     exclude: list[str] | None = None,
 ) -> IdentityCard:
     """An ad-hoc card from CLI flags, for a run with no saved target."""
-    anchors = {"x": x, "github": github, "site": site, "substack": substack, "rss": rss}
+    anchors = {
+        "x": x,
+        "github": github,
+        "site": site,
+        "substack": substack,
+        "rss": rss,
+        "bluesky": bluesky,
+        "hn": hn,
+        "reddit": reddit,
+        "mastodon": mastodon,
+    }
     resolved = key or slugify(name) or x or github or slugify(_host_of(site or substack or rss))
     if not resolved:
         raise IdentityError(
             "nothing identifies this person. Give at least one of --name, --x, "
-            "--github, --site, --substack, or --rss, or name a saved target with --target."
+            "--github, --site, --substack, --bluesky, --hn, --reddit, --mastodon, "
+            "or --rss, or name a saved target with --target."
         )
     return IdentityCard(
         key=resolved,

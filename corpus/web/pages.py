@@ -163,6 +163,10 @@ def new_run_form(profiles: dict[str, str], error: str = "", theme: str = "light"
     {_field("x", "X handle", "--x")}
     {_field("github", "GitHub username", "--github")}
     {_field("site", "Their site", "--site", hint="Read as an anchor, then crawled for more of theirs.")}
+    {_field("bluesky", "Bluesky handle", "--bluesky", hint="e.g. janesmith.bsky.social")}
+    {_field("hn", "Hacker News username", "--hn")}
+    {_field("reddit", "Reddit username", "--reddit")}
+    {_field("mastodon", "Mastodon address", "--mastodon", hint="e.g. @user@mastodon.social")}
   </div>
   {_rule("Limits")}
   <div class='fields'>

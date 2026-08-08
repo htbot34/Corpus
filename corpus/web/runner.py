@@ -50,6 +50,10 @@ class RunParams:
     x: str = ""
     github: str = ""
     site: str = ""
+    bluesky: str = ""
+    hn: str = ""
+    reddit: str = ""
+    mastodon: str = ""
     employer: str = ""
     role: str = ""
     budget: float = 10.0
@@ -78,6 +82,10 @@ class RunParams:
             x=(form.get("x") or "").strip().lstrip("@"),
             github=(form.get("github") or "").strip(),
             site=(form.get("site") or "").strip(),
+            bluesky=(form.get("bluesky") or "").strip(),
+            hn=(form.get("hn") or "").strip(),
+            reddit=(form.get("reddit") or "").strip(),
+            mastodon=(form.get("mastodon") or "").strip(),
             employer=(form.get("employer") or "").strip(),
             role=(form.get("role") or "").strip(),
             budget=_positive_float(form, "budget", 10.0),
@@ -91,6 +99,10 @@ class RunParams:
             "x": self.x,
             "github": self.github,
             "site": self.site,
+            "bluesky": self.bluesky,
+            "hn": self.hn,
+            "reddit": self.reddit,
+            "mastodon": self.mastodon,
             "employer": self.employer,
             "role": self.role,
             "budget": self.budget,
@@ -143,6 +155,10 @@ def profile_argv(params: RunParams) -> list[str]:
         ("--x", params.x),
         ("--github", params.github),
         ("--site", params.site),
+        ("--bluesky", params.bluesky),
+        ("--hn", params.hn),
+        ("--reddit", params.reddit),
+        ("--mastodon", params.mastodon),
         ("--employer", params.employer),
         ("--role", params.role),
     ):

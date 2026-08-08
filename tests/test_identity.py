@@ -54,18 +54,39 @@ def _card(**kwargs) -> IdentityCard:
         ("site", "https://janesmith.com/", "https://janesmith.com"),
         ("substack", "https://janesmith.substack.com/", "janesmith.substack.com"),
         ("rss", "https://janesmith.com/feed", "https://janesmith.com/feed"),
+        ("bluesky", "@JaneSmith.bsky.social", "janesmith.bsky.social"),
+        ("bluesky", "https://bsky.app/profile/janesmith.bsky.social", "janesmith.bsky.social"),
+        ("hn", "https://news.ycombinator.com/user?id=jsmith", "jsmith"),
+        ("reddit", "https://www.reddit.com/user/janesmith/", "janesmith"),
+        ("reddit", "u/janesmith", "janesmith"),
+        ("mastodon", "@jane@mastodon.social", "@jane@mastodon.social"),
+        ("mastodon", "https://mastodon.social/@jane", "@jane@mastodon.social"),
     ],
 )
 def test_anchors_are_normalized_to_one_form(kind: str, given: str, expected: str) -> None:
     assert normalize_anchor(kind, given) == expected
 
 
+@pytest.mark.parametrize(
+    ("kind", "given"),
+    [
+        ("bluesky", "not-a-handle"),  # no dot: a bare word is not a domain
+        ("reddit", "ab"),  # Reddit's own minimum is 3
+        ("mastodon", "just-a-word"),
+        ("hn", "has spaces in it"),
+    ],
+)
+def test_malformed_new_anchors_are_errors(kind: str, given: str) -> None:
+    with pytest.raises(IdentityError):
+        normalize_anchor(kind, given)
+
+
 def test_an_unknown_anchor_kind_is_an_error_naming_the_valid_ones() -> None:
     """Same rule as an unknown axis: a typo that drops an anchor produces a
     report that looks complete and is not."""
     with pytest.raises(IdentityError) as exc:
-        normalize_anchor("mastodon", "@jane@social.example")
-    assert "mastodon" in str(exc.value)
+        normalize_anchor("tiktok", "@jane")
+    assert "tiktok" in str(exc.value)
     assert "github" in str(exc.value)
 
 

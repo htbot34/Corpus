@@ -100,7 +100,8 @@ class SearchCandidate:
             self.score is not None
             and self.score.ingestible
             and self.verified
-            and self.kind in ("rss", "substack", "web", "github")
+            and self.kind
+            in ("rss", "substack", "web", "github", "bluesky", "hn", "reddit", "mastodon")
         )
 
     def as_dict(self) -> dict[str, Any]:

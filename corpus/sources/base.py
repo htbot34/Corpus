@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 
 from ..cache import Cache
-from ..models import ATTRIBUTION_CONFIDENCE, DATE_UNKNOWN, Attribution, Document
+from ..models import ATTRIBUTION_CONFIDENCE, DATE_UNKNOWN, Attribution, Document, Thread
 from ..redact import RedactingError
 
 USER_AGENT = "corpus/0.1 (personal research tool; +https://github.com/)"
@@ -58,6 +58,103 @@ def http_client(timeout: float = 30.0) -> httpx.Client:
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
     )
+
+
+class JsonReader:
+    """Cached JSON GETs for the keyless public APIs, never raising past the adapter.
+
+    The same contract github.py's private reader follows, without the
+    GitHub-specific rate-limit messaging: a transport failure, an HTTP error,
+    or malformed JSON is recorded in `errors` and costs the corpus some
+    documents, never the run. `permanent` marks a payload that cannot change —
+    a hydrated parent post — so a re-run never pays for it again.
+    """
+
+    def __init__(
+        self,
+        namespace: str,
+        cache: Cache,
+        log: Callable[[str], None],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.namespace = namespace
+        self.cache = cache
+        self.log = log
+        self.headers = headers or {}
+        self.requests = 0
+        self.errors: list[str] = []
+        self._client: Any = None
+
+    def get(self, url: str, *, permanent: bool = False) -> Any | None:
+        cached = self.cache.get(self.namespace, url)
+        if cached is not None:
+            return cached
+        if self.cache.offline:
+            self.errors.append(f"--offline: {url} is not cached")
+            return None
+        try:
+            if self._client is None:
+                self._client = http_client()
+            self.requests += 1
+            resp = self._client.get(url, headers=self.headers)
+            if resp.status_code >= 400:
+                self.errors.append(f"{resp.status_code} {url}")
+                return None
+            payload = resp.json()
+        except Exception as exc:  # transport, TLS, malformed JSON — all non-fatal
+            self.errors.append(str(SourceError(f"fetching {url}: {exc}")))
+            return None
+        self.cache.put(self.namespace, url, payload, permanent=permanent)
+        return payload
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+
+def collapse_self_threads(
+    docs: list[Document],
+    parent_ids: dict[str, str | None],
+) -> list[Document]:
+    """Stitch runs of consecutive self-replies into one thread Document.
+
+    The X pipeline's insight, applied to platforms whose replies arrive with
+    their parentage inline: consecutive self-replies are one argument, not N
+    posts, and threads are where people make actual arguments. `parent_ids`
+    maps a document's source_id to its parent's source_id (None for a
+    standalone post); only parents that are themselves in `docs` and by the
+    same author join a chain, so a reply to a stranger is never stitched and a
+    chain missing its middle collapses only the run that is present.
+    """
+    by_id = {d.source_id: d for d in docs}
+
+    def root_of(doc: Document) -> str:
+        seen: set[str] = set()
+        current = doc
+        while True:
+            parent = parent_ids.get(current.source_id)
+            if parent is None or parent not in by_id or parent in seen:
+                return current.source_id
+            seen.add(parent)
+            candidate = by_id[parent]
+            if candidate.author_handle != current.author_handle:
+                return current.source_id
+            current = candidate
+
+    groups: dict[str, list[Document]] = {}
+    for doc in docs:
+        groups.setdefault(root_of(doc), []).append(doc)
+
+    out: list[Document] = []
+    for parts in groups.values():
+        if len(parts) == 1:
+            out.append(parts[0])
+            continue
+        ordered = sorted(parts, key=lambda d: d.published_at)
+        out.append(Thread(root_id=ordered[0].source_id, parts=ordered).collapse())
+    return out
 
 
 # --------------------------------------------------------------------------

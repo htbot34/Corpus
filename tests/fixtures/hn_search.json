@@ -1,0 +1,66 @@
+{
+  "nbHits": 4,
+  "page": 0,
+  "nbPages": 1,
+  "hitsPerPage": 100,
+  "hits": [
+    {
+      "objectID": "4004",
+      "created_at": "2024-03-10T14:00:00.000Z",
+      "author": "testsubject",
+      "points": null,
+      "comment_text": "<p>Simpler until you profile the interrupt latency. We measured the floating point path at 3x the cycles on the actual board.</p>",
+      "story_title": "Ask HN: Fixed point or floating point for audio?",
+      "story_url": "https://news.ycombinator.com/item?id=4000",
+      "story_id": 4000,
+      "parent_id": 4002,
+      "_tags": ["comment", "author_testsubject", "story_4000"]
+    },
+    {
+      "objectID": "4003",
+      "created_at": "2024-03-09T11:00:00.000Z",
+      "author": "testsubject",
+      "points": null,
+      "comment_text": "<p>The gate's threshold belongs in fixed point; see <a href=\"https://example.com/gate-design\" rel=\"nofollow\">my writeup</a>.</p>",
+      "story_title": "Ask HN: Fixed point or floating point for audio?",
+      "story_url": "https://news.ycombinator.com/item?id=4000",
+      "story_id": 4000,
+      "parent_id": 4000,
+      "_tags": ["comment", "author_testsubject", "story_4000"]
+    },
+    {
+      "objectID": "3900",
+      "created_at": "2024-02-01T09:00:00.000Z",
+      "author": "testsubject",
+      "points": 42,
+      "title": "Show HN: A gate that keeps its threshold in fixed point",
+      "url": "https://example.com/gate-design",
+      "story_text": null,
+      "_tags": ["story", "author_testsubject"]
+    },
+    {
+      "objectID": "3888",
+      "created_at": "2024-01-20T08:00:00.000Z",
+      "author": "someoneelse",
+      "points": null,
+      "comment_text": "<p>This should never be attributed to the subject.</p>",
+      "story_title": "Ask HN: Fixed point or floating point for audio?",
+      "story_url": "https://news.ycombinator.com/item?id=4000",
+      "story_id": 4000,
+      "parent_id": 4000,
+      "_tags": ["comment", "author_someoneelse", "story_4000"]
+    },
+    {
+      "objectID": "3877",
+      "created_at": "2024-01-19T08:00:00.000Z",
+      "author": "testsubject",
+      "points": null,
+      "comment_text": "",
+      "story_title": "Ask HN: Fixed point or floating point for audio?",
+      "story_url": "https://news.ycombinator.com/item?id=4000",
+      "story_id": 4000,
+      "parent_id": 4000,
+      "_tags": ["comment", "author_testsubject", "story_4000"]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "201",
+  "created_at": "2024-04-06T08:00:00.000Z",
+  "content": "<p>Floating point is simpler, just use that.</p>",
+  "url": "https://mastodon.example/@someoneelse/201",
+  "visibility": "public",
+  "in_reply_to_id": null,
+  "in_reply_to_account_id": null,
+  "replies_count": 1,
+  "reblogs_count": 0,
+  "favourites_count": 2,
+  "account": {"id": "2088", "acct": "someoneelse"}
+}
