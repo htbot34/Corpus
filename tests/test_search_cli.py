@@ -418,3 +418,23 @@ def test_enabling_the_reader_fallback_says_so_out_loud(wired, monkeypatch) -> No
 
     assert result.exit_code == 0, result.output
     assert "third-party reader service" in result.output
+
+
+def test_a_registered_but_unpriced_stub_estimates_zero_and_does_not_crash(
+    wired, monkeypatch
+) -> None:
+    """brave is in PROVIDERS (the name validates) but not in
+    SEARCH_COST_BY_PROVIDER (nothing can bill against it). That gap crashed a
+    run with a raw KeyError at the estimate — after the profile lookup was
+    already paid for. The honest estimate for a phase that will refuse to
+    construct is zero, said out loud; the phase itself then degrades to
+    no-search exactly as it always did."""
+    monkeypatch.setenv("SEARCH_PROVIDER", "brave")
+    seed(wired, BASE_SEED)
+    seed(wired, {"rss:https://janesmith.com/feed.xml": FEED}, source="rss")
+
+    result = run_with(wired)
+
+    assert result.exit_code == 0, result.output
+    assert "no rate on file" in result.output
+    assert "search (phase 2):        ~$0.000" in result.output

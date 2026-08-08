@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 from .axes import AxisError, select_axes
 from .budget import (
     BUDGET_MODES,
+    SEARCH_COST_BY_PROVIDER,
     STRICT,
     Budget,
     BudgetExceeded,
@@ -563,11 +564,24 @@ def run(
 
     if not offline:
         x_cost = estimate_x_cost(post_target) if handle else 0.0
+        # A provider can be registered without being priced: the stubs are in
+        # PROVIDERS (so the name validates) but not in SEARCH_COST_BY_PROVIDER
+        # (so nothing can bill against them). Such a phase will refuse to
+        # construct and the run degrades to no-search — the honest estimate is
+        # zero with a warning, not another vendor's rate and certainly not a
+        # KeyError after the profile lookup has already been paid for.
+        search_priced = search_provider_name in SEARCH_COST_BY_PROVIDER
+        if planned_queries and not search_priced:
+            warn(
+                f"SEARCH_PROVIDER={search_provider_name!r} has no rate on file (an "
+                "unimplemented stub), so the search phase will not run and is "
+                "estimated at $0."
+            )
         search_cost = (
             estimate_search_phase(
                 len(planned_queries) + len(planned_similar), provider=search_provider_name
             )
-            if planned_queries
+            if planned_queries and search_priced
             else 0.0
         )
         projected_docs = post_target + len(other)
